@@ -19,6 +19,9 @@ return [
         'dsn'      => getenv('SEARCH_DB_DSN') ?: 'mysql:host=localhost;dbname=search;charset=utf8mb4',
         'user'     => getenv('SEARCH_DB_USER') ?: '',
         'password' => getenv('SEARCH_DB_PASSWORD') ?: '',
+        // Table names are configurable (never hardcode them in code).
+        'products_table'    => getenv('SEARCH_PRODUCTS_TABLE') ?: 'products',
+        'search_logs_table' => getenv('SEARCH_SEARCH_LOGS_TABLE') ?: 'search_logs',
     ],
 
     // Embedding model — must match the pipeline and the browser embedder.
@@ -32,6 +35,10 @@ return [
 
     'search' => [
         'default_limit'     => (int) (getenv('SEARCH_DEFAULT_LIMIT') ?: 20),
+        // Queries with any token shorter than this fall back from FULLTEXT to a
+        // LIKE scan. Mirror the host's innodb_ft_min_token_size (default 3),
+        // which cannot be changed on shared cPanel.
+        'min_token_size'    => (int) (getenv('SEARCH_MIN_TOKEN_SIZE') ?: 3),
         'semantic_top_k'    => (int) (getenv('SEARCH_SEMANTIC_TOP_K') ?: 100),
         'keyword_weight'    => (float) (getenv('SEARCH_KEYWORD_WEIGHT') ?: 0.5),
         'semantic_weight'   => (float) (getenv('SEARCH_SEMANTIC_WEIGHT') ?: 0.5),

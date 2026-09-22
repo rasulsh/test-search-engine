@@ -72,6 +72,32 @@ pytest                  # pipeline tests
 
 CI (`.github/workflows/ci.yml`) runs the same checks on every pull request.
 
+### Running the database-backed tests
+
+Keyword/FULLTEXT tests need a real MySQL/MariaDB (FULLTEXT is engine-specific).
+They read the connection from `SEARCH_TEST_DB_*`; when unset they **skip**
+locally, but **fail under CI** (where a MariaDB service is always provided) so a
+missing database can never hide a green build.
+
+```bash
+docker run -d --name search-mariadb \
+  -e MARIADB_ROOT_PASSWORD=root -e MARIADB_DATABASE=search_test \
+  -p 3306:3306 mariadb:11.4
+
+export SEARCH_TEST_DB_DSN="mysql:host=127.0.0.1;port=3306;dbname=search_test;charset=utf8mb4"
+export SEARCH_TEST_DB_USER=root SEARCH_TEST_DB_PASSWORD=root
+vendor/bin/phpunit
+```
+
+## HTTP endpoints
+
+- `GET /health` — returns `{ "status": "ok|degraded", "checks": { "database":
+  bool, "product_count": int|null } }` (200 when the database is reachable, 503
+  otherwise). Served via the `server/public` front controller; `/health.php` is
+  also reachable directly for hosts without URL rewriting.
+
+`POST /search` and `POST /reload` arrive in later milestones.
+
 ## Deploy / update flow
 
 The rebuild-and-reload flow (export → build bundle → upload → atomic swap via
@@ -81,7 +107,7 @@ token-protected `POST /reload`) is documented here as milestones land. See
 ## Milestone status
 
 - [x] **M0** — Scaffold: structure, `.gitignore`, CI, config examples, README.
-- [ ] **M1** — Keyword backbone (schema, loader, FULLTEXT, `/health`).
+- [x] **M1** — Keyword backbone (schema, loader, FULLTEXT + LIKE fallback, `/health`).
 - [ ] **M2** — Persian normalization + typo/keymap + "did you mean" + logging.
 - [ ] **M3** — Offline pipeline + bundle + `meta.json` + atomic `/reload`.
 - [ ] **M4** — Semantic tier (client embedder, cosine top-K, hybrid ranker).

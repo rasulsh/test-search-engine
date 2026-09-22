@@ -1,0 +1,39 @@
+# PHP / Composer (runtime has zero Composer deps; Composer is dev-only)
+/vendor/
+composer.lock
+.phpunit.cache/
+.phpunit.result.cache
+.php-cs-fixer.cache
+.phpcs.cache
+
+# Node / client model assets
+/node_modules/
+/client/model/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+
+# Server runtime data: active bundle + staging (never committed)
+/server/data/
+/server/data_incoming/
+
+# Index bundles produced offline
+/bundle/
+*.bin
+*.idx
+
+# Local configuration and secrets
+/server/config.php
+.env
+*.local.php
+
+# Editor / OS
+.DS_Store
+*.swp
+.idea/
+.vscode/

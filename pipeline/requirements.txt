@@ -1,0 +1,4 @@
+# Runtime dependencies for the offline pipeline (developer GPU machine).
+# Intentionally empty at M0 (scaffold has no logic). Real embedding
+# dependencies (numpy, sentence-transformers / transformers) are added in M3,
+# and pinned there. The server itself installs none of this.

@@ -58,16 +58,9 @@ $keyword = new Keyword(
     $config['search']['default_limit']
 );
 $logger = new Logger($pdo, $config['db']['search_logs_table']);
-$spellerFactory = static function () use ($pdo, $productsTable): Speller {
-    $texts = [];
-    $sql = 'SELECT normalized_title, normalized_desc FROM ' . Identifier::quote($productsTable);
-    foreach ($pdo->query($sql) as $row) {
-        $texts[] = $row['normalized_title'];
-        $texts[] = $row['normalized_desc'];
-    }
-
-    return new Speller(Speller::buildVocabulary($texts));
-};
+$dictionaryPath = $config['paths']['data'] . '/' . Speller::DICTIONARY_FILE;
+$spellerFactory = static fn (): Speller => Speller::fromDictionary($dictionaryPath)
+    ?? Speller::fromProducts($pdo, $productsTable);
 $vectors = new Vectors($config['paths']['data'], (int) $config['model']['dim']);
 $ranker = new Ranker(
     (int) $config['search']['rrf_k'],

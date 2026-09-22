@@ -70,6 +70,15 @@ final class Reload
             throw new ReloadException('directory_swap_failed', ['error' => $e->getMessage()]);
         }
 
+        // The swap is committed; warming the speller is best-effort. Other
+        // workers pick up the new file on their own (the cache key is the file's
+        // identity), so a failure here only costs one cold parse later.
+        try {
+            Speller::reloadDictionary($this->dataDir . '/' . Speller::DICTIONARY_FILE);
+        } catch (Throwable $e) {
+            error_log('reload: speller warm-up failed: ' . $e->getMessage());
+        }
+
         return [
             'ok' => true,
             'count' => $count,

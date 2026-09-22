@@ -65,15 +65,7 @@ final class SearchControllerVectorTest extends DatabaseTestCase
         $pdo = $this->pdo;
         $keyword = new Keyword($pdo, 'products', 3, 20);
         $logger = new Logger($pdo, 'search_logs');
-        $spellerFactory = static function () use ($pdo): Speller {
-            $texts = [];
-            foreach ($pdo->query('SELECT normalized_title, normalized_desc FROM products') as $row) {
-                $texts[] = $row['normalized_title'];
-                $texts[] = $row['normalized_desc'];
-            }
-
-            return new Speller(Speller::buildVocabulary($texts));
-        };
+        $spellerFactory = static fn (): Speller => Speller::fromProducts($pdo, 'products');
 
         $vectors = new Vectors($bundleDir ?? '/nonexistent-bundle-dir', self::DIM, false);
         $ranker = new Ranker(60, 0.1, 0.1);

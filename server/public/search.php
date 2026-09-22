@@ -49,16 +49,11 @@ try {
         $config['search']['default_limit']
     );
     $logger = new Logger($pdo, $config['db']['search_logs_table']);
-    $spellerFactory = static function () use ($pdo, $productsTable): Speller {
-        $texts = [];
-        $sql = 'SELECT normalized_title, normalized_desc FROM ' . Identifier::quote($productsTable);
-        foreach ($pdo->query($sql) as $row) {
-            $texts[] = $row['normalized_title'];
-            $texts[] = $row['normalized_desc'];
-        }
-
-        return new Speller(Speller::buildVocabulary($texts));
-    };
+    // The bundle dictionary is cached per worker (and in APCu); the table scan
+    // is only a fallback for a data directory without spellcheck.txt.
+    $dictionaryPath = $config['paths']['data'] . '/' . Speller::DICTIONARY_FILE;
+    $spellerFactory = static fn (): Speller => Speller::fromDictionary($dictionaryPath)
+        ?? Speller::fromProducts($pdo, $productsTable);
 
     // Tier 2 wiring. Vectors reads the active bundle; the signals provider both
     // fetches business signals and acts as the existence filter (ids it omits are

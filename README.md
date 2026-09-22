@@ -173,6 +173,17 @@ is present, the raw bytes are cached to skip the disk read on a cold worker. It
 degrades to a plain disk read when APCu is absent. A wrong-dimension query or an
 inconsistent/missing bundle simply falls back to keyword-only.
 
+**"Did you mean" (`server/src/Speller.php`).** The speller runs only when a
+query matches nothing. Its vocabulary is the bundle's `spellcheck.txt`, cached
+like the vectors: parsed once per PHP worker, and stored in APCu (about 3 MB for
+32k terms) so a fresh worker skips the parse. The cache key is the file's
+identity, so a reload is picked up by every worker, and `POST /reload` also
+evicts the previous entry and warms the new one. Each term is pre-encoded one
+byte per character so the edit distance runs in PHP's native `levenshtein()`,
+with results identical to a multibyte Levenshtein. Only if `spellcheck.txt` is
+missing does it fall back to scanning the `products` table, which is too slow
+for the budget on a full catalog.
+
 **Hybrid merge (`server/src/Ranker.php`).** Keyword (FULLTEXT) and cosine scores
 are on incomparable scales, so they are **not** added raw. They are merged by
 **Reciprocal Rank Fusion** (rank-based, scale-free), then light business boosts
@@ -371,7 +382,8 @@ A `422 invalid_bundle` means nothing was swapped. Its `reason` names the
 failed check; the fixes are in
 [INTEGRATION.md](./INTEGRATION.md#post-reload). After a success, the
 previous version is kept as the `products_old` table and the `data_old/`
-directory.
+directory. The "did you mean" dictionary (`spellcheck.txt`) switches with the
+bundle; nothing else needs restarting.
 
 ### Rollback (one step)
 
@@ -428,13 +440,14 @@ M0–M5. Verify each item on the production host before wide rollout.
   with `latency_ms` in `search_logs` and end-to-end from the storefront, against
   the 200 ms budget. CI measured about 105–127 ms for a warm 20k×384 cosine
   top-K; the production host was never measured.
-- [ ] **Zero-result queries are slow.** The did-you-mean vocabulary is rebuilt
-  by scanning the whole `products` table on each zero-result query. On a
-  synthetic 20k catalog on local MariaDB this took **about 500 ms**, compared
-  with about 20 ms for a normal query. It needs a follow-up change (serve the
-  bundle's `spellcheck.txt`) if confirmed on the host. Short Persian tokens
-  (shorter than `innodb_ft_min_token_size`) use the LIKE fallback, about
-  150 ms on the same data.
+- [ ] **Zero-result query latency.** "Did you mean" now reads the bundle's
+  `spellcheck.txt` instead of scanning the `products` table on each request
+  (M6). On a synthetic 20k catalog (32k-term dictionary) on local MariaDB, a
+  warm zero-result request took about **15–20 ms**; the same data on the old
+  path took about **350–500 ms**. Check `latency_ms` for zero-result rows in
+  `search_logs` on the host. Short Persian tokens (shorter than
+  `innodb_ft_min_token_size`) use the LIKE fallback, about 150 ms on the same
+  data.
 - [ ] **LVE memory headroom.** The parsed vector matrix costs about **150 MB
   per PHP worker** (about 300 MB peak while loading). Check the account's LVE
   memory limit (PMEM) and PHP `memory_limit` against
@@ -442,8 +455,9 @@ M0–M5. Verify each item on the production host before wide rollout.
   re-ranking keyword candidates (CLAUDE.md §5).
 - [ ] **APCu availability.** Check `php -m | grep apcu` on the host (CLI and web
   SAPI can differ) and that `apc.shm_size` holds the ~30 MB `vectors.bin`
-  (the default is often 32 MB). Without APCu, each cold worker reads the file
-  from disk, which is slower but correct.
+  (the default is often 32 MB) plus about 3 MB for the spellcheck dictionary.
+  Without APCu, or when the segment is full, each cold worker reads and parses
+  the files once, which is slower but correct.
 - [ ] `max_allowed_packet` and the phpMyAdmin upload limit accept the staged
   `products.load.sql`. Statements are at most 1 MB
   (`SEARCH_LOAD_MAX_STATEMENT_BYTES`), and the file is about 46 MB (12 MB
@@ -481,6 +495,7 @@ M0–M5. Verify each item on the production host before wide rollout.
 - [x] **M3** — Offline pipeline (`build.py`, `embed.py` mock+real), bundle + `meta.json`, atomic `POST /reload`.
 - [x] **M4** — Semantic tier: browser query embedder, cosine top-K + caching, RRF hybrid + business boosts, `/search` vector path, latency guard, eval harness.
 - [x] **M5** — Integration + docs: `INTEGRATION.md` (HTTP contract, storefront reference, model self-hosting), operator runbook, Go-Live checklist.
+- [ ] **M6** — Follow-up: "did you mean" served from the bundle's `spellcheck.txt` (cached per worker + APCu, refreshed on `/reload`); zero-result latency guard.
 
 ## Contributing
 

@@ -6,6 +6,7 @@ namespace App\Tests;
 
 use App\Reload;
 use App\ReloadException;
+use App\Speller;
 
 final class ReloadTest extends DatabaseTestCase
 {
@@ -147,6 +148,24 @@ final class ReloadTest extends DatabaseTestCase
         self::assertFileExists($dataDir . '_old/marker.txt');
         self::assertDirectoryDoesNotExist($incomingDir);
         $this->tempDirs[] = $dataDir . '_old';
+    }
+
+    public function testReloadServesTheNewSpellcheckDictionary(): void
+    {
+        $this->createStaging(2);
+        $dataDir = $this->newTempDir('_data');
+        file_put_contents($dataDir . '/spellcheck.txt', "sony\t4\n");
+        $this->tempDirs[] = $dataDir . '_old';
+
+        // Warm the previous bundle's dictionary, as a serving worker would have.
+        $path = $dataDir . '/' . Speller::DICTIONARY_FILE;
+        self::assertSame('sony', Speller::fromDictionary($path, false)?->suggest('sont'));
+
+        $incomingDir = $this->makeIncoming(2);
+        file_put_contents($incomingDir . '/spellcheck.txt', "sent\t4\n");
+        (new Reload($this->pdo, $this->config($dataDir, $incomingDir)))->run();
+
+        self::assertSame('sent', Speller::fromDictionary($path, false)?->suggest('sont'));
     }
 
     public function testFirstLoadWithoutExistingProducts(): void

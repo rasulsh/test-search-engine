@@ -1,0 +1,156 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\Tests;
+
+use PDO;
+use PHPUnit\Framework\TestCase;
+use Throwable;
+
+/**
+ * End-to-end check of the front controller and /health over HTTP, using PHP's
+ * built-in server with index.php as the router. Seeds the same test database.
+ */
+final class HealthEndpointTest extends TestCase
+{
+    /** @var resource|null */
+    private static $process = null;
+    private static string $baseUrl = '';
+
+    public static function setUpBeforeClass(): void
+    {
+        $dsn = getenv('SEARCH_TEST_DB_DSN');
+        if ($dsn === false || $dsn === '') {
+            if (getenv('CI')) {
+                self::fail('A test database is required under CI: SEARCH_TEST_DB_DSN is not set');
+            }
+            self::markTestSkipped('SEARCH_TEST_DB_DSN is not set');
+        }
+
+        $user = getenv('SEARCH_TEST_DB_USER') ?: '';
+        $password = getenv('SEARCH_TEST_DB_PASSWORD') ?: '';
+        $root = dirname(__DIR__, 2);
+
+        try {
+            $pdo = new PDO($dsn, $user, $password, [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION]);
+            $pdo->exec('DROP TABLE IF EXISTS products, search_logs');
+            $pdo->exec((string) file_get_contents($root . '/db/schema.sql'));
+            $pdo->exec((string) file_get_contents($root . '/fixtures/products.sample.sql'));
+        } catch (Throwable $e) {
+            if (getenv('CI')) {
+                self::fail('Cannot seed test database under CI: ' . $e->getMessage());
+            }
+            self::markTestSkipped('Cannot reach test database: ' . $e->getMessage());
+        }
+
+        $port = self::freePort();
+        self::$baseUrl = "http://127.0.0.1:{$port}";
+
+        // The server reads DB settings from these env vars (see config.example.php).
+        $env = getenv();
+        $env['SEARCH_DB_DSN'] = $dsn;
+        $env['SEARCH_DB_USER'] = $user;
+        $env['SEARCH_DB_PASSWORD'] = $password;
+        $env['SEARCH_PRODUCTS_TABLE'] = 'products';
+
+        $descriptors = [
+            0 => ['pipe', 'r'],
+            1 => ['file', '/dev/null', 'w'],
+            2 => ['file', '/dev/null', 'w'],
+        ];
+        $command = [
+            PHP_BINARY,
+            '-S',
+            "127.0.0.1:{$port}",
+            '-t',
+            $root . '/server/public',
+            $root . '/server/public/index.php',
+        ];
+
+        $process = proc_open($command, $descriptors, $pipes, $root, $env);
+        self::assertIsResource($process, 'Failed to start built-in PHP server');
+        self::$process = $process;
+
+        self::waitForServer();
+    }
+
+    public static function tearDownAfterClass(): void
+    {
+        if (is_resource(self::$process)) {
+            proc_terminate(self::$process);
+            proc_close(self::$process);
+        }
+        self::$process = null;
+    }
+
+    public function testHealthEndpointReturnsOkJson(): void
+    {
+        [$status, $body] = $this->request('GET', '/health');
+
+        self::assertSame(200, $status);
+        $decoded = json_decode((string) $body, true);
+        self::assertIsArray($decoded);
+        self::assertSame('ok', $decoded['status']);
+        self::assertTrue($decoded['checks']['database']);
+        self::assertSame(14, $decoded['checks']['product_count']);
+    }
+
+    public function testUnknownPathReturns404(): void
+    {
+        [$status, $body] = $this->request('GET', '/does-not-exist');
+
+        self::assertSame(404, $status);
+        self::assertSame('not_found', json_decode((string) $body, true)['error']);
+    }
+
+    public function testWrongMethodOnHealthReturns405(): void
+    {
+        [$status, $body] = $this->request('POST', '/health');
+
+        self::assertSame(405, $status);
+        self::assertSame('method_not_allowed', json_decode((string) $body, true)['error']);
+    }
+
+    /**
+     * @return array{0: int, 1: string|false}
+     */
+    private function request(string $method, string $path): array
+    {
+        $context = stream_context_create([
+            'http' => ['method' => $method, 'ignore_errors' => true, 'timeout' => 5],
+        ]);
+        $body = @file_get_contents(self::$baseUrl . $path, false, $context);
+
+        $status = 0;
+        foreach ($http_response_header ?? [] as $header) {
+            if (preg_match('#^HTTP/\S+\s+(\d+)#', $header, $m) === 1) {
+                $status = (int) $m[1];
+            }
+        }
+
+        return [$status, $body];
+    }
+
+    private static function freePort(): int
+    {
+        $socket = stream_socket_server('tcp://127.0.0.1:0', $errno, $errstr);
+        self::assertIsResource($socket, "Cannot allocate a port: {$errstr}");
+        $name = (string) stream_socket_get_name($socket, false);
+        fclose($socket);
+
+        return (int) substr($name, (int) strrpos($name, ':') + 1);
+    }
+
+    private static function waitForServer(): void
+    {
+        $context = stream_context_create(['http' => ['timeout' => 1, 'ignore_errors' => true]]);
+        for ($i = 0; $i < 50; $i++) {
+            if (@file_get_contents(self::$baseUrl . '/health', false, $context) !== false) {
+                return;
+            }
+            usleep(100_000);
+        }
+        self::fail('Built-in PHP server did not start in time');
+    }
+}

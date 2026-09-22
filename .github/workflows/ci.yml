@@ -12,6 +12,23 @@ jobs:
   php:
     name: PHP (lint + PSR-12 + PHPUnit)
     runs-on: ubuntu-latest
+    services:
+      mariadb:
+        image: mariadb:11.4
+        env:
+          MARIADB_ROOT_PASSWORD: root
+          MARIADB_DATABASE: search_test
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="healthcheck.sh --connect --innodb_initialized"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=10
+    env:
+      SEARCH_TEST_DB_DSN: "mysql:host=127.0.0.1;port=3306;dbname=search_test;charset=utf8mb4"
+      SEARCH_TEST_DB_USER: root
+      SEARCH_TEST_DB_PASSWORD: root
     steps:
       - uses: actions/checkout@v4
 
@@ -19,6 +36,7 @@ jobs:
         uses: shivammathur/setup-php@v2
         with:
           php-version: '8.3'
+          extensions: mbstring, pdo_mysql
           coverage: none
           tools: composer:v2
 

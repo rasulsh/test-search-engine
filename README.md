@@ -42,6 +42,9 @@ Directories are scaffolded now; files land in the milestone shown in brackets.
   runtime dependencies** — Composer is dev-only.
 - **Pipeline (offline):** Python 3.11+. Real embedding needs a GPU; tests use a
   deterministic mock embedder, so CI needs no GPU or model download.
+- **Client (browser):** the query embedder runs transformers.js (Xenova/ONNX) in
+  the storefront. Node + `@xenova/transformers` are needed only for the offline
+  parity check; CI verifies the client via static config-parity assertions.
 - **Dev tooling:** Composer (PHPUnit, PHP_CodeSniffer), Python (pytest, ruff).
 
 ## Configuration
@@ -95,12 +98,15 @@ vendor/bin/phpunit
   bool, "product_count": int|null } }` (200 when the database is reachable, 503
   otherwise).
 - `POST /search` — body `{ "q": string, "limit"?: int, "customer_id"?: string,
-  "q_vector"?: number[] }`. Returns `{ "query": { "raw", "normalized" },
+  "q_vector"?: number[dim] }`. Returns `{ "query": { "raw", "normalized" },
   "did_you_mean": string|null, "count": int, "product_ids": int[] }`. Tier 1
-  (keyword) only in M2: the query is normalized (contract 1), searched, and — if
+  (keyword) is always on: the query is normalized (contract 1), searched, and — if
   nothing matches — recovered via keyboard-layout remap or spell correction; every
-  request is logged to `search_logs`. `q_vector` (Tier 2) is accepted but not yet
-  used; it arrives in M4.
+  request is logged to `search_logs`. **Tier 2 (semantic) is additive:** when a
+  `q_vector` of the configured dimension is present *and* a bundle is loaded, the
+  server runs global cosine top-K and fuses it with the keyword ranking (see
+  below). If the vector is absent, the wrong length, or the bundle is unavailable,
+  the request returns Tier 1 results and never errors.
 
 - `POST /reload` — token-protected (`X-Reload-Token` header or `{"token": …}`
   body). Validates the staged bundle and atomically swaps it in. Returns
@@ -163,6 +169,68 @@ comparable. The passage is a bounded composed field
 **raw** text (not the keyword-normalized text), so the client can embed the raw
 query without re-implementing the normalizer.
 
+## Semantic tier (Tier 2)
+
+Tier 2 adds cross-language recall on top of keyword search. It is purely
+additive: keyword-only requests are unchanged.
+
+**Query embedding — in the browser (`client/embedder.js`).** A transformers.js
+(Xenova/ONNX) wrapper loads the **same** model as the pipeline and, per the e5
+asymmetric contract, prepends **`"query: "`** to the query, mean-pools, and
+L2-normalizes — mirroring `pipeline/embed.py` (`"passage: "` for products). The
+resulting vector is sent as `q_vector`. The model id, revision, dim, and prefix
+are asserted against the pipeline and server config in CI
+(`pipeline/tests/test_client_parity.py`); real numerical parity between the JS and
+Python embedders is checked offline (see below).
+
+**Cosine top-K (`server/src/Vectors.php`).** Product and query vectors are both
+L2-normalized, so cosine is a dot product. The server does a global brute-force
+scan over `vectors.bin` (`O(count·dim)`), which is what delivers cross-language
+recall. The dot products are cheap; the cost is reading and unpacking the ~30 MB
+file, so the parsed matrix is cached for the PHP worker's lifetime and, when APCu
+is present, the raw bytes are cached to skip the disk read on a cold worker. It
+degrades to a plain disk read when APCu is absent. A wrong-dimension query or an
+inconsistent/missing bundle simply falls back to keyword-only.
+
+**Hybrid merge (`server/src/Ranker.php`).** Keyword (FULLTEXT) and cosine scores
+are on incomparable scales, so they are **not** added raw. They are merged by
+**Reciprocal Rank Fusion** (rank-based, scale-free), then light business boosts
+(in-stock, popularity) are applied **after** fusion. Weights are configurable
+(`SEARCH_RRF_K`, `SEARCH_STOCK_BOOST`, `SEARCH_POPULARITY_BOOST`).
+
+**Reader tolerance.** A semantic hit whose `product_id` is missing from the
+`products` table (e.g. a transient partial reload) is dropped rather than
+surfaced, and products without a vector remain keyword-only — so a partial update
+degrades instead of breaking.
+
+### Eval harness
+
+`server/tools/eval.php` runs the labeled queries in `fixtures/eval_queries.json`
+through the real search pipeline and reports precision@k / recall@k so search
+changes are measurable:
+
+```bash
+php server/tools/eval.php --k=5 [--queries=<path>] [--min-recall=<float>]
+```
+
+The seed labels are the true **bilingual** relevant sets, so the keyword tier
+alone recovers the in-language half (recall ≈ 0.5 on the seed); closing the
+cross-language gap is Tier 2's job and needs the real model. Grow the set from
+real logs; add a per-query `q_vector` to measure the hybrid tier offline.
+
+### Offline model-parity check
+
+Numerical parity between `client/embedder.js` and `pipeline/embed.py` needs the
+real model + a JS runtime, so it runs offline (not in CI):
+
+```bash
+npm --prefix client install @xenova/transformers      # once; node_modules is gitignored
+EMBEDDER=real python pipeline/tools/model_parity.py    # cosine ≈ 1 per fixed string
+```
+
+It embeds `fixtures/parity_strings.json` with both implementations (each with the
+`"query: "` prefix) and asserts each pair's cosine is ~1.
+
 ## Deploy / update flow
 
 See `CLAUDE.md` §6. In short:
@@ -186,7 +254,7 @@ See `CLAUDE.md` §6. In short:
 - [x] **M1** — Keyword backbone (schema, loader, FULLTEXT + LIKE fallback, `/health`).
 - [x] **M2** — Persian normalization (parity), typo/keymap tolerance, "did you mean", logging, `POST /search`.
 - [x] **M3** — Offline pipeline (`build.py`, `embed.py` mock+real), bundle + `meta.json`, atomic `POST /reload`.
-- [ ] **M4** — Semantic tier (client embedder, cosine top-K, hybrid ranker).
+- [x] **M4** — Semantic tier: browser query embedder, cosine top-K + caching, RRF hybrid + business boosts, `/search` vector path, latency guard, eval harness.
 - [ ] **M5** — Integration + docs (`INTEGRATION.md`, finalized README).
 
 ## Contributing

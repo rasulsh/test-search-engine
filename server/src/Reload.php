@@ -5,6 +5,8 @@ declare(strict_types=1);
 namespace App;
 
 use PDO;
+use RuntimeException;
+use Throwable;
 
 /**
  * Validates a staged bundle and atomically swaps it in (CLAUDE.md sec. 6,
@@ -26,6 +28,7 @@ final class Reload
     private string $productsTable;
     private string $stagingTable;
     private string $backupTable;
+    private bool $hadPreviousTable = false;
     /** @var array{name: string, dim: int, normalization_version: int} */
     private array $model;
 
@@ -56,9 +59,16 @@ final class Reload
         $count = $this->assertConsistent($meta);
 
         // Everything validated — swap. Tables first (RENAME TABLE is atomic for
-        // the pair), then the directory.
+        // the pair), then the directory. If the directory swap fails, roll the
+        // tables back so the two never disagree: the result is all-old or
+        // all-new, never a new products table pointing at old vectors.
         $this->swapTables();
-        $this->swapDirectories();
+        try {
+            $this->swapDirectories();
+        } catch (Throwable $e) {
+            $this->rollbackTables();
+            throw new ReloadException('directory_swap_failed', ['error' => $e->getMessage()]);
+        }
 
         return [
             'ok' => true,
@@ -181,21 +191,57 @@ final class Reload
         $backup = Identifier::quote($this->backupTable);
 
         $this->pdo->exec("DROP TABLE IF EXISTS {$backup}");
-        if ($this->tableExists($this->productsTable)) {
+        $this->hadPreviousTable = $this->tableExists($this->productsTable);
+        if ($this->hadPreviousTable) {
             $this->pdo->exec("RENAME TABLE {$products} TO {$backup}, {$staging} TO {$products}");
         } else {
             $this->pdo->exec("RENAME TABLE {$staging} TO {$products}");
         }
     }
 
+    /**
+     * Undo {@see swapTables}: the just-installed rows go back to staging and, if
+     * there was one, the previous table is restored as live. Used only when the
+     * directory swap fails, so the tables match the (unchanged) directory.
+     */
+    private function rollbackTables(): void
+    {
+        $products = Identifier::quote($this->productsTable);
+        $staging = Identifier::quote($this->stagingTable);
+        $backup = Identifier::quote($this->backupTable);
+
+        if ($this->hadPreviousTable) {
+            $this->pdo->exec("RENAME TABLE {$products} TO {$staging}, {$backup} TO {$products}");
+        } else {
+            $this->pdo->exec("RENAME TABLE {$products} TO {$staging}");
+        }
+    }
+
+    /**
+     * Move the staged bundle into place, keeping the previous directory as
+     * `<data>_old` for rollback. On failure it restores the previous directory
+     * before throwing, so the directory is left all-old (matching the table
+     * rollback the caller then performs).
+     */
     private function swapDirectories(): void
     {
         $backupDir = $this->dataDir . '_old';
         $this->removeDir($backupDir);
+
+        $movedData = false;
         if (is_dir($this->dataDir)) {
-            rename($this->dataDir, $backupDir);
+            if (!@rename($this->dataDir, $backupDir)) {
+                throw new RuntimeException("failed to move {$this->dataDir} aside");
+            }
+            $movedData = true;
         }
-        rename($this->incomingDir, $this->dataDir);
+
+        if (!@rename($this->incomingDir, $this->dataDir)) {
+            if ($movedData) {
+                @rename($backupDir, $this->dataDir); // restore previous bundle
+            }
+            throw new RuntimeException("failed to move {$this->incomingDir} into place");
+        }
     }
 
     private function removeDir(string $dir): void

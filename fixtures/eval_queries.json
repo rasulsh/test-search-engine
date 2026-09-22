@@ -1,0 +1,13 @@
+{
+  "note": "Labeled queries for the eval harness (server/tools/eval.php). expected_ids is the TRUE relevant set (bilingual) for each query, so recall exposes cross-language gaps that Tier 2 closes. Seed set against fixtures/products.sample.sql; grow it from real search logs. Add an optional per-query \"q_vector\" (dim floats) to measure the hybrid tier offline with the real model.",
+  "queries": [
+    { "q": "sony headphones", "expected_ids": [1009, 1010] },
+    { "q": "samsung galaxy",  "expected_ids": [1003, 1004] },
+    { "q": "asus vivobook",   "expected_ids": [1005, 1006] },
+    { "q": "lg oled",         "expected_ids": [1013, 1014] },
+    { "q": "macbook air",     "expected_ids": [1007, 1008] },
+    { "q": "iphone 15 pro",   "expected_ids": [1001, 1002] },
+    { "q": "گوشی سامسونگ",    "expected_ids": [1003, 1004] },
+    { "q": "هدفون سونی",       "expected_ids": [1009, 1010] }
+  ]
+}

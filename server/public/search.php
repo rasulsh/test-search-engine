@@ -2,7 +2,8 @@
 
 /**
  * POST /search. Reachable directly or included by the front controller.
- * Keyword-only (Tier 1) in M2; the Tier 2 vector path arrives in M4.
+ * Tier 1 (keyword) always; Tier 2 (semantic) is added when the request carries a
+ * query vector and a bundle is loaded (see App\SearchController).
  */
 
 declare(strict_types=1);
@@ -11,8 +12,10 @@ use App\Db;
 use App\Identifier;
 use App\Keyword;
 use App\Logger;
+use App\Ranker;
 use App\SearchController;
 use App\Speller;
+use App\Vectors;
 
 /** @var array<string, mixed> $config */
 if (!isset($config)) {
@@ -57,7 +60,48 @@ try {
         return new Speller(Speller::buildVocabulary($texts));
     };
 
-    $result = (new SearchController($keyword, $logger, $spellerFactory))->search($request);
+    // Tier 2 wiring. Vectors reads the active bundle; the signals provider both
+    // fetches business signals and acts as the existence filter (ids it omits are
+    // treated as absent from the catalog).
+    $vectors = new Vectors($config['paths']['data'], (int) $config['model']['dim']);
+    $ranker = new Ranker(
+        (int) $config['search']['rrf_k'],
+        (float) $config['search']['stock_boost'],
+        (float) $config['search']['popularity_boost']
+    );
+    $signalsProvider = static function (array $ids) use ($pdo, $productsTable): array {
+        if ($ids === []) {
+            return [];
+        }
+        $placeholders = implode(',', array_fill(0, count($ids), '?'));
+        $sql = 'SELECT product_id, stock, popularity FROM ' . Identifier::quote($productsTable)
+             . ' WHERE product_id IN (' . $placeholders . ')';
+        $stmt = $pdo->prepare($sql);
+        $stmt->execute(array_values($ids));
+        $signals = [];
+        foreach ($stmt as $row) {
+            $signals[(int) $row['product_id']] = [
+                'stock'      => (int) $row['stock'],
+                'popularity' => (int) $row['popularity'],
+            ];
+        }
+
+        return $signals;
+    };
+
+    $controller = new SearchController(
+        $keyword,
+        $logger,
+        $spellerFactory,
+        null,
+        10,
+        $vectors,
+        $ranker,
+        $signalsProvider,
+        (int) $config['search']['semantic_top_k'],
+        (int) $config['search']['default_limit']
+    );
+    $result = $controller->search($request);
 } catch (Throwable) {
     http_response_code(500);
     echo json_encode(['error' => 'internal_error'], JSON_UNESCAPED_UNICODE);

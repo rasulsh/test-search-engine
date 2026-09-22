@@ -7,8 +7,11 @@ composer.lock
 .phpcs.cache
 
 # Node / client model assets
-/node_modules/
+node_modules/
 /client/model/
+# Offline-only client deps (installed ad hoc for the model-parity check)
+/client/package.json
+/client/package-lock.json
 
 # Python
 __pycache__/

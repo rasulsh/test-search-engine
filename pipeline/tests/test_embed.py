@@ -11,6 +11,7 @@ from embed import (
     MockEmbedder,
     create_embedder,
     embed_passages,
+    embed_queries,
     l2_normalize,
 )
 
@@ -56,3 +57,12 @@ def test_embed_passages_applies_prefix() -> None:
     prefixed = embed_passages(embedder, ["laptop"])
     manual = embedder.embed([PASSAGE_PREFIX + "laptop"])
     np.testing.assert_array_equal(prefixed, manual)
+
+
+def test_embed_queries_applies_query_prefix() -> None:
+    embedder = MockEmbedder(16)
+    prefixed = embed_queries(embedder, ["laptop"])
+    manual = embedder.embed([QUERY_PREFIX + "laptop"])
+    np.testing.assert_array_equal(prefixed, manual)
+    # Passage and query prefixes differ, so their vectors must differ.
+    assert not np.array_equal(prefixed, embed_passages(embedder, ["laptop"]))

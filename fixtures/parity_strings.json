@@ -1,0 +1,10 @@
+{
+  "note": "Fixed inputs for the offline model-parity check (pipeline/tools/model_parity.py). Both client/embedder.js and pipeline/embed.py embed these with the e5 query prefix using the real model; each pair's cosine similarity must be ~1. Not used in CI.",
+  "queries": [
+    "wireless noise cancelling headphones",
+    "هدفون بی‌سیم سونی با حذف نویز",
+    "apple iphone 15 pro max",
+    "لپ تاپ ایسوس ویووبوک",
+    "4k oled smart television"
+  ]
+}

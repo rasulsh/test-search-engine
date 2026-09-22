@@ -247,8 +247,9 @@ data files committed.
 - One branch per task: `feat/<milestone>-<slug>`, `test/…`, `docs/…`, `fix/…`,
   `chore/…`.
 - Conventional Commits (`feat:`, `fix:`, `test:`, `docs:`, `chore:`).
-- Open a PR targeting `main` with `gh pr create`. Keep PRs small and focused.
-- Never force-push shared branches; never rewrite `main` history.
+- Open a PR targeting `master` (this repo's default branch; there is no `main`)
+  with `gh pr create`. Keep PRs small and focused.
+- Never force-push shared branches; never rewrite `master` history.
 - CI (`.github/workflows/ci.yml`) runs on every PR: PHPUnit, pytest, and linters.
   A PR that fails CI is not ready.
 - `.gitignore` must exclude: `vendor/`, `node_modules/`, `__pycache__/`,
@@ -271,7 +272,7 @@ data files committed.
 - [ ] Docs updated (README / INTEGRATION / CLAUDE if needed)
 - [ ] No secrets, data files, or model binaries committed
 - [ ] KISS: no unnecessary files or abstraction
-- [ ] Targets main from a feature branch; not merged
+- [ ] Targets master from a feature branch; not merged
 ```
 
 ---

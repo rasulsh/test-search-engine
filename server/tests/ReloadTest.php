@@ -162,6 +162,41 @@ final class ReloadTest extends DatabaseTestCase
         self::assertSame(2, $this->rowCount('products'));
     }
 
+    public function testDirectorySwapFailureRollsBackTables(): void
+    {
+        // Validated bundle: the table swap succeeds, then the directory swap
+        // fails (its target's parent does not exist). The tables must roll back
+        // so they never disagree with the untouched directory.
+        $this->insertProduct('products', 1);
+        $this->insertProduct('products', 2);
+        $this->createStaging(3);
+
+        // A data dir whose parent is missing makes rename() into place fail.
+        $missingParent = sys_get_temp_dir() . '/reload_missing_' . uniqid('', true);
+        $dataDir = $missingParent . '/data';
+        $incomingDir = $this->makeIncoming(3);
+
+        try {
+            (new Reload($this->pdo, $this->config($dataDir, $incomingDir)))->run();
+            self::fail('expected ReloadException');
+        } catch (ReloadException $e) {
+            self::assertSame('directory_swap_failed', $e->reason());
+        }
+
+        // All-old: the previous rows are live again, staging is restored, and no
+        // half-committed backup table is left behind.
+        self::assertSame(2, $this->rowCount('products'));
+        self::assertSame([1, 2], array_map('intval', $this->pdo
+            ->query('SELECT product_id FROM products ORDER BY product_id')
+            ->fetchAll(\PDO::FETCH_COLUMN)));
+        self::assertSame(3, $this->rowCount('products_new'));
+        self::assertSame(0, (int) $this->pdo->query(
+            "SELECT COUNT(*) FROM information_schema.tables
+             WHERE table_schema = DATABASE() AND table_name = 'products_old'"
+        )->fetchColumn());
+        self::assertDirectoryExists($incomingDir); // staged bundle untouched
+    }
+
     public function testModelMismatchRejectedWithoutSwap(): void
     {
         $this->insertProduct('products', 1);

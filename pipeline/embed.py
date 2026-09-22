@@ -86,3 +86,13 @@ def create_embedder(config: dict) -> Embedder:
 def embed_passages(embedder: Embedder, texts: list[str]) -> np.ndarray:
     """Embed product passages with the required e5 passage prefix."""
     return embedder.embed([PASSAGE_PREFIX + text for text in texts])
+
+
+def embed_queries(embedder: Embedder, texts: list[str]) -> np.ndarray:
+    """Embed search queries with the required e5 query prefix.
+
+    This is the offline reference for the browser client (client/embedder.js),
+    which MUST prepend the same QUERY_PREFIX. Used by the model-parity check to
+    compare the two implementations' query vectors.
+    """
+    return embedder.embed([QUERY_PREFIX + text for text in texts])

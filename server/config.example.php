@@ -39,9 +39,14 @@ return [
         // LIKE scan. Mirror the host's innodb_ft_min_token_size (default 3),
         // which cannot be changed on shared cPanel.
         'min_token_size'    => (int) (getenv('SEARCH_MIN_TOKEN_SIZE') ?: 3),
+        // Global cosine top-K width for Tier 2 (candidates fused with keyword).
         'semantic_top_k'    => (int) (getenv('SEARCH_SEMANTIC_TOP_K') ?: 100),
-        'keyword_weight'    => (float) (getenv('SEARCH_KEYWORD_WEIGHT') ?: 0.5),
-        'semantic_weight'   => (float) (getenv('SEARCH_SEMANTIC_WEIGHT') ?: 0.5),
+        // Reciprocal Rank Fusion constant. Keyword and cosine scores are on
+        // different scales, so they are merged by rank, not added raw.
+        'rrf_k'             => (int) (getenv('SEARCH_RRF_K') ?: 60),
+        // Light business boosts applied AFTER fusion (kept small on purpose).
+        'stock_boost'       => (float) (getenv('SEARCH_STOCK_BOOST') ?: 0.1),
+        'popularity_boost'  => (float) (getenv('SEARCH_POPULARITY_BOOST') ?: 0.1),
         'latency_budget_ms' => (int) (getenv('SEARCH_LATENCY_BUDGET_MS') ?: 200),
     ],
 

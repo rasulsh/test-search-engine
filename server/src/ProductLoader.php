@@ -10,9 +10,10 @@ use PDO;
  * Loads product rows into the products table, populating the FULLTEXT-indexed
  * normalized_* columns.
  *
- * In M1 normalization is a passthrough copy of the raw text. M2 injects the real
- * Normalizer via the constructor — the single write path here means that swap
- * needs no schema change and no change to callers.
+ * The normalized_* columns are filled by the canonical Normalizer (contract 1),
+ * so programmatic loads match query-time normalization. A different normalizer
+ * can be injected for tests. This single write path means the rule can change
+ * with no schema change and no change to callers.
  */
 final class ProductLoader
 {
@@ -25,7 +26,7 @@ final class ProductLoader
     {
         $this->pdo = $pdo;
         $this->table = Identifier::quote($productsTable);
-        $this->normalize = $normalizer ?? static fn (string $text): string => $text;
+        $this->normalize = $normalizer ?? static fn (string $text): string => Normalizer::normalize($text);
     }
 
     /**

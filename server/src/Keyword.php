@@ -24,13 +24,23 @@ final class Keyword
     private string $table;
     private int $minTokenSize;
     private int $defaultLimit;
+    /** @var callable(?string): string */
+    private $normalize;
 
-    public function __construct(PDO $pdo, string $productsTable, int $minTokenSize = 3, int $defaultLimit = 20)
-    {
+    public function __construct(
+        PDO $pdo,
+        string $productsTable,
+        int $minTokenSize = 3,
+        int $defaultLimit = 20,
+        ?callable $normalizer = null
+    ) {
         $this->pdo = $pdo;
         $this->table = Identifier::quote($productsTable);
         $this->minTokenSize = max(1, $minTokenSize);
         $this->defaultLimit = max(1, $defaultLimit);
+        // Query is normalized the same way the indexed columns were, so both
+        // sides of the match agree (contract 1).
+        $this->normalize = $normalizer ?? [Normalizer::class, 'normalize'];
     }
 
     /**
@@ -39,7 +49,7 @@ final class Keyword
     public function search(string $query, ?int $limit = null): array
     {
         $limit = $limit !== null ? max(1, $limit) : $this->defaultLimit;
-        $tokens = $this->tokenize($query);
+        $tokens = Tokenizer::split(($this->normalize)($query));
         if ($tokens === []) {
             return [];
         }
@@ -51,19 +61,6 @@ final class Keyword
         }
 
         return $this->fulltextSearch($tokens, $limit);
-    }
-
-    /**
-     * Split on any run of non-letter/non-digit characters. This also splits on
-     * ZWNJ, mirroring how the InnoDB tokenizer segments the indexed text.
-     *
-     * @return list<string>
-     */
-    private function tokenize(string $query): array
-    {
-        $parts = preg_split('/[^\p{L}\p{N}]+/u', $query, -1, PREG_SPLIT_NO_EMPTY);
-
-        return $parts === false ? [] : array_values($parts);
     }
 
     /**

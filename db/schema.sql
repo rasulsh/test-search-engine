@@ -32,7 +32,7 @@ CREATE TABLE IF NOT EXISTS search_logs (
     id           BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
     ts           DATETIME        NOT NULL DEFAULT CURRENT_TIMESTAMP,
     raw_q        VARCHAR(512)    NOT NULL,
-    norm_q       VARCHAR(512)    NOT NULL DEFAULT '',
+    normalized_q VARCHAR(512)    NOT NULL DEFAULT '',
     had_vector   TINYINT(1)      NOT NULL DEFAULT 0,
     result_count INT UNSIGNED    NOT NULL DEFAULT 0,
     top_ids      VARCHAR(1024)   NOT NULL DEFAULT '',

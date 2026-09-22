@@ -150,7 +150,7 @@ Request: `{ "q": string, "q_vector"?: number[dim], "customer_id"?: string,
 5. Ranker.php: hybrid merge (keyword + semantic) + business ranking
    (stock, popularity).
 6. Logger.php: write one row to `search_logs`
-   (ts, raw_q, norm_q, had_vector, result_count, top_ids, customer_id,
+   (ts, raw_q, normalized_q, had_vector, result_count, top_ids, customer_id,
    latency_ms).
 7. Return ordered `product_id`s + the "did you mean" suggestion.
 
@@ -287,3 +287,31 @@ data files committed.
 - Small files, flat structure, no dependency the task does not require.
 - Read config; never hardcode model names, dimensions, thresholds, table names,
   or credentials.
+
+---
+
+## 12. Verification & Reporting
+
+- You own ALL verification. I will not manually check, test, run, or debug
+  anything. For every milestone, before opening the PR, self-verify completely:
+  run all tests and linters; stand up a real local DB where relevant; simulate CI
+  locally; exercise edge cases and the three hard contracts; and self-review the
+  diff. Fix what you find, then open the PR.
+- Never present something as verified that you did not actually run. Logic you
+  only reasoned about is not "tested".
+- Some things you cannot verify because you lack the real environment/data:
+  actual cPanel/LiteSpeed/LVE behavior and limits, real latency on the production
+  host, behavior against the real ~20k catalog, and Persian embedding/search
+  quality on real data. Never imply these are verified — list them under "Needs
+  production validation".
+- With every PR, and after every update to it, post a report with exactly these
+  sections:
+  - Checked — what you inspected/validated.
+  - Found — issues, edge cases, empirically confirmed behaviors.
+  - Changed — what you modified as a result.
+  - Tested — suites run, test/assertion counts, pass/fail, environment
+    (local DB, simulated CI), and which of the 3 contracts are covered.
+  - CI — job results on the head SHA.
+  - Needs production validation — what you could not verify, and why.
+  - Ready for PR — yes/no, with any open risks.
+- You still never merge; I merge based on your report.

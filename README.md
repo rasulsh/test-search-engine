@@ -93,10 +93,18 @@ vendor/bin/phpunit
 
 - `GET /health` — returns `{ "status": "ok|degraded", "checks": { "database":
   bool, "product_count": int|null } }` (200 when the database is reachable, 503
-  otherwise). Served via the `server/public` front controller; `/health.php` is
-  also reachable directly for hosts without URL rewriting.
+  otherwise).
+- `POST /search` — body `{ "q": string, "limit"?: int, "customer_id"?: string,
+  "q_vector"?: number[] }`. Returns `{ "query": { "raw", "normalized" },
+  "did_you_mean": string|null, "count": int, "product_ids": int[] }`. Tier 1
+  (keyword) only in M2: the query is normalized (contract 1), searched, and — if
+  nothing matches — recovered via keyboard-layout remap or spell correction; every
+  request is logged to `search_logs`. `q_vector` (Tier 2) is accepted but not yet
+  used; it arrives in M4.
 
-`POST /search` and `POST /reload` arrive in later milestones.
+Served via the `server/public` front controller; `/health.php` and `/search.php`
+are also reachable directly for hosts without URL rewriting. `POST /reload`
+arrives in M3.
 
 ## Deploy / update flow
 
@@ -108,7 +116,7 @@ token-protected `POST /reload`) is documented here as milestones land. See
 
 - [x] **M0** — Scaffold: structure, `.gitignore`, CI, config examples, README.
 - [x] **M1** — Keyword backbone (schema, loader, FULLTEXT + LIKE fallback, `/health`).
-- [ ] **M2** — Persian normalization + typo/keymap + "did you mean" + logging.
+- [x] **M2** — Persian normalization (parity), typo/keymap tolerance, "did you mean", logging, `POST /search`.
 - [ ] **M3** — Offline pipeline + bundle + `meta.json` + atomic `/reload`.
 - [ ] **M4** — Semantic tier (client embedder, cosine top-K, hybrid ranker).
 - [ ] **M5** — Integration + docs (`INTEGRATION.md`, finalized README).

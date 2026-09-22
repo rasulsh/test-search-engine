@@ -24,7 +24,8 @@ def _config(dim: int = 384) -> dict:
             "dim": dim,
             "normalization_version": NORMALIZATION_VERSION,
         },
-        "build": {"products_table": "products", "desc_char_limit": 300},
+        "build": {"products_table": "products", "desc_char_limit": 300,
+                  "max_statement_bytes": 1_000_000},
     }
 
 
@@ -51,6 +52,33 @@ def test_parse_csv() -> None:
     }]
 
 
+def test_clean_text_decodes_opencart_escaping_and_strips_markup() -> None:
+    # OpenCart stores HTML-escaped HTML, sometimes double-escaped by the editor.
+    raw = (
+        "&lt;p&gt;Apple Cinema 30&amp;quot;&lt;/p&gt;\n\t"
+        "&lt;b&gt;Laptops &amp;amp; Notebooks&lt;/b&gt;"
+    )
+    assert build.clean_text(raw) == 'Apple Cinema 30" Laptops & Notebooks'
+    # ZWNJ is part of Persian words, not whitespace; it must survive cleaning.
+    assert build.clean_text("هدفون&nbsp;بی‌سیم") == "هدفون بی‌سیم"
+    assert build.clean_text(None) is None
+
+
+def test_read_products_cleans_text_columns_only(tmp_path: Path) -> None:
+    export = tmp_path / "export.csv"
+    export.write_text(
+        "id,title_fa,title_en,desc,brand,category,model,price,stock,url,image,popularity\n"
+        '7,گوشی,"Cinema 30&quot;","&lt;p&gt;big&lt;/p&gt;",A &amp; B,C,M1,9,1,'
+        '"index.php?route=product/product&amp;product_id=7",/i,0\n',
+        encoding="utf-8",
+    )
+    [row] = build.read_products(export)
+    assert row["title_en"] == 'Cinema 30"'
+    assert row["desc"] == "big"
+    assert row["brand"] == "A & B"
+    assert row["url"] == "index.php?route=product/product&amp;product_id=7"  # not a text column
+
+
 def test_compose_passage_uses_raw_text() -> None:
     product = {"title_fa": "آیفون", "title_en": "iPhone", "brand": "Apple",
                "category": "Mobile", "model": "IP15", "desc": "x" * 500}
@@ -75,16 +103,38 @@ def test_to_server_row_combines_titles_and_normalizes() -> None:
     assert row["price"] == 1199.0
 
 
+def _row(product_id: int, title_en: str = "", desc: str = "") -> dict:
+    return build.to_server_row({"id": str(product_id), "title_fa": "", "title_en": title_en,
+                                "desc": desc, "brand": "", "category": "", "model": "",
+                                "price": "0", "stock": "0", "url": "", "image": "",
+                                "popularity": "0"})
+
+
 def test_build_products_sql_targets_staging_and_escapes() -> None:
-    sql = build.build_products_sql(
-        [build.to_server_row({"id": "1", "title_fa": "", "title_en": "O'Brien",
-                              "desc": "", "brand": "", "category": "", "model": "",
-                              "price": "0", "stock": "0", "url": "", "image": "",
-                              "popularity": "0"})],
-        "products_new",
-    )
+    sql = build.build_products_sql([_row(1, "O'Brien", "ends with \\")], "products_new", 10_000)
     assert "REPLACE INTO `products_new`" in sql
     assert "O''Brien" in sql  # single quote escaped
+    # A raw trailing backslash would escape the closing quote and break the load.
+    assert "'ends with \\\\'" in sql
+
+
+def test_build_products_sql_splits_statements_under_the_byte_cap() -> None:
+    rows = [_row(i, desc="x" * 200) for i in range(50)]
+    cap = 2_000
+    sql = build.build_products_sql(rows, "products_new", cap)
+
+    statements = [s.strip() for s in sql.split(";\n") if s.strip().startswith("REPLACE INTO")]
+    assert len(statements) > 1
+    assert all(len((s + ";\n").encode("utf-8")) <= cap for s in statements)
+    # Every row lands exactly once, in order.
+    ids = [int(t.split("(", 1)[1].split(",", 1)[0]) for s in statements
+           for t in s.split("VALUES\n", 1)[1].split(",\n")]
+    assert ids == list(range(50))
+
+
+def test_build_products_sql_oversized_row_gets_its_own_statement() -> None:
+    sql = build.build_products_sql([_row(1, desc="y" * 5_000), _row(2)], "products_new", 1_000)
+    assert sql.count("REPLACE INTO") == 2
 
 
 def test_build_bundle_format_and_determinism(tmp_path: Path) -> None:

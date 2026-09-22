@@ -17,10 +17,12 @@
 // pipeline/tools/model_parity.py (it needs the real model + node, so it does not
 // run in CI).
 //
-// Model assets: transformers.js resolves an ONNX build of the model. Ship a local
-// ONNX export of the SAME weights under client/model/ (gitignored) for offline /
-// air-gapped use, or let transformers.js fetch it; either way the numbers must
-// match embed.py — that is what the offline parity check verifies.
+// Model assets: transformers.js loads onnx/model_quantized.onnx for MODEL_ID, which
+// the intfloat repository does not publish, so fetching by id from HuggingFace
+// fails. Self-host the Xenova ONNX conversion of the SAME weights under
+// client/model/<MODEL_ID>/ and inject a transformers module configured for it
+// (INTEGRATION.md, "Self-hosting the model"). The offline parity check verifies
+// those files against embed.py.
 
 // Shared model contract. Keep in sync with the pipeline + server config.
 export const MODEL_ID = 'intfloat/multilingual-e5-small';

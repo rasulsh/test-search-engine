@@ -5,9 +5,10 @@ A standalone two-tier product-search service for an OpenCart 2.0.3.1 storefront
 hosting** (PHP 8.x + LiteSpeed + MariaDB) with no daemons and no external search
 engines.
 
-> This is the implementation repository. Authoritative design, contracts, and the
-> milestone plan live in [`CLAUDE.md`](./CLAUDE.md). The storefront-side HTTP
-> contract will be documented in `INTEGRATION.md` (added in M5).
+> Authoritative design, contracts, and the milestone plan live in
+> [`CLAUDE.md`](./CLAUDE.md). The storefront-side HTTP contract, the reference
+> storefront snippet, and model self-hosting are in
+> [`INTEGRATION.md`](./INTEGRATION.md). This README is the operator runbook.
 
 ## Architecture
 
@@ -27,14 +28,12 @@ math over the precomputed vectors.
 ## Repository layout
 
 ```
-db/         SQL schema (products + FULLTEXT, search_logs)          [M1]
-pipeline/   Offline build pipeline (Python 3.11+, GPU or mock)     [M3]
-server/     cPanel runtime (PHP 8.1+, no framework)                [M1+]
-client/     Browser query embedder (transformers.js / ONNX)        [M4]
-fixtures/   Shared test fixtures (normalization cases, eval set)   [M1+]
+db/         SQL schema (products + FULLTEXT, search_logs)
+pipeline/   Offline build pipeline (Python 3.11+, GPU or mock)
+server/     cPanel runtime (PHP 8.1+, no framework)
+client/     Browser query embedder (transformers.js / ONNX); model/ is gitignored
+fixtures/   Shared test fixtures (normalization cases, eval set, parity strings)
 ```
-
-Directories are scaffolded now; files land in the milestone shown in brackets.
 
 ## Requirements
 
@@ -53,9 +52,15 @@ All model names, dimensions, thresholds, and credentials are read from config �
 never hardcoded.
 
 - Server: copy `server/config.example.php` to `server/config.php`, or supply the
-  environment variables it reads (see `.env.example`).
+  environment variables it reads (see `.env.example`). On cPanel, edit the
+  defaults in `config.php` (see [one-time setup](#one-time-setup-cpanel-host)).
+- Pipeline: the same `SEARCH_MODEL*` variables, plus `EMBEDDER=mock|real`,
+  `SEARCH_DESC_CHAR_LIMIT` (description characters in the embedded passage) and
+  `SEARCH_LOAD_MAX_STATEMENT_BYTES` (maximum size of one statement in
+  `products.load.sql`). See `pipeline/config.py`.
 - The embedding model, revision, and dimension are parameterized and shared
-  across server, pipeline, and client (parity contracts — see `CLAUDE.md` §3).
+  across server, pipeline, and client (parity contracts, see `CLAUDE.md` §3,
+  and [changing the model](./INTEGRATION.md#changing-the-model)).
 
 Never commit secrets, `server/data/`, bundles, or model files.
 
@@ -94,28 +99,16 @@ vendor/bin/phpunit
 
 ## HTTP endpoints
 
-- `GET /health` — returns `{ "status": "ok|degraded", "checks": { "database":
-  bool, "product_count": int|null } }` (200 when the database is reachable, 503
-  otherwise).
-- `POST /search` — body `{ "q": string, "limit"?: int, "customer_id"?: string,
-  "q_vector"?: number[dim] }`. Returns `{ "query": { "raw", "normalized" },
-  "did_you_mean": string|null, "count": int, "product_ids": int[] }`. Tier 1
-  (keyword) is always on: the query is normalized (contract 1), searched, and — if
-  nothing matches — recovered via keyboard-layout remap or spell correction; every
-  request is logged to `search_logs`. **Tier 2 (semantic) is additive:** when a
-  `q_vector` of the configured dimension is present *and* a bundle is loaded, the
-  server runs global cosine top-K and fuses it with the keyword ranking (see
-  below). If the vector is absent, the wrong length, or the bundle is unavailable,
-  the request returns Tier 1 results and never errors.
+| endpoint | purpose |
+| --- | --- |
+| `POST /search` | `{q, q_vector?, customer_id?, limit?}`, returns ordered `product_ids` + `did_you_mean`. Keyword tier always; hybrid when a valid `q_vector` is sent and a bundle is loaded. |
+| `GET /health` | Database reachability + live product count, for monitoring. |
+| `POST /reload` | Token-protected (`X-Reload-Token`). Validates the staged bundle and swaps it in atomically. |
 
-- `POST /reload` — token-protected (`X-Reload-Token` header or `{"token": …}`
-  body). Validates the staged bundle and atomically swaps it in. Returns
-  `{ "ok": true, "count": int, "model", "dim" }` on success; `422 invalid_bundle`
-  with a `reason` when validation fails; `401` on a bad token; `503
-  reload_disabled` when no token is configured.
-
-Served via the `server/public` front controller; `/health.php`, `/search.php`,
-and `/reload.php` are also reachable directly for hosts without URL rewriting.
+The exact request/response JSON, headers, status codes, and every error and
+`invalid_bundle` reason are in [`INTEGRATION.md`](./INTEGRATION.md#http-contract).
+On a subdirectory deploy, call the scripts directly (`/search-api/search.php`,
+and so on). The front controller's pretty paths only route at a web root.
 
 ## Offline pipeline & the bundle
 
@@ -134,29 +127,17 @@ Provide a `.sql` (INSERT statements) or `.csv` with these columns:
 | `price`, `stock`, `popularity` | numeric |
 | `url`, `image` | display fields |
 
-Deriving it from **OpenCart 2.0.3.1**: join `oc_product` to `oc_product_description`
-twice (once per `language_id`, FA and EN) and select the columns above, e.g.
+Deriving it from **OpenCart 2.0.3.1** is step 1 of the
+[deploy runbook](#deploy--update-runbook) below. `build.py` decodes the HTML
+escaping OpenCart stores in names and descriptions and strips the markup, so the
+export can be taken from the OpenCart tables as-is.
 
-```sql
-SELECT p.product_id AS id, d_fa.name AS title_fa, d_en.name AS title_en,
-       d_en.description AS `desc`, m.name AS brand, c.name AS category,
-       p.model, p.price, p.quantity AS stock, p.image, p.viewed AS popularity,
-       CONCAT('/index.php?route=product/product&product_id=', p.product_id) AS url
-FROM oc_product p
-LEFT JOIN oc_product_description d_fa ON d_fa.product_id = p.product_id AND d_fa.language_id = :fa
-LEFT JOIN oc_product_description d_en ON d_en.product_id = p.product_id AND d_en.language_id = :en
-LEFT JOIN oc_manufacturer m ON m.manufacturer_id = p.manufacturer_id
--- category via oc_product_to_category + oc_category_description (pick the primary)
-;
-```
-Set `:fa` / `:en` to your store's `language_id` values. Export the result as CSV
-(or as `INSERT` statements) — that is `build.py`'s input, decoupled from the
-OpenCart schema.
-
-**Bundle output** (`build.py --sql export.sql --out ./bundle`): `vectors.bin`
+**Bundle output** (`build.py --csv export.csv --out ./bundle`): `vectors.bin`
 (little-endian float32, `count × dim`, L2-normalized), `vectors.idx` (one
 `product_id` per line, row order), `products.load.sql` (rows for the
-`products_new` staging table, normalized columns from the canonical Normalizer),
+`products_new` staging table, normalized columns from the canonical Normalizer,
+split into statements of at most `SEARCH_LOAD_MAX_STATEMENT_BYTES`, 1 MB by
+default, so each fits a shared host's `max_allowed_packet`),
 `synonyms.json`, `spellcheck.txt`, `keymap.json`, and `meta.json`
 (`{model, revision, dim, normalization_version, count, built_at, checksum, embedder}`).
 
@@ -224,29 +205,273 @@ Numerical parity between `client/embedder.js` and `pipeline/embed.py` needs the
 real model + a JS runtime, so it runs offline (not in CI):
 
 ```bash
-npm --prefix client install @xenova/transformers      # once; node_modules is gitignored
-EMBEDDER=real python pipeline/tools/model_parity.py    # cosine ≈ 1 per fixed string
+npm --prefix client install @xenova/transformers@2.17.2   # once; node_modules is gitignored
+EMBEDDER=real python pipeline/tools/model_parity.py       # PASS when every cosine >= 0.99
 ```
 
 It embeds `fixtures/parity_strings.json` with both implementations (each with the
-`"query: "` prefix) and asserts each pair's cosine is ~1.
+`"query: "` prefix) and asserts each pair's cosine is at least 0.99. When the
+self-hosted model is present under `client/model/` (see
+[INTEGRATION.md](./INTEGRATION.md#self-hosting-the-model-no-huggingface-no-cdn)),
+the JS side uses exactly those files with remote loading disabled, so the check
+covers what shoppers' browsers run: an int8-quantized ONNX model against the
+full-precision pipeline model. On the M5 run it measured 0.9956–0.9985.
 
-## Deploy / update flow
+## Deploy / update runbook
 
-See `CLAUDE.md` §6. In short:
+The runbook has three machines' worth of steps. The **OpenCart database**
+provides the export. The **developer GPU machine** builds the bundle. The
+**cPanel host** serves it. Nothing here runs as a daemon or needs root.
+Placeholders: `shop.example.com`, `~/search-service`, database `cpuser_search`.
+Replace them with yours.
 
-1. Export products from OpenCart to `export.sql`/`.csv` (columns above).
-2. `python pipeline/build.py --sql export.sql --out ./bundle`
-   (real embeddings need a GPU + `sentence-transformers` and `EMBEDDER=real`;
-   the default `EMBEDDER=mock` needs neither).
-3. Upload `./bundle` to `server/data_incoming/`, then load its
-   `products.load.sql` into the `products_new` staging table.
-4. `POST /reload` with the token. It validates `meta.json` (model, dim,
-   `normalization_version`) and that `count == vectors.idx lines == staging rows
-   == vectors.bin size/checksum`, then swaps atomically —
-   `RENAME TABLE products TO products_old, products_new TO products` and
-   `rename(data_incoming → data)` — keeping `products_old` / `data_old` for a
-   one-step rollback.
+### One-time setup (cPanel host)
+
+1. **Upload the service code.** Put the repo's `server/` directory at
+   `~/search-service/server/`, outside `public_html`. Expose only its `public/`
+   directory on the store's domain, as a symlink (via SSH) or a copy:
+   ```bash
+   ln -s ~/search-service/server/public ~/public_html/search-api
+   ```
+   The storefront must reach the service on the **same origin**. There is no
+   CORS support. See [INTEGRATION.md, Deployment shape](./INTEGRATION.md#deployment-shape).
+2. **Create the database.** In cPanel, open MySQL Databases. Create a database
+   and a user, and grant the user ALL privileges on that database. `RENAME
+   TABLE`, `DROP` and `CREATE` are needed by the reload. Then import the schema,
+   via phpMyAdmin Import or over SSH:
+   ```bash
+   mysql -u cpuser_search -p cpuser_search < db/schema.sql
+   ```
+3. **Configure.** On shared hosting, environment variables are awkward, so use
+   the config file. It is gitignored and not web-exposed:
+   ```bash
+   cp ~/search-service/server/config.example.php ~/search-service/server/config.php
+   ```
+   In `config.php`, set the defaults after each `?:`. At minimum, set the DSN,
+   user and password, and a long random reload token
+   (`php -r 'echo bin2hex(random_bytes(32)), "\n";'`). Leave `model`, `dim`,
+   and `normalization_version` equal to what the pipeline builds with. Every
+   key is described in `.env.example`, and `SEARCH_*` environment variables
+   still override the file where the host supports them. Set
+   `SEARCH_MIN_TOKEN_SIZE` to the host's `innodb_ft_min_token_size`
+   (`SHOW VARIABLES LIKE 'innodb_ft_min_token_size'`, usually 3).
+4. **Check health:** `curl -sS https://shop.example.com/search-api/health.php`
+   should return `{"status":"ok",…,"product_count":0}`. A count of 0 is
+   expected until the first reload.
+5. **Host the browser model and storefront assets.** Follow
+   [INTEGRATION.md, Self-hosting the model](./INTEGRATION.md#self-hosting-the-model-no-huggingface-no-cdn).
+   Then install the storefront snippet through the OpenCart module
+   ([INTEGRATION.md, Storefront reference](./INTEGRATION.md#storefront-reference)).
+
+### Every catalog update
+
+**1. Export from OpenCart 2.0.3.1** to `build.py`'s input columns. Product
+names and descriptions live in `oc_product_description`, one row per
+`language_id`. Join it twice, once for Persian and once for English. Look up
+your ids with `SELECT language_id, code FROM oc_language;`, and adjust the
+`oc_` prefix if your install uses another `DB_PREFIX`.
+
+```sql
+SET @fa := 2, @en := 1;   -- your Persian / English language_id
+
+SELECT
+    p.product_id                                              AS id,
+    COALESCE(d_fa.name, '')                                   AS title_fa,
+    COALESCE(d_en.name, '')                                   AS title_en,
+    CONCAT_WS(' ', d_fa.description, d_en.description)        AS `desc`,
+    COALESCE(m.name, '')                                      AS brand,
+    COALESCE((
+        SELECT LEFT(GROUP_CONCAT(DISTINCT CONCAT_WS(' ', c_fa.name, c_en.name)
+                                 ORDER BY pc.category_id SEPARATOR ' / '), 255)
+        FROM oc_product_to_category pc
+        LEFT JOIN oc_category_description c_fa
+               ON c_fa.category_id = pc.category_id AND c_fa.language_id = @fa
+        LEFT JOIN oc_category_description c_en
+               ON c_en.category_id = pc.category_id AND c_en.language_id = @en
+        WHERE pc.product_id = p.product_id
+    ), '')                                                    AS category,
+    p.model                                                   AS model,
+    p.price                                                   AS price,
+    p.quantity                                                AS stock,
+    CONCAT('index.php?route=product/product&product_id=', p.product_id) AS url,
+    COALESCE(p.image, '')                                     AS image,
+    p.viewed                                                  AS popularity
+FROM oc_product p
+JOIN oc_product_to_store ps ON ps.product_id = p.product_id AND ps.store_id = 0
+LEFT JOIN oc_product_description d_fa
+       ON d_fa.product_id = p.product_id AND d_fa.language_id = @fa
+LEFT JOIN oc_product_description d_en
+       ON d_en.product_id = p.product_id AND d_en.language_id = @en
+LEFT JOIN oc_manufacturer m ON m.manufacturer_id = p.manufacturer_id
+WHERE p.status = 1
+ORDER BY p.product_id;
+```
+
+Notes on the query:
+- Only enabled products (`status = 1`) in the default store are exported.
+  Disabled products drop out of search at the next reload.
+- `category` is every category the product is in (Persian and English names),
+  capped at 255 characters to fit the `products.category` column.
+- `COALESCE` keeps NULLs out of the export. phpMyAdmin writes a SQL NULL as the
+  literal text `NULL` in CSV, which would otherwise be indexed as a word.
+- `popularity` uses `viewed`. Replace it with a sales count if you have a
+  better signal.
+- HTML escaping (`&lt;p&gt;`, `&amp;quot;`) and tags are left as stored.
+  `build.py` decodes and strips them.
+
+Save the result as **CSV**: phpMyAdmin, SQL tab, run the query, then **Export**
+under "Query results operations", format CSV. Tick **"Put columns names in the
+first row"** and keep the defaults (`"` enclosure, `"` escape). Save it as
+`export.csv`, UTF-8. Use CSV, not phpMyAdmin's SQL export: `build.py`'s SQL
+reader understands `''` quoting, not the backslash escapes (`\'`) that
+phpMyAdmin and mysqldump write.
+
+**2. Build the bundle** on the GPU machine (Python 3.11+):
+
+```bash
+pip install -r pipeline/requirements.txt 'sentence-transformers>=2.2'
+EMBEDDER=real python pipeline/build.py --csv export.csv --out ./bundle
+# -> Built bundle: <count> products, dim 384, embedder real
+cat bundle/meta.json   # model, dim, normalization_version, count, checksum
+```
+
+`EMBEDDER=real` is required for production. The default `mock` produces
+random vectors that are only good for tests. `SEARCH_MODEL`,
+`SEARCH_MODEL_REVISION` and `SEARCH_MODEL_DIM` must match `server/config.php`.
+
+**3. Upload and stage** on the cPanel host:
+
+- Upload the bundle files into `~/search-service/server/data_incoming/`. Create
+  the directory if needed; it must not contain an old bundle. Use **binary**
+  mode for `vectors.bin`, for example SFTP, or a zip extracted with the cPanel
+  File Manager. A corrupted file is caught later as `vectors_size_mismatch` or
+  `checksum_mismatch`.
+- Recreate the staging table and load the rows. This leaves `products` live
+  and untouched:
+  ```bash
+  mysql -u cpuser_search -p cpuser_search \
+        -e 'DROP TABLE IF EXISTS products_new; CREATE TABLE products_new LIKE products;'
+  mysql -u cpuser_search -p cpuser_search < bundle/products.load.sql
+  ```
+  Without SSH, run the two statements in phpMyAdmin's SQL tab, then Import
+  `products.load.sql`. For a large catalog, gzip it first: phpMyAdmin accepts
+  `.sql.gz`, and a 20k-product file shrank from 46 MB to 12 MB in testing.
+  Check that `SELECT COUNT(*) FROM products_new` equals `count` in `meta.json`.
+
+**4. Reload.** This validates, then swaps atomically:
+
+```bash
+curl -sS -X POST -H "X-Reload-Token: $SEARCH_RELOAD_TOKEN" \
+     https://shop.example.com/search-api/reload.php
+# {"ok":true,"count":20000,"model":"intfloat/multilingual-e5-small","dim":384}
+curl -sS https://shop.example.com/search-api/health.php   # product_count == count
+```
+
+A `422 invalid_bundle` means nothing was swapped. Its `reason` names the
+failed check; the fixes are in
+[INTEGRATION.md](./INTEGRATION.md#post-reload). After a success, the
+previous version is kept as the `products_old` table and the `data_old/`
+directory.
+
+### Rollback (one step)
+
+To return to the previous catalog after a bad reload:
+
+```sql
+RENAME TABLE products TO products_bad, products_old TO products;
+```
+```bash
+cd ~/search-service/server && mv data data_bad && mv data_old data
+```
+
+Do both together, because the table and the vectors must come from the same
+bundle. Afterwards, drop `products_bad` and remove `data_bad/`. Each PHP
+worker caches the vectors under a key that includes `vectors.bin`'s mtime, so
+the restored files are picked up without a restart.
+
+## Production Go-Live Checklist
+
+Everything below was impossible to verify without the real host, catalog, or
+shoppers' devices. It consolidates the "Needs production validation" items from
+M0–M5. Verify each item on the production host before wide rollout.
+
+**Blocking: search quality and the model**
+- [ ] **Persian embedding-model feasibility test (mandatory before wide
+  rollout).** `intfloat/multilingual-e5-small` is a provisional default
+  (CLAUDE.md §7). Label Persian, English, and mixed queries from real traffic
+  into `fixtures/eval_queries.json`, then run
+  `php server/tools/eval.php --k=10` in keyword-only and hybrid mode (add
+  per-query `q_vector`s embedded by the browser client). Accept the model only
+  if hybrid clearly beats keyword-only on Persian and cross-language queries.
+  Changing the model means following
+  [INTEGRATION.md, Changing the model](./INTEGRATION.md#changing-the-model).
+- [ ] **Persian search quality on the real ~20k catalog.** Check keyword-tier
+  results for common Persian queries: ZWNJ variants, ی/ک variants, Persian
+  digits, model numbers. Normalization rules were only verified against
+  fixtures.
+- [ ] **JS↔Python embedder parity** with the exact model files deployed to the
+  store: `EMBEDDER=real python pipeline/tools/model_parity.py` must PASS
+  (cosine ≥ 0.99). Rerun it whenever the model, its files, or the
+  transformers.js version change.
+- [ ] Consider pinning `SEARCH_MODEL_REVISION` / `MODEL_REVISION` to a commit
+  hash instead of `main`, so a later upstream change cannot desynchronize
+  rebuilt product vectors from the browser model.
+- [ ] Hybrid responses are rarely empty: the cosine side always returns its
+  nearest products. Review real "no match" queries in `search_logs` and decide
+  whether a minimum-similarity cut-off is needed.
+- [ ] Keyboard-layout recovery covers the common US→Persian keys only (M2), and
+  synonyms and spelling are untuned. Review `search_logs` zero-result queries
+  after launch.
+
+**Blocking: host capacity and latency**
+- [ ] **Real latency on cPanel** for keyword-only and hybrid requests, measured
+  with `latency_ms` in `search_logs` and end-to-end from the storefront, against
+  the 200 ms budget. CI measured about 105–127 ms for a warm 20k×384 cosine
+  top-K; the production host was never measured.
+- [ ] **Zero-result queries are slow.** The did-you-mean vocabulary is rebuilt
+  by scanning the whole `products` table on each zero-result query. On a
+  synthetic 20k catalog on local MariaDB this took **about 500 ms**, compared
+  with about 20 ms for a normal query. It needs a follow-up change (serve the
+  bundle's `spellcheck.txt`) if confirmed on the host. Short Persian tokens
+  (shorter than `innodb_ft_min_token_size`) use the LIKE fallback, about
+  150 ms on the same data.
+- [ ] **LVE memory headroom.** The parsed vector matrix costs about **150 MB
+  per PHP worker** (about 300 MB peak while loading). Check the account's LVE
+  memory limit (PMEM) and PHP `memory_limit` against
+  `workers × 150 MB`. Under pressure, reduce LSAPI children or fall back to
+  re-ranking keyword candidates (CLAUDE.md §5).
+- [ ] **APCu availability.** Check `php -m | grep apcu` on the host (CLI and web
+  SAPI can differ) and that `apc.shm_size` holds the ~30 MB `vectors.bin`
+  (the default is often 32 MB). Without APCu, each cold worker reads the file
+  from disk, which is slower but correct.
+- [ ] `max_allowed_packet` and the phpMyAdmin upload limit accept the staged
+  `products.load.sql`. Statements are at most 1 MB
+  (`SEARCH_LOAD_MAX_STATEMENT_BYTES`), and the file is about 46 MB (12 MB
+  gzipped) for 20k products.
+- [ ] The reload's table and directory swaps are each atomic, but not atomic
+  together. A process kill between them is recovered with the rollback above.
+
+**Blocking: storefront and shoppers**
+- [ ] **No third-party requests** from the live store: DevTools, then Network,
+  shows only the store's domain. There must be no `huggingface.co` or
+  `cdn.jsdelivr.net` requests, tested from inside Iran.
+- [ ] **Model download on real devices and networks.** The first search-box
+  focus downloads about 118 MB (ONNX) + 17 MB (tokenizer) + about 10 MB
+  (WASM). Check the load time on typical Iranian mobile networks, that the
+  Cache API serves repeat visits (requires HTTPS), and that keyword-only
+  search stays usable meanwhile. If the download is too heavy, consider
+  enabling the model only on desktop or on Wi-Fi.
+- [ ] **Low-end device behavior.** Tune `EMBED_TIMEOUT_MS`. The one-time
+  17 MB tokenizer parse on first focus runs on the main thread. In local
+  Chromium runs, the first search took 38 ms in one run and 885 ms in another,
+  so check for jank on low-end phones. If the store sets a
+  Content-Security-Policy, it must allow `worker-src blob:` for the inference
+  worker.
+- [ ] The OpenCart module renders real product cards for `product_ids`, sends
+  `customer_id` as a string, and falls back to OpenCart's native search when the
+  service fails.
+- [ ] Uptime monitoring uses `GET /health` (not `HEAD`) and alerts on
+  `status != ok` and on `product_count == 0`.
 
 ## Milestone status
 
@@ -255,7 +480,7 @@ See `CLAUDE.md` §6. In short:
 - [x] **M2** — Persian normalization (parity), typo/keymap tolerance, "did you mean", logging, `POST /search`.
 - [x] **M3** — Offline pipeline (`build.py`, `embed.py` mock+real), bundle + `meta.json`, atomic `POST /reload`.
 - [x] **M4** — Semantic tier: browser query embedder, cosine top-K + caching, RRF hybrid + business boosts, `/search` vector path, latency guard, eval harness.
-- [ ] **M5** — Integration + docs (`INTEGRATION.md`, finalized README).
+- [x] **M5** — Integration + docs: `INTEGRATION.md` (HTTP contract, storefront reference, model self-hosting), operator runbook, Go-Live checklist.
 
 ## Contributing
 

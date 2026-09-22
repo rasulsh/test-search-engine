@@ -34,5 +34,8 @@ def load() -> dict[str, Any]:
             # Description is truncated to this many characters in the embedding
             # input to bound the composed passage length.
             "desc_char_limit": int(os.getenv("SEARCH_DESC_CHAR_LIMIT", "300")),
+            # products.load.sql is split into statements no larger than this so
+            # each fits the host's max_allowed_packet (MariaDB default 16 MB).
+            "max_statement_bytes": int(os.getenv("SEARCH_LOAD_MAX_STATEMENT_BYTES", "1000000")),
         },
     }

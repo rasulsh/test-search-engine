@@ -1,5 +1,5 @@
 {
-  "normalization_version": 1,
+  "normalization_version": 2,
   "cases": [
     {
       "name": "empty string",
@@ -100,6 +100,36 @@
       "name": "zwnj between fa and latin",
       "input": "مدل‌LG ۵۵ اینچ",
       "expected": "مدلlg 55 اینچ"
+    },
+    {
+      "name": "alef madda",
+      "input": "آیفون",
+      "expected": "ایفون"
+    },
+    {
+      "name": "alef madda standalone",
+      "input": "آ",
+      "expected": "ا"
+    },
+    {
+      "name": "alef wasla",
+      "input": "ٱلله",
+      "expected": "الله"
+    },
+    {
+      "name": "heh with yeh above",
+      "input": "خانۀ",
+      "expected": "خانه"
+    },
+    {
+      "name": "combining maddah above",
+      "input": "آ",
+      "expected": "ا"
+    },
+    {
+      "name": "combining hamza above",
+      "input": "أ",
+      "expected": "ا"
     }
   ]
 }

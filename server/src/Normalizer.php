@@ -18,7 +18,7 @@ namespace App;
  */
 final class Normalizer
 {
-    public const VERSION = 1;
+    public const VERSION = 2;
 
     public static function normalize(?string $text): string
     {
@@ -54,10 +54,11 @@ final class Normalizer
         $search = [];
         $replace = [];
 
-        // Removed: zero-width chars, Arabic diacritics (U+064B..U+0652),
-        // superscript alef (U+0670), tatweel (U+0640).
+        // Removed: zero-width chars, Arabic diacritics (harakat U+064B..U+0652,
+        // maddah U+0653, hamza above U+0654), superscript alef (U+0670),
+        // tatweel (U+0640).
         $remove = [0x200B, 0x200C, 0x200D, 0xFEFF, 0x0670, 0x0640];
-        for ($cp = 0x064B; $cp <= 0x0652; $cp++) {
+        for ($cp = 0x064B; $cp <= 0x0654; $cp++) {
             $remove[] = $cp;
         }
         foreach ($remove as $cp) {
@@ -65,13 +66,15 @@ final class Normalizer
             $replace[] = '';
         }
 
-        // Arabic -> Persian letters (alef madda U+0622 is intentionally kept).
+        // Arabic -> Persian letters (alef forms folded to bare alef).
         $letters = [
             0x064A => 0x06CC, // yeh
             0x0649 => 0x06CC, // alef maksura
             0x0626 => 0x06CC, // yeh with hamza
             0x0643 => 0x06A9, // kaf
             0x0629 => 0x0647, // teh marbuta
+            0x06C0 => 0x0647, // heh with yeh above
+            0x0622 => 0x0627, // alef with madda
             0x0623 => 0x0627, // alef with hamza above
             0x0625 => 0x0627, // alef with hamza below
             0x0671 => 0x0627, // alef wasla

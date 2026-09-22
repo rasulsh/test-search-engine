@@ -30,7 +30,7 @@ return [
         'name'                  => getenv('SEARCH_MODEL') ?: 'intfloat/multilingual-e5-small',
         'revision'              => getenv('SEARCH_MODEL_REVISION') ?: 'main',
         'dim'                   => (int) (getenv('SEARCH_MODEL_DIM') ?: 384),
-        'normalization_version' => (int) (getenv('SEARCH_NORMALIZATION_VERSION') ?: 1),
+        'normalization_version' => (int) (getenv('SEARCH_NORMALIZATION_VERSION') ?: 2),
     ],
 
     'search' => [

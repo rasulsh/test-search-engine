@@ -19,21 +19,24 @@ from __future__ import annotations
 
 import re
 
-NORMALIZATION_VERSION = 1
+NORMALIZATION_VERSION = 2
 
 # 1. Zero-width characters, including ZWNJ (U+200C, the Persian half-space).
 _ZERO_WIDTH = ["​", "‌", "‍", "﻿"]
 
-# 2. Arabic diacritics (harakat), superscript alef, and tatweel (kashida).
-_DIACRITICS = [chr(cp) for cp in range(0x064B, 0x0653)] + ["ٰ", "ـ"]
+# 2. Arabic diacritics (harakat U+064B..U+0652, maddah U+0653, hamza above
+#    U+0654), superscript alef (U+0670), and tatweel/kashida (U+0640).
+_DIACRITICS = [chr(cp) for cp in range(0x064B, 0x0655)] + ["ٰ", "ـ"]
 
-# 3. Arabic -> Persian letter unification. Note: alef madda (آ) is preserved.
+# 3. Arabic -> Persian letter unification (alef forms folded to bare alef).
 _LETTER_MAP = {
     "ي": "ی",  # Arabic yeh -> Persian yeh
     "ى": "ی",  # alef maksura -> Persian yeh
     "ئ": "ی",  # yeh with hamza -> Persian yeh
     "ك": "ک",  # Arabic kaf -> Persian keheh
     "ة": "ه",  # teh marbuta -> heh
+    "ۀ": "ه",  # heh with yeh above -> heh
+    "آ": "ا",  # alef with madda -> alef
     "أ": "ا",  # alef with hamza above -> alef
     "إ": "ا",  # alef with hamza below -> alef
     "ٱ": "ا",  # alef wasla -> alef

@@ -18,6 +18,7 @@ final class EndpointTest extends TestCase
     /** @var resource|null */
     private static $process = null;
     private static string $baseUrl = '';
+    private static ?string $dataDir = null;
 
     public static function setUpBeforeClass(): void
     {
@@ -57,6 +58,14 @@ final class EndpointTest extends TestCase
         $env['SEARCH_SEARCH_LOGS_TABLE'] = 'search_logs';
         $env['SEARCH_RELOAD_TOKEN'] = 'test-secret';
 
+        // A bundle holding only the spellcheck dictionary. Its frequencies are
+        // deliberately the reverse of the catalog's, so a suggestion can only
+        // come out this way if /search reads the dictionary (not the table).
+        self::$dataDir = sys_get_temp_dir() . '/endpoint_data_' . uniqid('', true);
+        mkdir(self::$dataDir, 0777, true);
+        file_put_contents(self::$dataDir . '/spellcheck.txt', "body\t9\nsony\t1\n");
+        $env['SEARCH_DATA_DIR'] = self::$dataDir;
+
         $descriptors = [
             0 => ['pipe', 'r'],
             1 => ['file', '/dev/null', 'w'],
@@ -85,6 +94,11 @@ final class EndpointTest extends TestCase
             proc_close(self::$process);
         }
         self::$process = null;
+        if (self::$dataDir !== null) {
+            @unlink(self::$dataDir . '/spellcheck.txt');
+            @rmdir(self::$dataDir);
+            self::$dataDir = null;
+        }
     }
 
     public function testHealthEndpointReturnsOkJson(): void
@@ -136,6 +150,19 @@ final class EndpointTest extends TestCase
         $decoded = json_decode((string) $body, true);
         self::assertSame('sony', $decoded['did_you_mean']);
         self::assertNotEmpty($decoded['product_ids']);
+    }
+
+    public function testDidYouMeanComesFromBundleDictionary(): void
+    {
+        // "sody" is one edit from both "sony" (catalog frequency 4) and "body"
+        // (catalog frequency 1). The table scan would pick "sony"; the bundle
+        // dictionary ranks "body" higher.
+        [$status, $body] = $this->request('POST', '/search', '{"q":"sody"}');
+
+        self::assertSame(200, $status);
+        $decoded = json_decode((string) $body, true);
+        self::assertSame('body', $decoded['did_you_mean']);
+        self::assertSame([1001], $decoded['product_ids']);
     }
 
     public function testSearchWrongMethodReturns405(): void

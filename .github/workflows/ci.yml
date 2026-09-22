@@ -36,7 +36,9 @@ jobs:
         uses: shivammathur/setup-php@v2
         with:
           php-version: '8.3'
-          extensions: mbstring, pdo_mysql
+          extensions: mbstring, pdo_mysql, apcu
+          # Exercise the APCu cache paths (off by default in the CLI SAPI).
+          ini-values: apc.enable_cli=1
           coverage: none
           tools: composer:v2
 

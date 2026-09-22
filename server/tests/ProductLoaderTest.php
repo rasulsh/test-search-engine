@@ -4,10 +4,37 @@ declare(strict_types=1);
 
 namespace App\Tests;
 
+use App\Normalizer;
 use App\ProductLoader;
 
 final class ProductLoaderTest extends DatabaseTestCase
 {
+    public function testSampleFixtureNormalizedColumnsMatchNormalizer(): void
+    {
+        // Contract 1: the committed fixture's normalized_* columns must equal the
+        // Normalizer output for the raw text (regenerate via
+        // fixtures/generate_products_sample.php if this fails).
+        $this->loadSampleFixture();
+
+        $rows = $this->pdo
+            ->query('SELECT product_id, title, description, normalized_title, normalized_desc FROM products')
+            ->fetchAll();
+
+        self::assertNotEmpty($rows);
+        foreach ($rows as $row) {
+            self::assertSame(
+                Normalizer::normalize($row['title']),
+                $row['normalized_title'],
+                "normalized_title drift on product {$row['product_id']}"
+            );
+            self::assertSame(
+                Normalizer::normalize($row['description']),
+                $row['normalized_desc'],
+                "normalized_desc drift on product {$row['product_id']}"
+            );
+        }
+    }
+
     /** @return array<string, mixed> */
     private function row(int $id, string $title, string $description): array
     {
@@ -26,7 +53,7 @@ final class ProductLoaderTest extends DatabaseTestCase
         ];
     }
 
-    public function testLoadInsertsRowsWithPassthroughNormalization(): void
+    public function testLoadCanonicalizesNormalizedColumns(): void
     {
         $loader = new ProductLoader($this->pdo, 'products');
 
@@ -43,10 +70,11 @@ final class ProductLoaderTest extends DatabaseTestCase
             ->fetchAll();
 
         self::assertCount(2, $stored);
-        // Passthrough in M1: normalized_* equals the raw text verbatim.
-        self::assertSame('Wireless Mouse', $stored[0]['normalized_title']);
-        self::assertSame('A wireless optical mouse', $stored[0]['normalized_desc']);
-        self::assertSame('موس بی‌سیم', $stored[1]['normalized_title']);
+        // Default normalizer canonicalizes: lowercase Latin, strip ZWNJ.
+        self::assertSame('wireless mouse', $stored[0]['normalized_title']);
+        self::assertSame('a wireless optical mouse', $stored[0]['normalized_desc']);
+        self::assertSame('موس بیسیم', $stored[1]['normalized_title']);
+        self::assertSame('موس نوری بیسیم', $stored[1]['normalized_desc']);
         self::assertSame(9.99, (float) $stored[0]['price']);
     }
 
@@ -61,7 +89,7 @@ final class ProductLoaderTest extends DatabaseTestCase
 
         self::assertCount(1, $rows);
         self::assertSame('New Title', $rows[0]['title']);
-        self::assertSame('New Title', $rows[0]['normalized_title']);
+        self::assertSame('new title', $rows[0]['normalized_title']);
     }
 
     public function testInjectedNormalizerPopulatesNormalizedColumns(): void

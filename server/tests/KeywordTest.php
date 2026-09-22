@@ -73,14 +73,34 @@ final class KeywordTest extends DatabaseTestCase
         self::assertSame('like', $results[0]['match_type']);
     }
 
-    public function testZwnjTermIsRecoveredByLikeFallback(): void
+    public function testNormalizationFindsZwnjTermViaFulltext(): void
     {
-        // FULLTEXT misses ZWNJ-joined terms; tokenizing on ZWNJ yields a short
-        // token, which routes to the LIKE fallback and still finds the row.
+        // M2: the Normalizer strips ZWNJ from both the indexed columns and the
+        // query, so the joined term is a single FULLTEXT token — the M1 LIKE
+        // workaround is no longer needed.
         $results = $this->keyword->search('بی‌سیم');
 
         self::assertSame([1010], $this->ids($results));
-        self::assertSame('like', $results[0]['match_type']);
+        self::assertSame('fulltext', $results[0]['match_type']);
+    }
+
+    public function testModelNameCanonicalizationMatchesHyphenatedModel(): void
+    {
+        // "WH-1000XM5" normalizes to "wh1000xm5", matching the indexed model.
+        $results = $this->keyword->search('WH-1000XM5');
+
+        $ids = $this->ids($results);
+        sort($ids);
+        self::assertSame([1009, 1010], $ids);
+        self::assertSame('fulltext', $results[0]['match_type']);
+    }
+
+    public function testPersianDigitsAreFolded(): void
+    {
+        // "۲۵۶" folds to "256", matching both iPhone rows.
+        $ids = $this->ids($this->keyword->search('۲۵۶'));
+        sort($ids);
+        self::assertSame([1001, 1002], $ids);
     }
 
     public function testNoMatchReturnsEmpty(): void

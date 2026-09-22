@@ -1,0 +1,105 @@
+{
+  "normalization_version": 1,
+  "cases": [
+    {
+      "name": "empty string",
+      "input": "",
+      "expected": ""
+    },
+    {
+      "name": "only spaces",
+      "input": "   ",
+      "expected": ""
+    },
+    {
+      "name": "zwnj half-space",
+      "input": "بی‌سیم",
+      "expected": "بیسیم"
+    },
+    {
+      "name": "zwnj compound",
+      "input": "کتاب‌ها",
+      "expected": "کتابها"
+    },
+    {
+      "name": "arabic yeh and kaf",
+      "input": "كتاب عربي",
+      "expected": "کتاب عربی"
+    },
+    {
+      "name": "alef maksura",
+      "input": "مصطفى",
+      "expected": "مصطفی"
+    },
+    {
+      "name": "hamza on alef",
+      "input": "أحمد إسماعیل",
+      "expected": "احمد اسماعیل"
+    },
+    {
+      "name": "waw with hamza",
+      "input": "مسؤول",
+      "expected": "مسوول"
+    },
+    {
+      "name": "teh marbuta",
+      "input": "مدينة",
+      "expected": "مدینه"
+    },
+    {
+      "name": "persian digits",
+      "input": "۱۲۳ تست",
+      "expected": "123 تست"
+    },
+    {
+      "name": "arabic-indic digits",
+      "input": "٤٥٦",
+      "expected": "456"
+    },
+    {
+      "name": "harakat removal",
+      "input": "مُحَمَّد",
+      "expected": "محمد"
+    },
+    {
+      "name": "tatweel removal",
+      "input": "ســـلام",
+      "expected": "سلام"
+    },
+    {
+      "name": "latin lowercase",
+      "input": "iPhone 15 PRO",
+      "expected": "iphone 15 pro"
+    },
+    {
+      "name": "model name hyphen",
+      "input": "WH-1000XM5",
+      "expected": "wh1000xm5"
+    },
+    {
+      "name": "model name dot/slash",
+      "input": "A7.IV SM/S928",
+      "expected": "a7iv sms928"
+    },
+    {
+      "name": "nbsp and tabs",
+      "input": "a b\tc\nd",
+      "expected": "a b c d"
+    },
+    {
+      "name": "collapse spaces",
+      "input": "  hello   world  ",
+      "expected": "hello world"
+    },
+    {
+      "name": "mixed fa en digits",
+      "input": "گوشی سامسونگ Galaxy S24 مدل ۲۰۲۴",
+      "expected": "گوشی سامسونگ galaxy s24 مدل 2024"
+    },
+    {
+      "name": "zwnj between fa and latin",
+      "input": "مدل‌LG ۵۵ اینچ",
+      "expected": "مدلlg 55 اینچ"
+    }
+  ]
+}

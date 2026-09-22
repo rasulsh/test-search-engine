@@ -9,10 +9,11 @@ use PHPUnit\Framework\TestCase;
 use Throwable;
 
 /**
- * End-to-end check of the front controller and /health over HTTP, using PHP's
- * built-in server with index.php as the router. Seeds the same test database.
+ * End-to-end checks of the front controller over HTTP (GET /health, POST
+ * /search, and error paths), using PHP's built-in server with index.php as the
+ * router against the seeded test database.
  */
-final class HealthEndpointTest extends TestCase
+final class EndpointTest extends TestCase
 {
     /** @var resource|null */
     private static $process = null;
@@ -53,6 +54,7 @@ final class HealthEndpointTest extends TestCase
         $env['SEARCH_DB_USER'] = $user;
         $env['SEARCH_DB_PASSWORD'] = $password;
         $env['SEARCH_PRODUCTS_TABLE'] = 'products';
+        $env['SEARCH_SEARCH_LOGS_TABLE'] = 'search_logs';
 
         $descriptors = [
             0 => ['pipe', 'r'],
@@ -112,15 +114,56 @@ final class HealthEndpointTest extends TestCase
         self::assertSame('method_not_allowed', json_decode((string) $body, true)['error']);
     }
 
+    public function testSearchReturnsProductIds(): void
+    {
+        [$status, $body] = $this->request('POST', '/search', '{"q":"sony"}');
+
+        self::assertSame(200, $status);
+        $decoded = json_decode((string) $body, true);
+        self::assertIsArray($decoded);
+        self::assertNull($decoded['did_you_mean']);
+        self::assertSame('sony', $decoded['query']['normalized']);
+        self::assertContains(1009, $decoded['product_ids']);
+        self::assertContains(1011, $decoded['product_ids']);
+    }
+
+    public function testSearchReturnsDidYouMeanForTypo(): void
+    {
+        [$status, $body] = $this->request('POST', '/search', '{"q":"sont"}');
+
+        self::assertSame(200, $status);
+        $decoded = json_decode((string) $body, true);
+        self::assertSame('sony', $decoded['did_you_mean']);
+        self::assertNotEmpty($decoded['product_ids']);
+    }
+
+    public function testSearchWrongMethodReturns405(): void
+    {
+        [$status] = $this->request('GET', '/search');
+
+        self::assertSame(405, $status);
+    }
+
+    public function testSearchInvalidJsonReturns400(): void
+    {
+        [$status, $body] = $this->request('POST', '/search', 'not-json');
+
+        self::assertSame(400, $status);
+        self::assertSame('invalid_json', json_decode((string) $body, true)['error']);
+    }
+
     /**
      * @return array{0: int, 1: string|false}
      */
-    private function request(string $method, string $path): array
+    private function request(string $method, string $path, ?string $body = null): array
     {
-        $context = stream_context_create([
-            'http' => ['method' => $method, 'ignore_errors' => true, 'timeout' => 5],
-        ]);
-        $body = @file_get_contents(self::$baseUrl . $path, false, $context);
+        $http = ['method' => $method, 'ignore_errors' => true, 'timeout' => 5];
+        if ($body !== null) {
+            $http['header'] = "Content-Type: application/json\r\n";
+            $http['content'] = $body;
+        }
+        $context = stream_context_create(['http' => $http]);
+        $response = @file_get_contents(self::$baseUrl . $path, false, $context);
 
         $status = 0;
         foreach ($http_response_header ?? [] as $header) {
@@ -129,7 +172,7 @@ final class HealthEndpointTest extends TestCase
             }
         }
 
-        return [$status, $body];
+        return [$status, $response];
     }
 
     private static function freePort(): int

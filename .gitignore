@@ -18,9 +18,10 @@ venv/
 .pytest_cache/
 .ruff_cache/
 
-# Server runtime data: active bundle + staging (never committed)
+# Server runtime data: active bundle + staging + rollback backup (never committed)
 /server/data/
 /server/data_incoming/
+/server/data_old/
 
 # Index bundles produced offline
 /bundle/

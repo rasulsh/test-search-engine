@@ -10,6 +10,10 @@ src = ["pipeline"]
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]
 
+[tool.ruff.lint.per-file-ignores]
+# build.py fixes sys.path before its imports to avoid the stdlib `keyword` clash.
+"pipeline/build.py" = ["E402"]
+
 [tool.pytest.ini_options]
 testpaths = ["pipeline/tests"]
 python_files = ["test_*.py"]

@@ -1,4 +1,6 @@
-# Runtime dependencies for the offline pipeline (developer GPU machine).
-# Intentionally empty at M0 (scaffold has no logic). Real embedding
-# dependencies (numpy, sentence-transformers / transformers) are added in M3,
-# and pinned there. The server itself installs none of this.
+# Runtime dependencies for the offline pipeline (developer GPU machine + CI mock).
+numpy>=1.24
+
+# Real embedding (EMBEDDER=real) additionally needs, on the developer's GPU
+# machine only (NOT installed in CI, which uses the deterministic mock embedder):
+#   sentence-transformers>=2.2

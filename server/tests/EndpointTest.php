@@ -55,6 +55,7 @@ final class EndpointTest extends TestCase
         $env['SEARCH_DB_PASSWORD'] = $password;
         $env['SEARCH_PRODUCTS_TABLE'] = 'products';
         $env['SEARCH_SEARCH_LOGS_TABLE'] = 'search_logs';
+        $env['SEARCH_RELOAD_TOKEN'] = 'test-secret';
 
         $descriptors = [
             0 => ['pipe', 'r'],
@@ -150,6 +151,23 @@ final class EndpointTest extends TestCase
 
         self::assertSame(400, $status);
         self::assertSame('invalid_json', json_decode((string) $body, true)['error']);
+    }
+
+    public function testReloadWithoutTokenReturns401(): void
+    {
+        // A reload token is configured, so an unauthenticated call is rejected
+        // before any swap happens.
+        [$status, $body] = $this->request('POST', '/reload', '{}');
+
+        self::assertSame(401, $status);
+        self::assertSame('unauthorized', json_decode((string) $body, true)['error']);
+    }
+
+    public function testReloadWrongMethodReturns405(): void
+    {
+        [$status] = $this->request('GET', '/reload');
+
+        self::assertSame(405, $status);
     }
 
     /**

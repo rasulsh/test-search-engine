@@ -17,11 +17,11 @@ final class SearchControllerTest extends DatabaseTestCase
         $this->loadSampleFixture();
     }
 
-    private function controller(): SearchController
+    private function controller(string $logsTable = 'search_logs'): SearchController
     {
         $pdo = $this->pdo;
         $keyword = new Keyword($pdo, 'products', 3, 20);
-        $logger = new Logger($pdo, 'search_logs');
+        $logger = new Logger($pdo, $logsTable);
         $spellerFactory = static function () use ($pdo): Speller {
             $texts = [];
             foreach ($pdo->query('SELECT normalized_title, normalized_desc FROM products') as $row) {
@@ -96,5 +96,29 @@ final class SearchControllerTest extends DatabaseTestCase
         self::assertSame([], $result['product_ids']);
         self::assertNull($result['did_you_mean']);
         self::assertSame(1, $this->logCount());
+    }
+
+    public function testOversizedInputIsStillAnsweredWhenTheLogRowIsRejected(): void
+    {
+        // raw_q / customer_id exceed their search_logs columns; strict SQL mode
+        // rejects the log INSERT, which must not fail the search itself.
+        $result = $this->controller()->search([
+            'q' => 'sony' . str_repeat(' ', 600),
+            'customer_id' => str_repeat('c', 100),
+        ]);
+
+        $ids = $result['product_ids'];
+        sort($ids);
+        self::assertSame([1009, 1011], $ids);
+        self::assertSame(0, $this->logCount());
+    }
+
+    public function testLoggingFailureDoesNotFailTheSearch(): void
+    {
+        $result = $this->controller('missing_logs_table')->search(['q' => 'sony']);
+
+        $ids = $result['product_ids'];
+        sort($ids);
+        self::assertSame([1009, 1011], $ids);
     }
 }

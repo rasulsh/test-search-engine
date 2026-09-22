@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace App;
 
+use Throwable;
+
 /**
  * POST /search flow.
  *
@@ -104,15 +106,21 @@ final class SearchController
 
         $latencyMs = (int) round((microtime(true) - $start) * 1000);
 
-        $this->logger->log([
-            'raw_q'        => $raw,
-            'normalized_q' => $normalized,
-            'had_vector'   => $queryVector !== null,
-            'result_count' => count($productIds),
-            'top_ids'      => array_slice($productIds, 0, $this->topIdsLimit),
-            'customer_id'  => $customerId,
-            'latency_ms'   => $latencyMs,
-        ]);
+        // Logging is best-effort: a rejected log row (e.g. an over-long query
+        // under strict SQL mode) must never fail the search itself.
+        try {
+            $this->logger->log([
+                'raw_q'        => $raw,
+                'normalized_q' => $normalized,
+                'had_vector'   => $queryVector !== null,
+                'result_count' => count($productIds),
+                'top_ids'      => array_slice($productIds, 0, $this->topIdsLimit),
+                'customer_id'  => $customerId,
+                'latency_ms'   => $latencyMs,
+            ]);
+        } catch (Throwable $e) {
+            error_log('search: log write failed: ' . $e->getMessage());
+        }
 
         return [
             'query'        => ['raw' => $raw, 'normalized' => $normalized],

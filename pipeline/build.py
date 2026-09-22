@@ -28,9 +28,11 @@ if _sys.path and _os.path.abspath(_sys.path[0]) == _HERE:
 import argparse
 import csv
 import hashlib
+import html
 import importlib.util
 import io
 import json
+import re
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -65,9 +67,35 @@ _SERVER_COLUMNS = (
 def read_products(path: str | Path) -> list[dict[str, Any]]:
     path = Path(path)
     text = path.read_text(encoding="utf-8")
-    if path.suffix.lower() == ".csv":
-        return parse_csv(text)
-    return parse_sql(text)
+    rows = parse_csv(text) if path.suffix.lower() == ".csv" else parse_sql(text)
+    return [_clean_row(row) for row in rows]
+
+
+_TEXT_COLUMNS = ("title_fa", "title_en", "desc", "brand", "category", "model")
+_TAG = re.compile(r"<[^>]*>")
+_SPACE = re.compile(r"\s+")  # str.isspace() set: ZWNJ is NOT whitespace, so it survives
+
+
+def clean_text(value: str | None) -> str | None:
+    """Visible text of an OpenCart field.
+
+    OpenCart stores names and descriptions HTML-escaped, often twice (the editor
+    emits `&quot;`, then OpenCart escapes it to `&amp;quot;`). Indexing that raw
+    would put markup and entity names into FULLTEXT and the embeddings.
+    """
+    if value is None:
+        return None
+    text = str(value)
+    for _ in range(3):
+        decoded = html.unescape(text)
+        if decoded == text:
+            break
+        text = decoded
+    return _SPACE.sub(" ", _TAG.sub(" ", text)).strip()
+
+
+def _clean_row(row: dict[str, Any]) -> dict[str, Any]:
+    return {key: clean_text(val) if key in _TEXT_COLUMNS else val for key, val in row.items()}
 
 
 def parse_csv(text: str) -> list[dict[str, Any]]:
@@ -200,24 +228,36 @@ def to_server_row(product: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def build_products_sql(server_rows: list[dict[str, Any]], staging_table: str) -> str:
+def build_products_sql(
+    server_rows: list[dict[str, Any]], staging_table: str, max_statement_bytes: int
+) -> str:
+    """REPLACE statements for the staging table, each at most max_statement_bytes
+    (a single oversized row still gets its own statement). One statement for a
+    whole catalog exceeds a shared host's max_allowed_packet and fails the load."""
     def quote(value: Any) -> str:
         if isinstance(value, (int, float)):
             return str(value)
-        return "'" + str(value).replace("'", "''") + "'"
+        # MySQL treats backslash as an escape inside string literals by default.
+        return "'" + str(value).replace("\\", "\\\\").replace("'", "''") + "'"
 
-    lines = [
-        "SET NAMES utf8mb4;",
-        "",
-        f"REPLACE INTO `{staging_table}`",
-        "    (" + ", ".join(_SERVER_COLUMNS) + ")",
-        "VALUES",
-    ]
-    tuples = [
-        "    (" + ", ".join(quote(row[col]) for col in _SERVER_COLUMNS) + ")"
-        for row in server_rows
-    ]
-    return "\n".join(lines) + "\n" + ",\n".join(tuples) + ";\n"
+    header = (
+        f"REPLACE INTO `{staging_table}`\n"
+        "    (" + ", ".join(_SERVER_COLUMNS) + ")\nVALUES\n"
+    )
+    statements: list[str] = []
+    batch: list[str] = []
+    size = len(header.encode("utf-8"))
+    for row in server_rows:
+        tup = "    (" + ", ".join(quote(row[col]) for col in _SERVER_COLUMNS) + ")"
+        tup_size = len(tup.encode("utf-8")) + 2  # ",\n" or ";\n"
+        if batch and size + tup_size > max_statement_bytes:
+            statements.append(header + ",\n".join(batch) + ";\n")
+            batch, size = [], len(header.encode("utf-8"))
+        batch.append(tup)
+        size += tup_size
+    if batch:
+        statements.append(header + ",\n".join(batch) + ";\n")
+    return "SET NAMES utf8mb4;\n\n" + "\n".join(statements)
 
 
 # --- Orchestration ---------------------------------------------------------
@@ -246,7 +286,10 @@ def build_bundle(
         "".join(f"{row['product_id']}\n" for row in server_rows), encoding="utf-8"
     )
     (out / "products.load.sql").write_text(
-        build_products_sql(server_rows, staging_table), encoding="utf-8"
+        build_products_sql(
+            server_rows, staging_table, int(config["build"]["max_statement_bytes"])
+        ),
+        encoding="utf-8",
     )
     (out / "synonyms.json").write_text(
         json.dumps(_keyword.build_synonyms(server_rows), ensure_ascii=False, indent=2) + "\n",

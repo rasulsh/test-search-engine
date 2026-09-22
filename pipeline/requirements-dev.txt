@@ -1,0 +1,5 @@
+# Development / CI tooling for the offline pipeline.
+# Installed in CI to run linting and tests; not needed on the server.
+-r requirements.txt
+pytest>=8,<10
+ruff>=0.6

@@ -1,0 +1,15 @@
+# Tool configuration for the offline pipeline (Python 3.11+).
+# Dependencies are declared in pipeline/requirements*.txt, not here — this file
+# only configures ruff and pytest so the toolchain needs no build backend.
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+src = ["pipeline"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+
+[tool.pytest.ini_options]
+testpaths = ["pipeline/tests"]
+python_files = ["test_*.py"]

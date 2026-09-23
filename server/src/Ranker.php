@@ -18,6 +18,10 @@ namespace App;
  * (and outrank) exact keyword matches. Semantic evidence still reorders keyword
  * hits among themselves, and semantic-only results augment below them.
  *
+ * Within the keyword band, hits that matched in the product title lead those
+ * that matched only in the description (M10), so semantic evidence and boosts
+ * cannot lift a description-only mention above a product named by the query.
+ *
  * Business signals (in-stock, popularity) are applied AFTER fusion as light
  * multiplicative boosts, so they nudge ordering among comparably-relevant items
  * without overriding relevance. Weights are configurable and default to small.
@@ -45,21 +49,29 @@ final class Ranker
     }
 
     /**
-     * Fuse two ranked id lists and return ids ordered keyword hits first, then
-     * semantic-only ids, each band by fused-and-boosted score.
+     * Fuse two ranked id lists and return ids ordered title keyword hits
+     * first, then description-only keyword hits, then semantic-only ids, each
+     * band by fused-and-boosted score.
      *
      * @param list<int> $keywordOrder  product_ids in keyword rank order (best first)
      * @param list<int> $semanticOrder product_ids in semantic rank order (best first)
      * @param array<int, array{stock: int, popularity: int}> $signals per-id business signals
+     * @param list<int> $titleMatches  keyword ids that matched in the title
      * @return list<array{product_id: int, score: float, keyword: bool}>
      */
-    public function fuse(array $keywordOrder, array $semanticOrder, array $signals, int $limit): array
-    {
+    public function fuse(
+        array $keywordOrder,
+        array $semanticOrder,
+        array $signals,
+        int $limit,
+        array $titleMatches = []
+    ): array {
         $rrf = [];
         foreach ($keywordOrder as $i => $id) {
             $rrf[$id] = ($rrf[$id] ?? 0.0) + $this->keywordWeight / ($this->rrfK + $i + 1);
         }
         $isKeyword = $rrf;
+        $inTitle = array_intersect_key(array_flip($titleMatches), $isKeyword);
         foreach ($semanticOrder as $i => $id) {
             $rrf[$id] = ($rrf[$id] ?? 0.0) + $this->semanticWeight / ($this->rrfK + $i + 1);
         }
@@ -78,17 +90,29 @@ final class Ranker
                 ? ($signals[$id]['popularity'] ?? 0) / $maxPopularity
                 : 0.0;
             $boost = 1.0 + $this->stockBoost * $inStock + $this->popularityBoost * $popularity;
-            $rows[] = ['product_id' => $id, 'score' => $base * $boost, 'keyword' => isset($isKeyword[$id])];
+            $rows[] = [
+                'product_id' => $id,
+                'score'      => $base * $boost,
+                'keyword'    => isset($isKeyword[$id]),
+                'band'       => isset($inTitle[$id]) ? 2 : (isset($isKeyword[$id]) ? 1 : 0),
+            ];
         }
 
         usort(
             $rows,
             static fn (array $a, array $b): int =>
-                ($b['keyword'] <=> $a['keyword'])
+                ($b['band'] <=> $a['band'])
                 ?: ($b['score'] <=> $a['score'])
                 ?: ($a['product_id'] <=> $b['product_id'])
         );
 
-        return array_slice($rows, 0, max(1, $limit));
+        return array_map(
+            static fn (array $row): array => [
+                'product_id' => $row['product_id'],
+                'score'      => $row['score'],
+                'keyword'    => $row['keyword'],
+            ],
+            array_slice($rows, 0, max(1, $limit))
+        );
     }
 }

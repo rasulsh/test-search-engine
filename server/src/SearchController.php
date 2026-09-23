@@ -92,7 +92,16 @@ final class SearchController
         $maxDistance = (int) ($search['suggest_max_distance'] ?? 2);
         $minFrequency = (int) ($search['suggest_min_frequency'] ?? 2);
 
-        $keyword = new Keyword($pdo, $productsTable, (int) $search['min_token_size'], (int) $search['default_limit']);
+        $keyword = new Keyword(
+            $pdo,
+            $productsTable,
+            (int) $search['min_token_size'],
+            (int) $search['default_limit'],
+            null,
+            (float) ($search['title_weight'] ?? 10.0),
+            (float) ($search['desc_weight'] ?? 1.0),
+            (float) ($search['phrase_bonus'] ?? 5.0)
+        );
         // The bundle dictionary is cached per worker (and in APCu); the table scan
         // is only a fallback for a data directory without spellcheck.txt.
         $dictionaryPath = $config['paths']['data'] . '/' . Speller::DICTIONARY_FILE;
@@ -181,13 +190,17 @@ final class SearchController
         }
 
         $keywordIds = array_map(static fn (array $row): int => $row['product_id'], $results);
+        $titleIds = array_values(array_map(
+            static fn (array $row): int => $row['product_id'],
+            array_filter($results, static fn (array $row): bool => $row['title_match'])
+        ));
         $productIds = $keywordIds;
         $cosineScores = null;
 
         // Tier 2 is additive: only reshuffle when a usable vector and bundle are
         // present. Otherwise the keyword ordering above stands.
         if ($queryVector !== null && $this->semanticEnabled()) {
-            [$productIds, $cosineScores] = $this->hybrid($keywordIds, $queryVector, $limit);
+            [$productIds, $cosineScores] = $this->hybrid($keywordIds, $titleIds, $queryVector, $limit);
         }
 
         $latencyMs = (int) round((microtime(true) - $start) * 1000);
@@ -230,10 +243,11 @@ final class SearchController
      * dead ids.
      *
      * @param list<int> $keywordIds
+     * @param list<int> $titleIds keyword ids that matched in the title
      * @param list<float> $queryVector
      * @return array{0: list<int>, 1: list<?float>}
      */
-    private function hybrid(array $keywordIds, array $queryVector, ?int $limit): array
+    private function hybrid(array $keywordIds, array $titleIds, array $queryVector, ?int $limit): array
     {
         $semantic = $this->vectors->topK($queryVector, $this->semanticTopK, $this->semanticMinScore);
         $semanticIds = array_map(static fn (array $row): int => $row['product_id'], $semantic);
@@ -249,7 +263,7 @@ final class SearchController
             $semanticIds = array_values(array_filter($semanticIds, $exists));
 
             $effectiveLimit = $limit !== null ? max(1, $limit) : $this->defaultLimit;
-            $fused = $this->ranker->fuse($keywordIds, $semanticIds, $signals, $effectiveLimit);
+            $fused = $this->ranker->fuse($keywordIds, $semanticIds, $signals, $effectiveLimit, $titleIds);
             $productIds = array_map(static fn (array $row): int => $row['product_id'], $fused);
         }
 
@@ -303,7 +317,7 @@ final class SearchController
      * alternative's results and the suggestion, or empty + null when no
      * alternative returns more than $baseline results.
      *
-     * @return array{0: list<array{product_id: int, score: float, match_type: string}>, 1: ?string}
+     * @return array{0: list<array{product_id: int, score: float, match_type: string, title_match: bool}>, 1: ?string}
      */
     private function recover(string $raw, string $normalized, ?int $limit, int $baseline): array
     {

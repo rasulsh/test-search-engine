@@ -44,6 +44,15 @@ return [
         // LIKE scan. Mirror the host's innodb_ft_min_token_size (default 3),
         // which cannot be changed on shared cPanel.
         'min_token_size'    => (int) (getenv('SEARCH_MIN_TOKEN_SIZE') ?: 3),
+        // Keyword field weighting (M10). Each query token counts in the best
+        // field it matched: (title_weight * tokens in title + desc_weight *
+        // tokens only in description) / query tokens, plus phrase_bonus when
+        // the tokens appear adjacent and in order in the title. Any title match ranks above any
+        // description-only match regardless of these; they order within the
+        // two bands. Starting points — tune on the real catalog.
+        'title_weight'      => (float) $setting('SEARCH_TITLE_WEIGHT', '10.0'),
+        'desc_weight'       => (float) $setting('SEARCH_DESC_WEIGHT', '1.0'),
+        'phrase_bonus'      => (float) $setting('SEARCH_PHRASE_BONUS', '5.0'),
         // Global cosine top-K width for Tier 2 (candidates fused with keyword).
         'semantic_top_k'    => (int) (getenv('SEARCH_SEMANTIC_TOP_K') ?: 100),
         // Relevance floor (cosine) for Tier 2 neighbours. The nearest vectors of

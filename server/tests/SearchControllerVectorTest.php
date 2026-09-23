@@ -7,6 +7,7 @@ namespace App\Tests;
 use App\Identifier;
 use App\Keyword;
 use App\Logger;
+use App\Normalizer;
 use App\Ranker;
 use App\SearchController;
 use App\Speller;
@@ -264,6 +265,49 @@ final class SearchControllerVectorTest extends DatabaseTestCase
         ]);
 
         self::assertSame([1011], $result['product_ids']);
+    }
+
+    public function testHybridKeepsTitleMatchAboveDescriptionOnlyNeighbour(): void
+    {
+        // Real-catalog case: the PS5 bundle mentions "دوال شاک" only in its
+        // description, is popular and in stock, and is the query's nearest
+        // vector. The controller named by the query must still rank first.
+        $insert = $this->pdo->prepare(
+            'INSERT INTO products (product_id, title, description, normalized_title, normalized_desc,
+                                   stock, popularity)
+             VALUES (?, ?, ?, ?, ?, ?, ?)'
+        );
+        foreach (
+            [
+                [2001, 'دسته بازی دوال شاک 4', 'کنترلر بی سیم', 0, 1],
+                [2002, 'کنسول پلی استیشن 5', 'باندل با دسته. سازگار با دوال شاک و دوال شاک', 50, 1000],
+            ] as [$id, $title, $desc, $stock, $popularity]
+        ) {
+            $insert->execute([
+                $id, $title, $desc, Normalizer::normalize($title), Normalizer::normalize($desc), $stock, $popularity,
+            ]);
+        }
+        $bundle = $this->makeBundle([
+            2002 => [1.0, 0.0, 0.0, 0.0],
+            2001 => [0.85, 0.52678, 0.0, 0.0],
+        ]);
+        $config = [
+            'db'     => ['products_table' => 'products', 'search_logs_table' => 'search_logs'],
+            'model'  => ['dim' => self::DIM],
+            'search' => [
+                'default_limit' => 20, 'min_token_size' => 3, 'semantic_top_k' => 100,
+                'rrf_k' => 60, 'stock_boost' => 0.1, 'popularity_boost' => 0.1,
+                'title_weight' => 10.0, 'desc_weight' => 1.0, 'phrase_bonus' => 5.0,
+            ],
+            'paths'  => ['data' => $bundle],
+        ];
+
+        $result = SearchController::fromConfig($this->pdo, $config)->search([
+            'q'        => 'دوال شاک',
+            'q_vector' => [1.0, 0.0, 0.0, 0.0],
+        ]);
+
+        self::assertSame([2001, 2002], $result['product_ids']);
     }
 
     public function testVectorRequestIsLoggedWithHadVector(): void

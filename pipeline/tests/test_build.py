@@ -52,6 +52,14 @@ def test_parse_csv() -> None:
     }]
 
 
+def test_parse_csv_accepts_field_larger_than_default_limit() -> None:
+    # Real OpenCart HTML descriptions exceed Python's default 131072-byte field limit.
+    big = "<p>" + "x" * 200_000 + "</p>"
+    csv_text = "id,desc\n" + f'1,"{big}"\n'
+    rows = build.parse_csv(csv_text)
+    assert rows == [{"id": "1", "desc": big}]
+
+
 def test_clean_text_decodes_opencart_escaping_and_strips_markup() -> None:
     # OpenCart stores HTML-escaped HTML, sometimes double-escaped by the editor.
     raw = (

@@ -34,6 +34,11 @@ def load() -> dict[str, Any]:
             # Description is truncated to this many characters in the embedding
             # input to bound the composed passage length.
             "desc_char_limit": int(os.getenv("SEARCH_DESC_CHAR_LIMIT", "300")),
+            # Only this many leading characters of the cleaned description are
+            # keyword-indexed (normalized_desc); the full text is kept for
+            # display. Deep spec text otherwise matches queries for things the
+            # shop does not sell and bloats FULLTEXT. 0 indexes the whole text.
+            "desc_index_chars": int(os.getenv("SEARCH_DESC_INDEX_CHARS", "400")),
             # products.load.sql is split into statements no larger than this so
             # each fits the host's max_allowed_packet (MariaDB default 16 MB).
             "max_statement_bytes": int(os.getenv("SEARCH_LOAD_MAX_STATEMENT_BYTES", "1000000")),

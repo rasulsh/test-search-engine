@@ -18,8 +18,13 @@ use Throwable;
  *
  * Tier 2 (additive, M4): when the request carries a query vector AND a bundle is
  * loaded, run global cosine top-K, drop neighbours below `semanticMinScore`, and
- * fuse the rest below the keyword hits (see Ranker). If neither tier yields
- * anything the response is empty — far neighbours never pad it. Tier 2 is purely
+ * fuse the rest below the keyword hits (see Ranker). With a vector, a keyword
+ * hit that matched only in the description must also reach `semanticMinScore`
+ * (M11): products that merely mention the query in their spec text (case fans
+ * for "ball bearing") are otherwise served for things the shop does not sell.
+ * Title matches are never dropped, and a hit with no vector is kept (no
+ * evidence either way). If neither tier yields anything the response is
+ * empty — far neighbours never pad it. Tier 2 is purely
  * additive — if the vector is absent, malformed, or the bundle is unavailable,
  * the request returns Tier 1 results and never errors (CLAUDE.md sec. 5).
  */
@@ -40,6 +45,7 @@ final class SearchController
     private int $defaultLimit;
     private float $semanticMinScore;
     private int $suggestMinResults;
+    private bool $descOnlyNeedsSemantic;
 
     /**
      * @param callable(): Speller $spellerFactory Built lazily (a catalog scan),
@@ -62,7 +68,8 @@ final class SearchController
         int $semanticTopK = 100,
         int $defaultLimit = 20,
         float $semanticMinScore = 0.82,
-        int $suggestMinResults = 3
+        int $suggestMinResults = 3,
+        bool $descOnlyNeedsSemantic = true
     ) {
         $this->keyword = $keyword;
         $this->logger = $logger;
@@ -76,6 +83,7 @@ final class SearchController
         $this->defaultLimit = max(1, $defaultLimit);
         $this->semanticMinScore = $semanticMinScore;
         $this->suggestMinResults = max(1, $suggestMinResults);
+        $this->descOnlyNeedsSemantic = $descOnlyNeedsSemantic;
     }
 
     /**
@@ -149,7 +157,8 @@ final class SearchController
             (int) $search['semantic_top_k'],
             (int) $search['default_limit'],
             (float) ($search['semantic_min_score'] ?? 0.82),
-            (int) ($search['suggest_min_results'] ?? 3)
+            (int) ($search['suggest_min_results'] ?? 3),
+            (bool) ($search['desc_only_needs_semantic'] ?? true)
         );
     }
 
@@ -238,6 +247,7 @@ final class SearchController
     /**
      * Global cosine top-K (above the relevance floor) fused below the keyword
      * hits, plus each returned id's cosine (null when it has no vector).
+     * Description-only keyword hits scoring below the floor are dropped first.
      * Semantic ids not present in the products table are dropped (the signals
      * provider omits them), so a partial reload degrades instead of surfacing
      * dead ids.
@@ -251,6 +261,20 @@ final class SearchController
     {
         $semantic = $this->vectors->topK($queryVector, $this->semanticTopK, $this->semanticMinScore);
         $semanticIds = array_map(static fn (array $row): int => $row['product_id'], $semantic);
+        $known = array_column($semantic, 'score', 'product_id');
+
+        if ($this->descOnlyNeedsSemantic) {
+            $descOnly = array_flip(array_diff($keywordIds, $titleIds));
+            $known += $this->vectors->scoresFor(
+                $queryVector,
+                array_values(array_diff(array_keys($descOnly), array_keys($known)))
+            );
+            $floor = $this->semanticMinScore;
+            $keywordIds = array_values(array_filter(
+                $keywordIds,
+                static fn (int $id): bool => !isset($descOnly[$id]) || !isset($known[$id]) || $known[$id] >= $floor
+            ));
+        }
 
         $productIds = $keywordIds;
         if ($semanticIds !== []) {
@@ -267,7 +291,6 @@ final class SearchController
             $productIds = array_map(static fn (array $row): int => $row['product_id'], $fused);
         }
 
-        $known = array_column($semantic, 'score', 'product_id');
         $missing = array_values(array_diff($productIds, array_keys($known)));
         $known += $this->vectors->scoresFor($queryVector, $missing);
         $cosine = array_map(

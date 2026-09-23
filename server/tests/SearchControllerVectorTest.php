@@ -310,6 +310,113 @@ final class SearchControllerVectorTest extends DatabaseTestCase
         self::assertSame([2001, 2002], $result['product_ids']);
     }
 
+    /**
+     * "bearing" catalog for the M11 description-only gate: 3001 names it in the
+     * title; 3002 (a case fan, cosine 0.75), 3003 (cosine 0.9) and 3004 (no
+     * vector) mention it only in the description.
+     */
+    private function seedBearingCatalog(): string
+    {
+        $insert = $this->pdo->prepare(
+            'INSERT INTO products (product_id, title, description, normalized_title, normalized_desc)
+             VALUES (?, ?, ?, ?, ?)'
+        );
+        foreach (
+            [
+                [3001, 'Bearing puller tool', 'Steel puller'],
+                [3002, 'Silent case fan 120mm', 'Quiet fan with bearing motor'],
+                [3003, 'Wheel hub assembly', 'Includes a sealed bearing'],
+                [3004, 'Cooler heatsink', 'Fluid bearing'],
+            ] as [$id, $title, $desc]
+        ) {
+            $insert->execute([$id, $title, $desc, Normalizer::normalize($title), Normalizer::normalize($desc)]);
+        }
+
+        return $this->makeBundle([
+            3001 => [0.1, 0.99499, 0.0, 0.0],  // cosine 0.1, title match
+            3002 => [0.75, 0.66144, 0.0, 0.0], // cosine 0.75, description only
+            3003 => [0.9, 0.43589, 0.0, 0.0],  // cosine 0.9, description only
+        ]);
+    }
+
+    public function testLowCosineDescriptionOnlyMatchIsDroppedWithAVector(): void
+    {
+        $bundle = $this->seedBearingCatalog();
+
+        $result = $this->controller($bundle)->search([
+            'q'        => 'bearing',
+            'q_vector' => [1.0, 0.0, 0.0, 0.0],
+        ]);
+
+        self::assertNotContains(3002, $result['product_ids']);     // below the floor
+        self::assertSame(3001, $result['product_ids'][0]);          // title match, low cosine: kept, first
+        self::assertContains(3003, $result['product_ids']);        // above the floor: kept
+        self::assertContains(3004, $result['product_ids']);        // no vector: no evidence, kept
+        self::assertCount(3, $result['product_ids']);
+    }
+
+    public function testDescriptionOnlyMatchesAreKeptWithoutAVector(): void
+    {
+        $this->seedBearingCatalog();
+
+        $result = $this->controller(null)->search(['q' => 'bearing']);
+
+        self::assertSame(3001, $result['product_ids'][0]);
+        self::assertEqualsCanonicalizing([3001, 3002, 3003, 3004], $result['product_ids']);
+    }
+
+    public function testQueryMatchingOnlyLowCosineDescriptionsReturnsEmpty(): void
+    {
+        // Real-catalog "بلبرینگ": no product is a bearing, the fans that mention
+        // one in their specs are far in vector space. Clean "no results".
+        $insert = $this->pdo->prepare(
+            'INSERT INTO products (product_id, title, description, normalized_title, normalized_desc)
+             VALUES (?, ?, ?, ?, ?)'
+        );
+        foreach ([[4001, 'فن کیس ۱۲۰', 'فن کیس با بلبرینگ'], [4002, 'فن پردازنده', 'دارای بلبرینگ']] as [$id, $t, $d]) {
+            $insert->execute([$id, $t, $d, Normalizer::normalize($t), Normalizer::normalize($d)]);
+        }
+        $bundle = $this->makeBundle([
+            4001 => [0.75, 0.66144, 0.0, 0.0],
+            4002 => [0.7, 0.71414, 0.0, 0.0],
+        ]);
+
+        $keywordOnly = $this->controller(null)->search(['q' => 'بلبرینگ']);
+        self::assertEqualsCanonicalizing([4001, 4002], $keywordOnly['product_ids']);
+
+        $result = $this->controller($bundle)->search([
+            'q'        => 'بلبرینگ',
+            'q_vector' => [1.0, 0.0, 0.0, 0.0],
+        ]);
+
+        self::assertSame(0, $result['count']);
+        self::assertSame([], $result['product_ids']);
+    }
+
+    public function testDescriptionOnlyGateCanBeDisabledInConfig(): void
+    {
+        $bundle = $this->seedBearingCatalog();
+        $config = [
+            'db'     => ['products_table' => 'products', 'search_logs_table' => 'search_logs'],
+            'model'  => ['dim' => self::DIM],
+            'search' => [
+                'default_limit' => 20, 'min_token_size' => 3, 'semantic_top_k' => 100,
+                'rrf_k' => 60, 'stock_boost' => 0.1, 'popularity_boost' => 0.1,
+                'desc_only_needs_semantic' => false,
+            ],
+            'paths'  => ['data' => $bundle],
+        ];
+        $request = ['q' => 'bearing', 'q_vector' => [1.0, 0.0, 0.0, 0.0]];
+
+        self::assertContains(3002, SearchController::fromConfig($this->pdo, $config)->search($request)['product_ids']);
+
+        unset($config['search']['desc_only_needs_semantic']); // older config.php: gate on by default
+        self::assertNotContains(
+            3002,
+            SearchController::fromConfig($this->pdo, $config)->search($request)['product_ids']
+        );
+    }
+
     public function testVectorRequestIsLoggedWithHadVector(): void
     {
         $bundle = $this->makeBundle([1011 => [0.0, 1.0, 0.0, 0.0]]);

@@ -60,6 +60,15 @@ return [
         // they are dropped, and a query with neither keyword hits nor neighbours
         // above it returns nothing. Tune against a real eval set.
         'semantic_min_score' => (float) $setting('SEARCH_SEMANTIC_MIN_SCORE', '0.82'),
+        // With a query vector, keyword hits that matched only in the description
+        // (not the title) must also reach semantic_min_score, or they are
+        // dropped: spec text mentioning the query ("ball bearing" in a case
+        // fan) is not a product for it. Title matches are always kept;
+        // keyword-only requests are unaffected. Set to 0 to disable.
+        'desc_only_needs_semantic' => filter_var(
+            $setting('SEARCH_DESC_ONLY_NEEDS_SEMANTIC', '1'),
+            FILTER_VALIDATE_BOOLEAN
+        ),
         // Reciprocal Rank Fusion constant. Keyword and cosine scores are on
         // different scales, so they are merged by rank, not added raw. Keyword
         // hits always rank above semantic-only neighbours; the weights set how

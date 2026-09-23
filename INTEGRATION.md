@@ -102,8 +102,12 @@ Semantics the storefront should know:
 - **Keyword-only** (no usable `q_vector`, or no bundle loaded): FULLTEXT
   results. Products whose title matches the query come before products that
   match only in their description. `count` can be `0`.
+- Only the first `SEARCH_DESC_INDEX_CHARS` (default 400) characters of each
+  description are keyword-indexed; a word that appears only deeper in the
+  description does not match.
 - **Hybrid** (`q_vector` present and a bundle loaded): cosine neighbours below
-  `SEARCH_SEMANTIC_MIN_SCORE` are dropped. Every keyword hit ranks above every
+  `SEARCH_SEMANTIC_MIN_SCORE` are dropped, and so are keyword hits that match
+  only in the description (not the title) with a cosine below it. Every keyword hit ranks above every
   semantic-only product (title matches above description-only matches); the semantic side reorders keyword hits among
   themselves and adds relevant products below them (weighted Reciprocal Rank
   Fusion, then in-stock and popularity boosts). A query with no keyword hit and

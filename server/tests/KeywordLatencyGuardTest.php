@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Tests;
 
 use App\Keyword;
+use PHPUnit\Framework\Attributes\DataProvider;
 
 /**
  * Latency guard for the field-weighted keyword score (M10).
@@ -17,18 +18,31 @@ use App\Keyword;
  * description and is dominated by that scan, not by this score. CI hardware
  * differs from cPanel, so this is a regression guard; real-host latency is a
  * production-validation item.
+ *
+ * Runs twice: with the whole description indexed (pre-M11 bundles) and with
+ * normalized_desc capped to the pipeline's default desc_index_chars (M11), so
+ * the effect of the cap is measured, not assumed.
  */
 final class KeywordLatencyGuardTest extends DatabaseTestCase
 {
     private const PRODUCTS = 20000;
     private const DESC_WORDS = 300;
     private const RUNS = 5;
+    /** Mirrors the default of desc_index_chars in pipeline/config.py. */
+    private const DESC_INDEX_CHARS = 400;
 
-    public function testBroadQueryStaysWithinBudget(): void
+    /** @return array<string, array{int}> */
+    public static function indexCaps(): array
+    {
+        return ['whole description' => [0], 'capped description' => [self::DESC_INDEX_CHARS]];
+    }
+
+    #[DataProvider('indexCaps')]
+    public function testBroadQueryStaysWithinBudget(int $descIndexChars): void
     {
         $config = require self::repoRoot() . '/server/config.example.php';
         $budgetMs = (float) $config['search']['latency_budget_ms'];
-        $this->seedCatalog();
+        $this->seedCatalog($descIndexChars);
 
         $keyword = new Keyword($this->pdo, 'products', 3, 20);
         $query = 'دسته بازی';
@@ -48,10 +62,11 @@ final class KeywordLatencyGuardTest extends DatabaseTestCase
         $median = $times[intdiv(self::RUNS, 2)];
 
         fwrite(STDERR, sprintf(
-            "\n[keyword guard] %d products, ~%d-word descriptions, broad query: "
+            "\n[keyword guard] %d products, ~%d-word descriptions, index cap %s, broad query: "
             . "median %.1f ms (max %.1f, budget %d ms)\n",
             self::PRODUCTS,
             self::DESC_WORDS,
+            $descIndexChars > 0 ? $descIndexChars . ' chars' : 'none',
             $median,
             max($times),
             (int) $budgetMs
@@ -59,7 +74,7 @@ final class KeywordLatencyGuardTest extends DatabaseTestCase
         self::assertLessThan($budgetMs, $median, 'field-weighted keyword query exceeded the latency budget');
     }
 
-    private function seedCatalog(): void
+    private function seedCatalog(int $descIndexChars): void
     {
         mt_srand(10);
         $filler = [];
@@ -82,7 +97,7 @@ final class KeywordLatencyGuardTest extends DatabaseTestCase
             $desc = implode(' ', $words);
 
             $batch[] = '(?, ?, ?, ?, ?, ?)';
-            array_push($params, $id, $title, $desc, $title, $desc, $id % 1000);
+            array_push($params, $id, $title, $desc, $title, self::indexed($desc, $descIndexChars), $id % 1000);
             if (count($batch) === 500) {
                 $this->flush($batch, $params);
                 $batch = [];
@@ -92,6 +107,20 @@ final class KeywordLatencyGuardTest extends DatabaseTestCase
         if ($batch !== []) {
             $this->flush($batch, $params);
         }
+    }
+
+    /** Same cut as build.index_description(): back to whitespace, never mid-word. */
+    private static function indexed(string $desc, int $maxChars): string
+    {
+        if ($maxChars <= 0 || mb_strlen($desc) <= $maxChars) {
+            return $desc;
+        }
+        $head = mb_substr($desc, 0, $maxChars);
+        if (!ctype_space(mb_substr($desc, $maxChars, 1))) {
+            $head = (string) preg_replace('/\S+$/u', '', $head);
+        }
+
+        return rtrim($head);
     }
 
     /**

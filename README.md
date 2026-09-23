@@ -55,7 +55,9 @@ never hardcoded.
   environment variables it reads (see `.env.example`). On cPanel, edit the
   defaults in `config.php` (see [one-time setup](#one-time-setup-cpanel-host)).
 - Pipeline: the same `SEARCH_MODEL*` variables, plus `EMBEDDER=mock|real`,
-  `SEARCH_DESC_CHAR_LIMIT` (description characters in the embedded passage) and
+  `SEARCH_DESC_CHAR_LIMIT` (description characters in the embedded passage),
+  `SEARCH_DESC_INDEX_CHARS` (leading description characters keyword-indexed,
+  default 400; 0 = whole description) and
   `SEARCH_LOAD_MAX_STATEMENT_BYTES` (maximum size of one statement in
   `products.load.sql`). See `pipeline/config.py`.
 - The embedding model, revision, and dimension are parameterized and shared
@@ -216,6 +218,19 @@ only — the long description is never scanned per row. Knobs:
 `SEARCH_TITLE_WEIGHT` (10), `SEARCH_DESC_WEIGHT` (1), `SEARCH_PHRASE_BONUS` (5);
 starting points, to be tuned on the real catalog. Ranking-only: no bundle
 rebuild or schema change.
+
+**Description index cap and gate (M11).** Only the first
+`SEARCH_DESC_INDEX_CHARS` (default 400, cut back to a word boundary) characters
+of each cleaned description go into `normalized_desc`, the FULLTEXT column; the
+full description is still stored in `description` for display. Deep spec text
+("ball bearing" in a case fan's specs) therefore no longer matches, and the
+FULLTEXT index over long HTML-derived descriptions shrinks. This is a
+**build-time** setting: rebuild the bundle and reload for it to take effect.
+At query time, when a query vector is present, a keyword hit that matched only
+in the description (no title match) must also reach
+`SEARCH_SEMANTIC_MIN_SCORE`, or it is dropped; title matches are never
+dropped, a hit with no vector is kept, and keyword-only requests are
+unchanged. Disable with `SEARCH_DESC_ONLY_NEEDS_SEMANTIC=0`.
 
 **Hybrid merge (`server/src/Ranker.php`).** Keyword (FULLTEXT) and cosine scores
 are on incomparable scales, so they are **not** added raw. They are merged by
@@ -628,6 +643,7 @@ M0–M5. Verify each item on the production host before wide rollout.
 - [ ] **M8** — Search test page (`server/public/test.html`), opt-in `with_details` on `/search`, `fetch_web_model.py` for self-hosted browser assets.
 - [ ] **M9** — Relevance tuning: semantic cosine floor (empty result instead of far neighbours), keyword-first hybrid fusion, frequency-gated "did you mean" from high-signal fields, cosine score + "no results" state on the test page.
 - [ ] **M10** — Keyword relevance by field: title vs description scored separately (configurable weights), title phrase bonus, title matches always above description-only matches (also in the hybrid merge); keyword latency guard.
+- [ ] **M11** — Keyword index covers only the first `desc_index_chars` of each description (requires a rebuild); with a query vector, description-only keyword hits below the semantic floor are dropped.
 
 ## Contributing
 

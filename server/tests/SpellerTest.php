@@ -69,6 +69,28 @@ final class SpellerTest extends TestCase
         self::assertNull($this->speller()->suggest('zzzzz 123'));
     }
 
+    public function testRareCandidatesAreNotSuggested(): void
+    {
+        // "اغازین" (seen in one product) is as close to the typo as "اساسین"
+        // (seen in five); only the latter passes a minimum frequency of 2.
+        $vocabulary = ['اغازین' => 1, 'اساسین' => 5, 'کرید' => 1];
+
+        self::assertSame('اساسین', (new Speller($vocabulary, 2, null, 2))->suggest('اصاصین'));
+        self::assertNull((new Speller(['اغازین' => 1], 2, null, 2))->suggest('اصاصین'));
+        // A rare term is still a KNOWN word: it is never "corrected" away.
+        self::assertNull((new Speller($vocabulary, 2, null, 2))->suggest('کرید'));
+    }
+
+    public function testShortTokensAllowOnlyOneEdit(): void
+    {
+        $speller = new Speller(['sony' => 5, 'camera' => 5], 2);
+
+        self::assertNull($speller->suggest('siiy'));          // 2 edits on 4 chars
+        self::assertSame('sony', $speller->suggest('sonu'));  // 1 edit
+        self::assertSame('camera', $speller->suggest('camrea')); // 2 edits on 6 chars
+        self::assertNull((new Speller(['camera' => 5], 1))->suggest('camrea')); // max distance 1
+    }
+
     public function testParseDictionaryReadsPipelineFormat(): void
     {
         // Format written by pipeline/keyword.py: "token<TAB>count", trailing newline.
@@ -147,10 +169,16 @@ final class SpellerTest extends TestCase
             while (count($vocabulary) < 400) {
                 $vocabulary[$this->randomWord($alphabet, 1, 8)] = mt_rand(1, 5);
             }
-            $speller = new Speller($vocabulary);
-            for ($q = 0; $q < 40; $q++) {
-                $query = $this->randomWord($alphabet, 1, 9) . ' ' . $this->randomWord($alphabet, 1, 9);
-                self::assertSame(self::referenceSuggest($vocabulary, $query), $speller->suggest($query), $query);
+            foreach ([1, 3] as $minFrequency) {
+                $speller = new Speller($vocabulary, 2, null, $minFrequency);
+                for ($q = 0; $q < 40; $q++) {
+                    $query = $this->randomWord($alphabet, 1, 9) . ' ' . $this->randomWord($alphabet, 1, 9);
+                    self::assertSame(
+                        self::referenceSuggest($vocabulary, $query, $minFrequency),
+                        $speller->suggest($query),
+                        $query
+                    );
+                }
             }
         }
     }
@@ -172,6 +200,7 @@ final class SpellerTest extends TestCase
     private static function resetProcessCache(): void
     {
         (new ReflectionProperty(Speller::class, 'processCache'))->setValue(null, []);
+        (new ReflectionProperty(Speller::class, 'instances'))->setValue(null, []);
     }
 
     /** @param list<string> $alphabet */
@@ -187,11 +216,13 @@ final class SpellerTest extends TestCase
 
     /**
      * Straightforward spec of suggest(): per unknown token, the closest term
-     * within the threshold, ties by higher frequency then lexical order.
+     * seen at least $minFrequency times within the threshold (1 edit for
+     * tokens of up to 4 characters, else 2), ties by higher frequency then
+     * lexical order.
      *
      * @param array<string, int> $vocabulary
      */
-    private static function referenceSuggest(array $vocabulary, string $query): ?string
+    private static function referenceSuggest(array $vocabulary, string $query, int $minFrequency): ?string
     {
         $out = [];
         $changed = false;
@@ -200,12 +231,12 @@ final class SpellerTest extends TestCase
                 $out[] = $token;
                 continue;
             }
-            $threshold = mb_strlen($token) <= 3 ? 1 : 2;
+            $threshold = mb_strlen($token) <= 4 ? 1 : 2;
             $best = null;
             foreach ($vocabulary as $term => $frequency) {
                 $term = (string) $term;
                 $distance = self::referenceDistance($token, $term);
-                if ($distance > $threshold) {
+                if ($distance > $threshold || $frequency < $minFrequency) {
                     continue;
                 }
                 $key = [$distance, -$frequency, $term];

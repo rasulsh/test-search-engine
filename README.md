@@ -101,7 +101,7 @@ vendor/bin/phpunit
 
 | endpoint | purpose |
 | --- | --- |
-| `POST /search` | `{q, q_vector?, customer_id?, limit?, with_details?}`, returns ordered `product_ids` + `did_you_mean` (plus `products` display fields only with `"with_details": true`). Keyword tier always; hybrid when a valid `q_vector` is sent and a bundle is loaded. |
+| `POST /search` | `{q, q_vector?, customer_id?, limit?, with_details?}`, returns ordered `product_ids` + `did_you_mean` / `did_you_mean_applied` (plus `cosine_scores` on hybrid responses, and `products` display fields only with `"with_details": true`). Keyword tier always; hybrid when a valid `q_vector` is sent and a bundle is loaded. |
 | `GET /health` | Database reachability + live product count, for monitoring. |
 | `POST /reload` | Token-protected (`X-Reload-Token`). Validates the staged bundle and swaps it in atomically. |
 
@@ -174,7 +174,17 @@ degrades to a plain disk read when APCu is absent. A wrong-dimension query or an
 inconsistent/missing bundle simply falls back to keyword-only.
 
 **"Did you mean" (`server/src/Speller.php`).** The speller runs only when a
-query matches nothing. Its vocabulary is the bundle's `spellcheck.txt`, cached
+query has fewer than `SEARCH_SUGGEST_MIN_RESULTS` keyword hits, and a
+suggestion is returned only if it has more hits than the literal query (with no
+literal hit, its results are served; see `did_you_mean_applied` in
+INTEGRATION.md). Its vocabulary is the bundle's `spellcheck.txt`, built from
+product titles, brand, category and model only (descriptions contribute rare
+incidental words that won corrections on the real catalog), with one count per
+product. Candidates must appear in at least `SEARCH_SUGGEST_MIN_FREQUENCY`
+products and lie within `SEARCH_SUGGEST_MAX_DISTANCE` edits (1 edit for tokens
+of 4 characters or fewer). A known word, however rare, is never corrected.
+Bundles built before M9 still work, but their dictionary includes description
+words; rebuild to get the high-signal one. The dictionary is cached
 like the vectors: parsed once per PHP worker, and stored in APCu (about 3 MB for
 32k terms) so a fresh worker skips the parse. The cache key is the file's
 identity, so a reload is picked up by every worker, and `POST /reload` also
@@ -184,11 +194,29 @@ with results identical to a multibyte Levenshtein. Only if `spellcheck.txt` is
 missing does it fall back to scanning the `products` table, which is too slow
 for the budget on a full catalog.
 
+**Relevance floor.** The nearest vectors of a query with no relevant product
+are still unrelated items (on the real catalog, "ball bearing" returned case
+fans). Neighbours with cosine below `SEARCH_SEMANTIC_MIN_SCORE` (default 0.82)
+are dropped, and a query with no keyword hit and nothing above the floor
+returns an empty result instead of `limit` far neighbours. Hybrid responses
+carry `cosine_scores` so the test page can show each result's similarity while
+tuning.
+
 **Hybrid merge (`server/src/Ranker.php`).** Keyword (FULLTEXT) and cosine scores
 are on incomparable scales, so they are **not** added raw. They are merged by
-**Reciprocal Rank Fusion** (rank-based, scale-free), then light business boosts
-(in-stock, popularity) are applied **after** fusion. Weights are configurable
-(`SEARCH_RRF_K`, `SEARCH_STOCK_BOOST`, `SEARCH_POPULARITY_BOOST`).
+weighted **Reciprocal Rank Fusion** (rank-based, scale-free), then light business
+boosts (in-stock, popularity) are applied **after** fusion. Keyword hits always
+lead: every keyword match ranks above every semantic-only neighbour, the
+semantic side reorders keyword hits among themselves and augments below them.
+Weights are configurable (`SEARCH_RRF_K`, `SEARCH_KEYWORD_WEIGHT`,
+`SEARCH_SEMANTIC_WEIGHT`, `SEARCH_STOCK_BOOST`, `SEARCH_POPULARITY_BOOST`).
+
+**Tuning.** Every knob above lives in `server/config.php` (`search` section) or
+the matching `SEARCH_*` environment variable; a `config.php` copied before M9
+that lacks the new keys uses the defaults shown in `config.example.php`. The
+defaults are starting points: tune `semantic_min_score` and the weights against
+a labeled eval set from real queries (`server/tools/eval.php`, which uses the
+same wiring and config as `/search`).
 
 **Reader tolerance.** A semantic hit whose `product_id` is missing from the
 `products` table (e.g. a transient partial reload) is dropped rather than
@@ -235,7 +263,10 @@ the live service: type a query, see result cards (image, title, price), the
 result count, a clickable "did you mean", and the round-trip time. A **Semantic
 (AI)** switch compares the two tiers on the same query. Off sends `q` only
 (keyword). On also embeds the query in the browser (`"query: "` prefix) and sends
-`q_vector` (hybrid). Clicking a card opens the product in a new tab.
+`q_vector` (hybrid). In hybrid mode each card shows its cosine similarity to
+the query (small, muted), which is how to pick `SEARCH_SEMANTIC_MIN_SCORE`. An
+empty result shows a "no results" message. Clicking a card opens the product in
+a new tab.
 
 It makes **no third-party requests**. The page, runtime, WASM, model and font are
 all served from the service's own directory, and every path is relative, so the
@@ -507,9 +538,12 @@ M0–M5. Verify each item on the production host before wide rollout.
 - [ ] Consider pinning `SEARCH_MODEL_REVISION` / `MODEL_REVISION` to a commit
   hash instead of `main`, so a later upstream change cannot desynchronize
   rebuilt product vectors from the browser model.
-- [ ] Hybrid responses are rarely empty: the cosine side always returns its
-  nearest products. Review real "no match" queries in `search_logs` and decide
-  whether a minimum-similarity cut-off is needed.
+- [ ] Tune `SEARCH_SEMANTIC_MIN_SCORE` (default 0.82) and the fusion weights
+  on the real catalog: search known "no match" queries (e.g. ball bearing,
+  shorts) and known good cross-language queries on the test page, read each
+  card's cosine, and set the floor between them. Confirm with
+  `server/tools/eval.php` in hybrid mode. Too high loses cross-language recall;
+  too low brings back unrelated neighbours.
 - [ ] Keyboard-layout recovery covers the common US→Persian keys only (M2), and
   synonyms and spelling are untuned. Review `search_logs` zero-result queries
   after launch.
@@ -576,6 +610,7 @@ M0–M5. Verify each item on the production host before wide rollout.
 - [x] **M5** — Integration + docs: `INTEGRATION.md` (HTTP contract, storefront reference, model self-hosting), operator runbook, Go-Live checklist.
 - [ ] **M6** — Follow-up: "did you mean" served from the bundle's `spellcheck.txt` (cached per worker + APCu, refreshed on `/reload`); zero-result latency guard.
 - [ ] **M8** — Search test page (`server/public/test.html`), opt-in `with_details` on `/search`, `fetch_web_model.py` for self-hosted browser assets.
+- [ ] **M9** — Relevance tuning: semantic cosine floor (empty result instead of far neighbours), keyword-first hybrid fusion, frequency-gated "did you mean" from high-signal fields, cosine score + "no results" state on the test page.
 
 ## Contributing
 

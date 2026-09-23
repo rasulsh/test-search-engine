@@ -269,6 +269,9 @@
     text-decoration: underline;
   }
 
+  /* Class display rules must not defeat the hidden attribute. */
+  [hidden] { display: none !important; }
+
   .results {
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
@@ -341,13 +344,32 @@
     color: var(--text);
   }
 
-  .meta { color: var(--muted); font-size: 12px; }
+  .meta {
+    display: flex;
+    justify-content: space-between;
+    gap: 8px;
+    color: var(--muted);
+    font-size: 12px;
+  }
+
+  /* Cosine similarity to the query: a tuning aid, deliberately quiet. */
+  .cosine { font-size: 11px; opacity: 0.8; font-variant-numeric: tabular-nums; }
 
   .empty-state {
-    margin: 40px 0;
+    margin: 48px auto;
+    max-width: 420px;
     text-align: center;
     color: var(--muted);
   }
+
+  .empty-state h2 {
+    margin: 0 0 8px;
+    font-size: 18px;
+    font-weight: 600;
+    color: var(--text);
+  }
+
+  .empty-state p { margin: 0; font-size: 14px; }
 
   footer {
     margin-top: 40px;
@@ -396,7 +418,7 @@
     <div id="summary" class="summary" hidden></div>
     <p id="did-you-mean" class="did-you-mean" hidden></p>
     <ol id="results" class="results"></ol>
-    <p id="empty" class="empty-state" hidden></p>
+    <div id="empty" class="empty-state" hidden></div>
   </section>
 
   <footer>صفحهٔ آزمایشی سرویس جستجو · همهٔ فایل‌ها از همین دامنه بارگذاری می‌شوند</footer>
@@ -439,11 +461,16 @@
     modeHybrid: 'ترکیبی (کلیدواژه + معنایی)',
     modeKeyword: 'فقط کلیدواژه',
     didYouMean: 'منظورتان این بود: ',
-    noResults: (q) => `برای «${q}» نتیجه‌ای پیدا نشد.`,
+    showingResultsFor: 'نتایج برای: ',
+    noResults: (q) => `برای «${q}» نتیجه‌ای پیدا نشد`,
+    noResultsHint: 'املای عبارت را بررسی کنید یا از کلمه‌های کلی‌تر استفاده کنید.',
+    cosine: (score) => `شباهت ${scoreFormat.format(score)}`,
+    cosineTitle: 'شباهت کسینوسی به عبارت جستجو',
     noTitle: 'بدون عنوان',
   };
 
   const numberFormat = new Intl.NumberFormat('fa-IR');
+  const scoreFormat = new Intl.NumberFormat('fa-IR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   function fmt(n) {
     return numberFormat.format(n);
   }
@@ -638,7 +665,7 @@
     return node;
   }
 
-  function card(product) {
+  function card(product, cosine) {
     const href = safeUrl(product.url, STORE_BASE);
     const link = el(href ? 'a' : 'div', 'card');
     if (href) {
@@ -669,7 +696,14 @@
     if (typeof product.price === 'number' && product.price > 0) {
       bodyEl.append(el('div', 'price', `${fmt(product.price)}${PRICE_SUFFIX ? ` ${PRICE_SUFFIX}` : ''}`));
     }
-    bodyEl.append(el('div', 'meta', `#${product.id}`));
+    const meta = el('div', 'meta');
+    meta.append(el('span', null, `#${product.id}`));
+    if (typeof cosine === 'number') {
+      const score = el('span', 'cosine', TEXT.cosine(cosine));
+      score.title = TEXT.cosineTitle;
+      meta.append(score);
+    }
+    bodyEl.append(meta);
 
     link.append(thumb, bodyEl);
     const item = el('li');
@@ -699,17 +733,26 @@
         input.value = data.did_you_mean;
         runSearch(data.did_you_mean);
       });
-      suggestion.append(TEXT.didYouMean, button);
+      // Applied: the results below are for the suggestion. Otherwise the
+      // literal query had a few hits and the suggestion is only offered.
+      suggestion.append(data.did_you_mean_applied ? TEXT.showingResultsFor : TEXT.didYouMean, button);
     }
 
-    const products = Array.isArray(data.products)
-      ? data.products
-      : (data.product_ids ?? []).map((id) => ({ id }));
-    $('results').replaceChildren(...products.map(card));
+    const ids = data.product_ids ?? [];
+    const cosineById = new Map();
+    if (Array.isArray(data.cosine_scores)) {
+      ids.forEach((id, i) => cosineById.set(id, data.cosine_scores[i]));
+    }
+    const products = Array.isArray(data.products) ? data.products : ids.map((id) => ({ id }));
+    const results = $('results');
+    results.replaceChildren(...products.map((product) => card(product, cosineById.get(product.id))));
+    results.hidden = products.length === 0;
 
     const empty = $('empty');
     empty.hidden = products.length > 0;
-    empty.textContent = products.length > 0 ? '' : TEXT.noResults(q);
+    empty.replaceChildren(
+      ...(products.length > 0 ? [] : [el('h2', null, TEXT.noResults(q)), el('p', null, TEXT.noResultsHint)]),
+    );
   }
 
   // ---- Wiring --------------------------------------------------------------------

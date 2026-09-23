@@ -18,6 +18,11 @@ use PDO;
  * products table ({@see fromProducts}), which is too slow for the latency budget
  * on a full catalog.
  *
+ * Only terms seen in at least `minFrequency` products are offered as
+ * corrections: a rare word (a one-off spelling, a typo in the catalog itself) is
+ * a poor suggestion even at a small edit distance. Any known term, rare or not,
+ * is still left uncorrected in the query.
+ *
  * Lookup cost: every term is pre-encoded as one byte per character (see
  * {@see index}), so the edit distance runs in PHP's native `levenshtein()`
  * instead of a PHP-level loop, and terms are bucketed by length so only lengths
@@ -33,18 +38,28 @@ final class Speller
     // alphabet: no term contains it, so it always counts as a mismatch.
     private const MAX_CODES = 255;
     private const UNKNOWN_CODE = "\xFF";
+    private const SHORT_TOKEN = 4;
 
     /**
-     * Spellers built from dictionary files in this process, keyed by
-     * {@see cacheKey}.
+     * Parsed dictionaries for this process, keyed by {@see cacheKey}.
+     *
+     * Each entry holds the vocabulary and its {@see index}.
+     *
+     * @var array<string, array{vocabulary: array<string, int>, index: array<string, mixed>}>
+     */
+    private static array $processCache = [];
+
+    /**
+     * Spellers over those dictionaries, keyed by cache key and settings.
      *
      * @var array<string, self>
      */
-    private static array $processCache = [];
+    private static array $instances = [];
 
     /** @var array<string, int> token => frequency */
     private array $vocabulary;
     private int $maxDistance;
+    private int $minFrequency;
     /** @var array<string, string> character => single-byte code */
     private array $codes;
     /**
@@ -59,10 +74,15 @@ final class Speller
      * @param null|array{codes: array<string, string>, byLength: array<int, list<array{0: string, 1: ?string, 2: int}>>}
      *        $index A prebuilt {@see index} of $vocabulary (from the cache).
      */
-    public function __construct(array $vocabulary, int $maxDistance = 2, ?array $index = null)
-    {
+    public function __construct(
+        array $vocabulary,
+        int $maxDistance = 2,
+        ?array $index = null,
+        int $minFrequency = 1
+    ) {
         $this->vocabulary = $vocabulary;
         $this->maxDistance = max(1, $maxDistance);
+        $this->minFrequency = max(1, $minFrequency);
         $index ??= self::index($vocabulary);
         $this->codes = $index['codes'];
         $this->byLength = $index['byLength'];
@@ -114,12 +134,34 @@ final class Speller
      * APCu, keyed by the file's identity, so the reload swap — which puts a new
      * file in place — is picked up without any explicit signal.
      */
-    public static function fromDictionary(string $path, ?bool $useApcu = null): ?self
-    {
+    public static function fromDictionary(
+        string $path,
+        ?bool $useApcu = null,
+        int $maxDistance = 2,
+        int $minFrequency = 1
+    ): ?self {
         $key = self::cacheKey($path);
         if ($key === null) {
             return null;
         }
+        $instanceKey = $key . '|' . $maxDistance . '|' . $minFrequency;
+        if (isset(self::$instances[$instanceKey])) {
+            return self::$instances[$instanceKey];
+        }
+        $parsed = self::loadDictionary($path, $key, $useApcu);
+        if ($parsed === null) {
+            return null;
+        }
+
+        return self::$instances[$instanceKey] =
+            new self($parsed['vocabulary'], $maxDistance, $parsed['index'], $minFrequency);
+    }
+
+    /**
+     * @return null|array{vocabulary: array<string, int>, index: array<string, mixed>}
+     */
+    private static function loadDictionary(string $path, string $key, ?bool $useApcu): ?array
+    {
         if (isset(self::$processCache[$key])) {
             return self::$processCache[$key];
         }
@@ -129,7 +171,7 @@ final class Speller
         if ($apcu) {
             $hit = apcu_fetch($apcuKey, $ok);
             if ($ok === true && is_array($hit) && isset($hit['vocabulary'], $hit['index'])) {
-                return self::$processCache[$key] = new self($hit['vocabulary'], 2, $hit['index']);
+                return self::$processCache[$key] = $hit;
             }
         }
 
@@ -138,14 +180,14 @@ final class Speller
             return null;
         }
         $vocabulary = self::parseDictionary($contents);
-        $index = self::index($vocabulary);
+        $parsed = ['vocabulary' => $vocabulary, 'index' => self::index($vocabulary)];
         if ($apcu) {
             // Best-effort: a dictionary larger than the APCu segment simply is not
             // shared; this worker still caches it below.
-            @apcu_store($apcuKey, ['vocabulary' => $vocabulary, 'index' => $index]);
+            @apcu_store($apcuKey, $parsed);
         }
 
-        return self::$processCache[$key] = new self($vocabulary, 2, $index);
+        return self::$processCache[$key] = $parsed;
     }
 
     /**
@@ -153,31 +195,46 @@ final class Speller
      * previous bundle's entry would otherwise linger in APCu) and load the new
      * one, so the first search after a reload is already warm.
      */
-    public static function reloadDictionary(string $path, ?bool $useApcu = null): ?self
-    {
+    public static function reloadDictionary(
+        string $path,
+        ?bool $useApcu = null,
+        int $maxDistance = 2,
+        int $minFrequency = 1
+    ): ?self {
         self::$processCache = [];
+        self::$instances = [];
         if ($useApcu ?? self::apcuAvailable()) {
             @apcu_delete(new APCUIterator('/^' . preg_quote(self::APCU_PREFIX, '/') . '/'));
         }
 
-        return self::fromDictionary($path, $useApcu);
+        return self::fromDictionary($path, $useApcu, $maxDistance, $minFrequency);
     }
 
     /**
      * Fallback when the bundle has no dictionary: build the vocabulary by
      * scanning the products table. Not cached — it is only a stopgap until a
-     * bundle is loaded, and a per-worker copy would go stale on reload.
+     * bundle is loaded, and a per-worker copy would go stale on reload. Uses the
+     * same high-signal fields as the pipeline dictionary (not descriptions), one
+     * count per product.
      */
-    public static function fromProducts(PDO $pdo, string $productsTable): self
-    {
+    public static function fromProducts(
+        PDO $pdo,
+        string $productsTable,
+        int $maxDistance = 2,
+        int $minFrequency = 1
+    ): self {
         $texts = [];
-        $sql = 'SELECT normalized_title, normalized_desc FROM ' . Identifier::quote($productsTable);
+        $sql = 'SELECT normalized_title, brand, category, model FROM ' . Identifier::quote($productsTable);
         foreach ($pdo->query($sql) as $row) {
-            $texts[] = $row['normalized_title'];
-            $texts[] = $row['normalized_desc'];
+            $texts[] = implode(' ', array_unique(Tokenizer::split(implode(' ', [
+                $row['normalized_title'],
+                Normalizer::normalize((string) $row['brand']),
+                Normalizer::normalize((string) $row['category']),
+                Normalizer::normalize((string) $row['model']),
+            ]))));
         }
 
-        return new self(self::buildVocabulary($texts));
+        return new self(self::buildVocabulary($texts), $maxDistance, null, $minFrequency);
     }
 
     /**
@@ -219,8 +276,8 @@ final class Speller
     {
         $chars = mb_str_split($token);
         $length = count($chars);
-        // Be stricter on short tokens to avoid absurd corrections.
-        $threshold = $length <= 3 ? 1 : $this->maxDistance;
+        // Be stricter on short tokens: two edits on four letters is a different word.
+        $threshold = $length <= self::SHORT_TOKEN ? 1 : $this->maxDistance;
 
         $encoded = '';
         foreach ($chars as $char) {
@@ -236,7 +293,7 @@ final class Speller
                 $distance = $termEncoded !== null
                     ? levenshtein($encoded, $termEncoded)
                     : self::distance($token, $term);
-                if ($distance > $threshold) {
+                if ($distance > $threshold || $frequency < $this->minFrequency) {
                     continue;
                 }
 

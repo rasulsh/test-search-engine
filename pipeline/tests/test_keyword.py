@@ -62,12 +62,34 @@ def test_build_spellcheck_counts_and_sorts() -> None:
 
     assert "iphone" in freq
     assert "laptop" in freq
-    assert freq["apple"] >= 2  # brand on two rows plus the English title
+    assert freq["apple"] == 2  # one count per product (brand + title on row 1)
     # Single-character tokens are excluded by the default min_length.
     assert all(len(token) >= 2 for token, _ in entries)
     # Sorted by descending frequency, then token.
     keys = [(-count, token) for token, count in entries]
     assert keys == sorted(keys)
+
+
+def test_build_spellcheck_uses_high_signal_fields_only() -> None:
+    freq = dict(kw.build_spellcheck(ROWS))
+
+    # Description-only words ("smartphone", "titanium", "هوشمند") never become
+    # suggestions; title/brand/category/model words do.
+    for description_only in ("smartphone", "titanium", "body", "core", "هوشمند"):
+        assert description_only not in freq
+    for high_signal in ("iphone", "apple", "mobile", "x1504", "ip15promax", "vivobook"):
+        assert high_signal in freq
+
+
+def test_build_spellcheck_counts_each_product_once() -> None:
+    freq = dict(kw.build_spellcheck(ROWS))
+
+    # "laptop" is in row 3's title AND category: one product, frequency 1.
+    assert freq["laptop"] == 1
+    # "لپ" is in row 4's title and category (and description): still 1.
+    assert freq["لپ"] == 1
+    # "asus" is the brand of two products.
+    assert freq["asus"] == 2
 
 
 def test_build_synonyms_groups_bilingual_categories() -> None:

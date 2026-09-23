@@ -63,7 +63,8 @@ final class EndpointTest extends TestCase
         // come out this way if /search reads the dictionary (not the table).
         self::$dataDir = sys_get_temp_dir() . '/endpoint_data_' . uniqid('', true);
         mkdir(self::$dataDir, 0777, true);
-        file_put_contents(self::$dataDir . '/spellcheck.txt', "body\t9\nsony\t1\n");
+        // Both clear the default suggest_min_frequency (2).
+        file_put_contents(self::$dataDir . '/spellcheck.txt', "body\t9\nsony\t2\n");
         $env['SEARCH_DATA_DIR'] = self::$dataDir;
 
         $descriptors = [
@@ -170,7 +171,10 @@ final class EndpointTest extends TestCase
         [, $body] = $this->request('POST', '/search', '{"q":"sony"}');
 
         $decoded = json_decode((string) $body, true);
-        self::assertSame(['query', 'did_you_mean', 'count', 'product_ids'], array_keys($decoded));
+        self::assertSame(
+            ['query', 'did_you_mean', 'did_you_mean_applied', 'count', 'product_ids'],
+            array_keys($decoded)
+        );
     }
 
     public function testSearchWithDetailsReturnsDisplayFieldsInResultOrder(): void

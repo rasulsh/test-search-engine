@@ -26,7 +26,7 @@ final class Vectors
     /**
      * Parsed bundles for this process, keyed by {@see cacheKey}.
      *
-     * @var array<string, array{ids: list<int>, flat: list<float>, count: int}>
+     * @var array<string, array{ids: list<int>, flat: list<float>, count: int, rows: array<int, int>}>
      */
     private static array $processCache = [];
 
@@ -78,16 +78,20 @@ final class Vectors
     }
 
     /**
-     * Global cosine top-K. Returns at most $k rows ordered by score descending.
-     * Returns [] (degrade to keyword-only) when the bundle is unavailable or the
-     * query vector's length does not match the configured dimension.
+     * Global cosine top-K. Returns at most $k rows ordered by score descending,
+     * keeping only rows scoring at least $minScore: the nearest neighbours of a
+     * query with no relevant product are still "nearest", so without a floor
+     * every query returns $k unrelated items. Returns [] (degrade to
+     * keyword-only) when the bundle is unavailable or the query vector's length
+     * does not match the configured dimension.
      *
      * @param list<float> $queryVector
      * @return list<array{product_id: int, score: float}>
      */
-    public function topK(array $queryVector, int $k): array
+    public function topK(array $queryVector, int $k, float $minScore = -INF): array
     {
-        if ($k < 1 || count($queryVector) !== $this->dim || !$this->isLoaded()) {
+        $q = $this->queryOrNull($queryVector);
+        if ($k < 1 || $q === null) {
             return [];
         }
 
@@ -97,12 +101,6 @@ final class Vectors
         $count = $data['count'];
         $dim = $this->dim;
 
-        // Query as a plain indexed float array; dot product against each row.
-        $q = [];
-        foreach ($queryVector as $value) {
-            $q[] = (float) $value;
-        }
-
         $scores = [];
         $offset = 0;
         for ($i = 0; $i < $count; $i++) {
@@ -110,7 +108,9 @@ final class Vectors
             for ($j = 0; $j < $dim; $j++) {
                 $sum += $q[$j] * $flat[$offset + $j];
             }
-            $scores[$i] = $sum;
+            if ($sum >= $minScore) {
+                $scores[$i] = $sum;
+            }
             $offset += $dim;
         }
 
@@ -130,7 +130,60 @@ final class Vectors
     }
 
     /**
-     * @return array{ids: list<int>, flat: list<float>, count: int}
+     * Cosine of the query against specific products (e.g. keyword hits outside
+     * the top-K), keyed by product_id. Ids without a vector are omitted.
+     *
+     * @param list<float> $queryVector
+     * @param list<int> $productIds
+     * @return array<int, float>
+     */
+    public function scoresFor(array $queryVector, array $productIds): array
+    {
+        $q = $this->queryOrNull($queryVector);
+        if ($q === null || $productIds === []) {
+            return [];
+        }
+
+        $data = $this->load();
+        $scores = [];
+        foreach ($productIds as $id) {
+            $row = $data['rows'][$id] ?? null;
+            if ($row === null || $row >= $data['count']) {
+                continue;
+            }
+            $offset = $row * $this->dim;
+            $sum = 0.0;
+            for ($j = 0; $j < $this->dim; $j++) {
+                $sum += $q[$j] * $data['flat'][$offset + $j];
+            }
+            $scores[$id] = $sum;
+        }
+
+        return $scores;
+    }
+
+    /**
+     * The query as a plain indexed float list, or null when it cannot be scored
+     * (wrong dimension or no consistent bundle).
+     *
+     * @param list<float> $queryVector
+     * @return list<float>|null
+     */
+    private function queryOrNull(array $queryVector): ?array
+    {
+        if (count($queryVector) !== $this->dim || !$this->isLoaded()) {
+            return null;
+        }
+        $q = [];
+        foreach ($queryVector as $value) {
+            $q[] = (float) $value;
+        }
+
+        return $q;
+    }
+
+    /**
+     * @return array{ids: list<int>, flat: list<float>, count: int, rows: array<int, int>}
      */
     private function load(): array
     {
@@ -152,7 +205,7 @@ final class Vectors
             $count = $available;
         }
 
-        $parsed = ['ids' => $ids, 'flat' => $flat, 'count' => $count];
+        $parsed = ['ids' => $ids, 'flat' => $flat, 'count' => $count, 'rows' => array_flip($ids)];
         self::$processCache[$key] = $parsed;
 
         return $parsed;

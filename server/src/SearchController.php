@@ -4,18 +4,22 @@ declare(strict_types=1);
 
 namespace App;
 
+use PDO;
 use Throwable;
 
 /**
  * POST /search flow.
  *
- * Tier 1 (always on): normalize, keyword search, and — only when nothing matches
- * — recover via keyboard-layout remap or spell correction, computing "did you
- * mean".
+ * Tier 1 (always on): normalize, keyword search, and — only when the query has
+ * fewer than `suggestMinResults` matches — try a keyboard-layout remap or spell
+ * correction. A suggestion is offered only if it returns MORE keyword results
+ * than the literal query; when the literal query matched nothing, its results
+ * are served instead (`did_you_mean_applied`).
  *
  * Tier 2 (additive, M4): when the request carries a query vector AND a bundle is
- * loaded, run global cosine top-K and fuse it with the keyword ranking by
- * Reciprocal Rank Fusion, then apply light business boosts. Tier 2 is purely
+ * loaded, run global cosine top-K, drop neighbours below `semanticMinScore`, and
+ * fuse the rest below the keyword hits (see Ranker). If neither tier yields
+ * anything the response is empty — far neighbours never pad it. Tier 2 is purely
  * additive — if the vector is absent, malformed, or the bundle is unavailable,
  * the request returns Tier 1 results and never errors (CLAUDE.md sec. 5).
  */
@@ -34,6 +38,8 @@ final class SearchController
     private $signalsProvider;
     private int $semanticTopK;
     private int $defaultLimit;
+    private float $semanticMinScore;
+    private int $suggestMinResults;
 
     /**
      * @param callable(): Speller $spellerFactory Built lazily (a catalog scan),
@@ -54,7 +60,9 @@ final class SearchController
         ?Ranker $ranker = null,
         ?callable $signalsProvider = null,
         int $semanticTopK = 100,
-        int $defaultLimit = 20
+        int $defaultLimit = 20,
+        float $semanticMinScore = 0.82,
+        int $suggestMinResults = 3
     ) {
         $this->keyword = $keyword;
         $this->logger = $logger;
@@ -66,6 +74,74 @@ final class SearchController
         $this->signalsProvider = $signalsProvider;
         $this->semanticTopK = max(1, $semanticTopK);
         $this->defaultLimit = max(1, $defaultLimit);
+        $this->semanticMinScore = $semanticMinScore;
+        $this->suggestMinResults = max(1, $suggestMinResults);
+    }
+
+    /**
+     * The production wiring shared by POST /search and the eval harness, so the
+     * harness measures exactly the knobs /search serves. Search keys missing
+     * from an older config.php fall back to the documented defaults.
+     *
+     * @param array<string, mixed> $config the server config array
+     */
+    public static function fromConfig(PDO $pdo, array $config): self
+    {
+        $search = $config['search'];
+        $productsTable = $config['db']['products_table'];
+        $maxDistance = (int) ($search['suggest_max_distance'] ?? 2);
+        $minFrequency = (int) ($search['suggest_min_frequency'] ?? 2);
+
+        $keyword = new Keyword($pdo, $productsTable, (int) $search['min_token_size'], (int) $search['default_limit']);
+        // The bundle dictionary is cached per worker (and in APCu); the table scan
+        // is only a fallback for a data directory without spellcheck.txt.
+        $dictionaryPath = $config['paths']['data'] . '/' . Speller::DICTIONARY_FILE;
+        $spellerFactory = static fn (): Speller =>
+            Speller::fromDictionary($dictionaryPath, null, $maxDistance, $minFrequency)
+            ?? Speller::fromProducts($pdo, $productsTable, $maxDistance, $minFrequency);
+
+        // The signals provider both fetches business signals and acts as the
+        // existence filter (ids it omits are treated as absent from the catalog).
+        $signalsProvider = static function (array $ids) use ($pdo, $productsTable): array {
+            if ($ids === []) {
+                return [];
+            }
+            $placeholders = implode(',', array_fill(0, count($ids), '?'));
+            $sql = 'SELECT product_id, stock, popularity FROM ' . Identifier::quote($productsTable)
+                 . ' WHERE product_id IN (' . $placeholders . ')';
+            $stmt = $pdo->prepare($sql);
+            $stmt->execute(array_values($ids));
+            $signals = [];
+            foreach ($stmt as $row) {
+                $signals[(int) $row['product_id']] = [
+                    'stock'      => (int) $row['stock'],
+                    'popularity' => (int) $row['popularity'],
+                ];
+            }
+
+            return $signals;
+        };
+
+        return new self(
+            $keyword,
+            new Logger($pdo, $config['db']['search_logs_table']),
+            $spellerFactory,
+            null,
+            10,
+            new Vectors($config['paths']['data'], (int) $config['model']['dim']),
+            new Ranker(
+                (int) $search['rrf_k'],
+                (float) $search['stock_boost'],
+                (float) $search['popularity_boost'],
+                (float) ($search['keyword_weight'] ?? 1.0),
+                (float) ($search['semantic_weight'] ?? 1.0)
+            ),
+            $signalsProvider,
+            (int) $search['semantic_top_k'],
+            (int) $search['default_limit'],
+            (float) ($search['semantic_min_score'] ?? 0.82),
+            (int) ($search['suggest_min_results'] ?? 3)
+        );
     }
 
     /**
@@ -73,8 +149,10 @@ final class SearchController
      * @return array{
      *     query: array{raw: string, normalized: string},
      *     did_you_mean: ?string,
+     *     did_you_mean_applied: bool,
      *     count: int,
-     *     product_ids: list<int>
+     *     product_ids: list<int>,
+     *     cosine_scores?: list<?float>
      * }
      */
     public function search(array $request): array
@@ -90,18 +168,26 @@ final class SearchController
         $normalized = ($this->normalize)($raw);
         $results = $this->keyword->search($raw, $limit);
         $didYouMean = null;
+        $applied = false;
 
-        if ($results === [] && $normalized !== '') {
-            [$results, $didYouMean] = $this->recover($raw, $normalized, $limit);
+        if (count($results) < $this->suggestMinResults && $normalized !== '') {
+            [$alternative, $didYouMean] = $this->recover($raw, $normalized, $limit, count($results));
+            // A literal match, however thin, is what the shopper typed: keep it
+            // and only offer the suggestion. With no literal match, serve it.
+            if ($didYouMean !== null && $results === []) {
+                $results = $alternative;
+                $applied = true;
+            }
         }
 
         $keywordIds = array_map(static fn (array $row): int => $row['product_id'], $results);
         $productIds = $keywordIds;
+        $cosineScores = null;
 
         // Tier 2 is additive: only reshuffle when a usable vector and bundle are
         // present. Otherwise the keyword ordering above stands.
         if ($queryVector !== null && $this->semanticEnabled()) {
-            $productIds = $this->hybrid($keywordIds, $queryVector, $limit);
+            [$productIds, $cosineScores] = $this->hybrid($keywordIds, $queryVector, $limit);
         }
 
         $latencyMs = (int) round((microtime(true) - $start) * 1000);
@@ -122,44 +208,60 @@ final class SearchController
             error_log('search: log write failed: ' . $e->getMessage());
         }
 
-        return [
-            'query'        => ['raw' => $raw, 'normalized' => $normalized],
-            'did_you_mean' => $didYouMean,
-            'count'        => count($productIds),
-            'product_ids'  => $productIds,
+        $response = [
+            'query'                => ['raw' => $raw, 'normalized' => $normalized],
+            'did_you_mean'         => $didYouMean,
+            'did_you_mean_applied' => $applied,
+            'count'                => count($productIds),
+            'product_ids'          => $productIds,
         ];
+        if ($cosineScores !== null) {
+            $response['cosine_scores'] = $cosineScores;
+        }
+
+        return $response;
     }
 
     /**
-     * Global cosine top-K fused with the keyword ranking by RRF + business boosts.
+     * Global cosine top-K (above the relevance floor) fused below the keyword
+     * hits, plus each returned id's cosine (null when it has no vector).
      * Semantic ids not present in the products table are dropped (the signals
      * provider omits them), so a partial reload degrades instead of surfacing
      * dead ids.
      *
      * @param list<int> $keywordIds
      * @param list<float> $queryVector
-     * @return list<int>
+     * @return array{0: list<int>, 1: list<?float>}
      */
     private function hybrid(array $keywordIds, array $queryVector, ?int $limit): array
     {
-        $semantic = $this->vectors->topK($queryVector, $this->semanticTopK);
-        if ($semantic === []) {
-            return $keywordIds; // bundle unavailable at call time; stay keyword-only
-        }
+        $semantic = $this->vectors->topK($queryVector, $this->semanticTopK, $this->semanticMinScore);
         $semanticIds = array_map(static fn (array $row): int => $row['product_id'], $semantic);
 
-        $candidates = array_values(array_unique(array_merge($keywordIds, $semanticIds)));
-        $signals = ($this->signalsProvider)($candidates);
+        $productIds = $keywordIds;
+        if ($semanticIds !== []) {
+            $candidates = array_values(array_unique(array_merge($keywordIds, $semanticIds)));
+            $signals = ($this->signalsProvider)($candidates);
 
-        // Existence filter: keep only ids the products table actually has.
-        $exists = static fn (int $id): bool => isset($signals[$id]);
-        $keywordIds = array_values(array_filter($keywordIds, $exists));
-        $semanticIds = array_values(array_filter($semanticIds, $exists));
+            // Existence filter: keep only ids the products table actually has.
+            $exists = static fn (int $id): bool => isset($signals[$id]);
+            $keywordIds = array_values(array_filter($keywordIds, $exists));
+            $semanticIds = array_values(array_filter($semanticIds, $exists));
 
-        $effectiveLimit = $limit !== null ? max(1, $limit) : $this->defaultLimit;
-        $fused = $this->ranker->fuse($keywordIds, $semanticIds, $signals, $effectiveLimit);
+            $effectiveLimit = $limit !== null ? max(1, $limit) : $this->defaultLimit;
+            $fused = $this->ranker->fuse($keywordIds, $semanticIds, $signals, $effectiveLimit);
+            $productIds = array_map(static fn (array $row): int => $row['product_id'], $fused);
+        }
 
-        return array_map(static fn (array $row): int => $row['product_id'], $fused);
+        $known = array_column($semantic, 'score', 'product_id');
+        $missing = array_values(array_diff($productIds, array_keys($known)));
+        $known += $this->vectors->scoresFor($queryVector, $missing);
+        $cosine = array_map(
+            static fn (int $id): ?float => isset($known[$id]) ? round($known[$id], 4) : null,
+            $productIds
+        );
+
+        return [$productIds, $cosine];
     }
 
     private function semanticEnabled(): bool
@@ -198,11 +300,12 @@ final class SearchController
 
     /**
      * Try keyboard-layout remaps first, then spell correction. Returns the
-     * recovered results and the suggestion to show, or empty + null.
+     * alternative's results and the suggestion, or empty + null when no
+     * alternative returns more than $baseline results.
      *
      * @return array{0: list<array{product_id: int, score: float, match_type: string}>, 1: ?string}
      */
-    private function recover(string $raw, string $normalized, ?int $limit): array
+    private function recover(string $raw, string $normalized, ?int $limit, int $baseline): array
     {
         foreach ([Keymap::enToFa($raw), Keymap::faToEn($raw)] as $candidate) {
             $candidateNormalized = ($this->normalize)($candidate);
@@ -210,7 +313,7 @@ final class SearchController
                 continue;
             }
             $alternative = $this->keyword->search($candidate, $limit);
-            if ($alternative !== []) {
+            if (count($alternative) > $baseline) {
                 return [$alternative, $candidateNormalized];
             }
         }
@@ -218,7 +321,7 @@ final class SearchController
         $suggestion = ($this->spellerFactory)()->suggest($normalized);
         if ($suggestion !== null && $suggestion !== $normalized) {
             $alternative = $this->keyword->search($suggestion, $limit);
-            if ($alternative !== []) {
+            if (count($alternative) > $baseline) {
                 return [$alternative, $suggestion];
             }
         }

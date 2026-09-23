@@ -27,6 +27,17 @@ use Throwable;
  * empty — far neighbours never pad it. Tier 2 is purely
  * additive — if the vector is absent, malformed, or the bundle is unavailable,
  * the request returns Tier 1 results and never errors (CLAUDE.md sec. 5).
+ *
+ * All terms (M16, require_all_terms): a multi-word query matches only products
+ * holding every word (Keyword). When that finds nothing, even after the
+ * keyboard-layout / spelling recovery, the best partial matches are served
+ * instead, so the shopper still sees something. While the keyword hits do
+ * hold every word, semantic-only neighbours are not appended: on
+ * multilingual-e5-small (sample passages), "red keyboard" puts black
+ * keyboards and red mice above the floor, the one-word matches the rule
+ * excludes. Semantic
+ * evidence still reorders those hits; single-word, SKU and partial-fallback
+ * requests keep the additive neighbours.
  */
 final class SearchController
 {
@@ -112,7 +123,8 @@ final class SearchController
             (int) ($search['sku_prefix_min_length'] ?? 4),
             (float) ($search['spec_weight'] ?? 6.0),
             Synonyms::fromDirectory($config['paths']['data'], (int) ($search['synonyms_max_group_size'] ?? 4)),
-            (int) ($search['alias_max_variants'] ?? 6)
+            (int) ($search['alias_max_variants'] ?? 6),
+            (bool) ($search['require_all_terms'] ?? true)
         );
         // The bundle dictionary is cached per worker (and in APCu); the table scan
         // is only a fallback for a data directory without spellcheck.txt.
@@ -188,6 +200,7 @@ final class SearchController
 
         $start = microtime(true);
         $normalized = ($this->normalize)($raw);
+        $multiTerm = count(Tokenizer::split($normalized)) > 1;
         $results = $this->keyword->search($raw, $limit);
         $didYouMean = null;
         $applied = false;
@@ -208,6 +221,12 @@ final class SearchController
             }
         }
 
+        if ($results === [] && $multiTerm && $this->keyword->requiresAllTerms()) {
+            $results = $this->keyword->search($raw, $limit, false);
+        }
+        $allTermsHits = $multiTerm && $skuIds === [] && $results !== [] && $this->keyword->requiresAllTerms()
+            && !in_array(Keyword::MATCH_PARTIAL, array_column($results, 'match_type'), true);
+
         $keywordIds = array_map(static fn (array $row): int => $row['product_id'], $results);
         $titleIds = array_values(array_map(
             static fn (array $row): int => $row['product_id'],
@@ -216,6 +235,10 @@ final class SearchController
         $specIds = array_values(array_map(
             static fn (array $row): int => $row['product_id'],
             array_filter($results, static fn (array $row): bool => $row['spec_match'] && !$row['title_match'])
+        ));
+        $partialIds = array_values(array_map(
+            static fn (array $row): int => $row['product_id'],
+            array_filter($results, static fn (array $row): bool => $row['match_type'] === Keyword::MATCH_PARTIAL)
         ));
         $productIds = $keywordIds;
         $cosineScores = null;
@@ -228,8 +251,10 @@ final class SearchController
                 $titleIds,
                 $specIds,
                 $skuIds,
+                $partialIds,
                 $queryVector,
-                $limit
+                $limit,
+                !$allTermsHits
             );
         }
 
@@ -278,7 +303,9 @@ final class SearchController
      * @param list<int> $titleIds keyword ids that matched in the title
      * @param list<int> $specIds keyword ids that matched in the specs, not the title
      * @param list<int> $skuIds keyword ids that matched by SKU, kept first in order
+     * @param list<int> $partialIds keyword ids missing a query word (any-terms mode)
      * @param list<float> $queryVector
+     * @param bool $neighbours false: semantic evidence only reorders the keyword hits
      * @return array{0: list<int>, 1: list<?float>}
      */
     private function hybrid(
@@ -286,10 +313,19 @@ final class SearchController
         array $titleIds,
         array $specIds,
         array $skuIds,
+        array $partialIds,
         array $queryVector,
-        ?int $limit
+        ?int $limit,
+        bool $neighbours
     ): array {
         $semantic = $this->vectors->topK($queryVector, $this->semanticTopK, $this->semanticMinScore);
+        if (!$neighbours) {
+            $keywordSet = array_flip($keywordIds);
+            $semantic = array_values(array_filter(
+                $semantic,
+                static fn (array $row): bool => isset($keywordSet[$row['product_id']])
+            ));
+        }
         $semanticIds = array_map(static fn (array $row): int => $row['product_id'], $semantic);
         $known = array_column($semantic, 'score', 'product_id');
 
@@ -317,7 +353,15 @@ final class SearchController
             $semanticIds = array_values(array_filter($semanticIds, $exists));
 
             $effectiveLimit = $limit !== null ? max(1, $limit) : $this->defaultLimit;
-            $fused = $this->ranker->fuse($keywordIds, $semanticIds, $signals, $effectiveLimit, $titleIds, $specIds);
+            $fused = $this->ranker->fuse(
+                $keywordIds,
+                $semanticIds,
+                $signals,
+                $effectiveLimit,
+                $titleIds,
+                $specIds,
+                $partialIds
+            );
             $productIds = array_map(static fn (array $row): int => $row['product_id'], $fused);
             // Semantic evidence reorders the title band; SKU hits stay on top.
             $pinned = array_values(array_intersect($skuIds, $keywordIds));

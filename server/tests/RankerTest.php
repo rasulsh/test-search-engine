@@ -125,6 +125,17 @@ final class RankerTest extends TestCase
         self::assertSame([1, 2, 3, 9], self::ids($out));
     }
 
+    public function testPartialKeywordHitsRankBelowAllWordsHitsAboveNeighbours(): void
+    {
+        $ranker = new Ranker(60, 0.0, 0.0);
+
+        // 1 is a partial title hit that semantic evidence ranks first; 3 holds
+        // every word but matched only in the description.
+        $out = $ranker->fuse([1, 2, 3], [1, 9], [], 10, [1, 2], [], [1]);
+
+        self::assertSame([2, 3, 1, 9], self::ids($out));
+    }
+
     public function testTitleMatchesOutsideTheKeywordListAreIgnored(): void
     {
         // A title id that is not a keyword hit cannot jump the keyword band.

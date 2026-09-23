@@ -76,6 +76,18 @@ return [
         // likely catalog noise; owner aliases are never capped.
         'alias_max_variants'      => (int) $setting('SEARCH_ALIAS_MAX_VARIANTS', '6'),
         'synonyms_max_group_size' => (int) $setting('SEARCH_SYNONYMS_MAX_GROUP_SIZE', '4'),
+        // All terms (M16): a multi-word query matches only products holding
+        // every word across title, specs and description ("red keyboard" is
+        // keyboards that are red, not keyboards plus red things). Alias
+        // variants apply it per variant. When nothing holds every word, the
+        // products matching the most words are served instead. While there
+        // are all-words hits, semantic neighbours only reorder them and are
+        // not appended below. 0 always serves partial matches (most words
+        // first) with the additive neighbours.
+        'require_all_terms' => filter_var(
+            $setting('SEARCH_REQUIRE_ALL_TERMS', '1'),
+            FILTER_VALIDATE_BOOLEAN
+        ),
         // Global cosine top-K width for Tier 2 (candidates fused with keyword).
         'semantic_top_k'    => (int) (getenv('SEARCH_SEMANTIC_TOP_K') ?: 100),
         // Relevance floor (cosine) for Tier 2 neighbours. The nearest vectors of

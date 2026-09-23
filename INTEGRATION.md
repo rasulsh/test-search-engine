@@ -103,6 +103,11 @@ Semantics the storefront should know:
   results. Products whose title matches the query come first, then products
   that match in their specs (attributes and feature titles), then products
   that match only in their description. `count` can be `0`.
+- A multi-word query returns only products holding **every** word (in title,
+  specs and description combined): `کیبورد قرمز` is red keyboards, not all
+  keyboards plus all red products. When no product holds every word, the
+  products holding the most words are returned instead. Set
+  `SEARCH_REQUIRE_ALL_TERMS=0` to always return partial matches.
 - Only the first `SEARCH_DESC_INDEX_CHARS` (default 800) characters of each
   description are keyword-indexed; a word that appears only deeper in the
   description does not match.
@@ -115,7 +120,9 @@ Semantics the storefront should know:
   only in the description (not the title or specs) with a cosine below it. Every keyword hit ranks above every
   semantic-only product (title matches, then spec matches, then description-only matches); the semantic side reorders keyword hits among
   themselves and adds relevant products below them (weighted Reciprocal Rank
-  Fusion, then in-stock and popularity boosts). A query with no keyword hit and
+  Fusion, then in-stock and popularity boosts). When the keyword hits of a
+  multi-word query hold every word, neighbours only reorder them and are not
+  added below. A query with no keyword hit and
   no neighbour above the floor returns `count: 0`, so either response can come
   back empty. Show a "no results" state.
 - Every request writes one row to `search_logs`. Logging is best-effort: a

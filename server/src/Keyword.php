@@ -62,6 +62,15 @@ use PDOException;
  * ("جی تی ای") would otherwise take costs several times the latency budget on
  * a full catalog. Hits are merged keeping each product's best field band and
  * score; ties keep the literal query's order first.
+ *
+ * All terms (M16): a hit holds every query token somewhere in title, specs or
+ * description combined, per variant (the union across variants); a product
+ * matching only some tokens is not a hit. With require_all_terms off, or via
+ * {@see search()} with $allTerms false (the caller's fallback when the strict
+ * query found nothing), products matching ANY token are returned instead,
+ * ranked by how many tokens they hold first, then by the field score; those
+ * that miss a token carry match_type "partial". Alias variants stay
+ * all-terms in both modes.
  */
 final class Keyword
 {
@@ -78,6 +87,7 @@ final class Keyword
     private float $specWeight;
     private ?Synonyms $synonyms;
     private int $maxVariants;
+    private bool $requireAllTerms;
     /** False once the live table turned out to predate the idx_title_scan index (M15). */
     private bool $titleIndex = true;
     /** False once the live table turned out to predate the normalized_specs column. */
@@ -85,6 +95,8 @@ final class Keyword
 
     public const MATCH_SKU = 'sku';
     public const MATCH_ALIAS = 'alias';
+    /** A hit that misses at least one query token (any-terms mode only). */
+    public const MATCH_PARTIAL = 'partial';
     /** Covering index for the title-only variant scan (db/schema.sql). */
     private const TITLE_INDEX = 'idx_title_scan';
     /** SKU hits outrank any text score (title band tops out near title_weight + phrase_bonus). */
@@ -112,7 +124,8 @@ final class Keyword
         int $skuPrefixMinLength = 4,
         float $specWeight = 6.0,
         ?Synonyms $synonyms = null,
-        int $maxVariants = 6
+        int $maxVariants = 6,
+        bool $requireAllTerms = true
     ) {
         $this->pdo = $pdo;
         $this->table = Identifier::quote($productsTable);
@@ -128,12 +141,19 @@ final class Keyword
         $this->specWeight = max(0.0, $specWeight);
         $this->synonyms = $synonyms;
         $this->maxVariants = max(1, $maxVariants);
+        $this->requireAllTerms = $requireAllTerms;
+    }
+
+    public function requiresAllTerms(): bool
+    {
+        return $this->requireAllTerms;
     }
 
     /**
+     * @param bool $allTerms false searches any-terms even when require_all_terms is on
      * @return list<array{product_id: int, score: float, match_type: string, title_match: bool, spec_match: bool}>
      */
-    public function search(string $query, ?int $limit = null): array
+    public function search(string $query, ?int $limit = null, bool $allTerms = true): array
     {
         $limit = $limit !== null ? max(1, $limit) : $this->defaultLimit;
         $tokens = Tokenizer::split(($this->normalize)($query));
@@ -144,9 +164,11 @@ final class Keyword
         $skuHits = $this->skuSearch(Normalizer::normalizeSku($query), $limit);
         $variants = $this->titleIndex ? $this->synonyms?->variants($tokens, $this->maxVariants) : null;
         $variants ??= [$tokens];
+        // One token: any-terms and all-terms are the same query.
+        $allTerms = ($allTerms && $this->requireAllTerms) || count($tokens) === 1;
         $textHits = count($variants) === 1
-            ? $this->textSearch($tokens, $limit)
-            : $this->variantSearch($variants, $limit);
+            ? $this->textSearch($tokens, $limit, $allTerms)
+            : $this->variantSearch($variants, $limit, $allTerms);
         if ($skuHits === []) {
             return $textHits;
         }
@@ -163,18 +185,24 @@ final class Keyword
 
     /**
      * The literal query as usual, the other variants in one title-only scan,
-     * merged: a product keeps its best (title band, spec band, score); ties
-     * keep first-seen order, which lists the literal query's hits first.
+     * merged: a product keeps its best (all terms, title band, spec band,
+     * score); ties keep first-seen order, which lists the literal query's hits
+     * first.
      *
      * @param non-empty-list<list<string>> $variants
      * @return list<array{product_id: int, score: float, match_type: string, title_match: bool, spec_match: bool}>
      */
-    private function variantSearch(array $variants, int $limit): array
+    private function variantSearch(array $variants, int $limit, bool $allTerms): array
     {
-        $rank = static fn (array $hit): array => [$hit['title_match'], $hit['spec_match'], $hit['score']];
+        $rank = static fn (array $hit): array => [
+            $hit['match_type'] !== self::MATCH_PARTIAL,
+            $hit['title_match'],
+            $hit['spec_match'] && !$hit['title_match'],
+            $hit['score'],
+        ];
         $best = [];
         $hits = array_merge(
-            $this->textSearch($variants[0], $limit),
+            $this->textSearch($variants[0], $limit, $allTerms),
             $this->titleSearch(array_slice($variants, 1), $limit)
         );
         foreach ($hits as $hit) {
@@ -194,10 +222,10 @@ final class Keyword
      * @param list<string> $tokens
      * @return list<array{product_id: int, score: float, match_type: string, title_match: bool, spec_match: bool}>
      */
-    private function textSearch(array $tokens, int $limit): array
+    private function textSearch(array $tokens, int $limit, bool $allTerms): array
     {
         try {
-            return $this->textSearchOnce($tokens, $limit);
+            return $this->textSearchOnce($tokens, $limit, $allTerms);
         } catch (PDOException $e) {
             // 42S22 (unknown column): the live table predates M13 (between code
             // upload and reload, or after a rollback). Search it without specs.
@@ -206,7 +234,7 @@ final class Keyword
             }
             $this->specs = false;
 
-            return $this->textSearchOnce($tokens, $limit);
+            return $this->textSearchOnce($tokens, $limit, $allTerms);
         }
     }
 
@@ -214,15 +242,15 @@ final class Keyword
      * @param list<string> $tokens
      * @return list<array{product_id: int, score: float, match_type: string, title_match: bool, spec_match: bool}>
      */
-    private function textSearchOnce(array $tokens, int $limit): array
+    private function textSearchOnce(array $tokens, int $limit, bool $allTerms): array
     {
         foreach ($tokens as $token) {
             if (mb_strlen($token) < $this->minTokenSize) {
-                return $this->likeSearch($tokens, $limit);
+                return $this->likeSearch($tokens, $limit, $allTerms);
             }
         }
 
-        return $this->fulltextSearch($tokens, $limit);
+        return $this->fulltextSearch($tokens, $limit, $allTerms);
     }
 
     /**
@@ -273,30 +301,32 @@ final class Keyword
      * @param list<string> $tokens
      * @return list<array{product_id: int, score: float, match_type: string, title_match: bool, spec_match: bool}>
      */
-    private function fulltextSearch(array $tokens, int $limit): array
+    private function fulltextSearch(array $tokens, int $limit, bool $allTerms): array
     {
-        // Each token required and prefix-matched: "+word*".
-        $expr = implode(' ', array_map(static fn (string $t): string => '+' . $t . '*', $tokens));
         // The column list must equal the FULLTEXT index definition exactly.
         $match = 'MATCH(' . ($this->specs ? 'normalized_title, normalized_specs, normalized_desc'
             : 'normalized_title, normalized_desc') . ') AGAINST(? IN BOOLEAN MODE)';
+        // Prefix-matched, "+word*" when every token is required, else "word*".
+        $expr = implode(' ', array_map(
+            static fn (string $t): string => ($allTerms ? '+' : '') . $t . '*',
+            $tokens
+        ));
+        $termHits = null;
+        if (!$allTerms) {
+            $termHits = [
+                '(' . implode(' + ', array_fill(0, count($tokens), "({$match} > 0)")) . ')',
+                array_map(static fn (string $t): string => $t . '*', $tokens),
+            ];
+        }
 
-        return $this->scoredSearch(
-            $tokens,
-            $match,
-            [$expr],
-            $match,
-            [$expr],
-            $limit,
-            'fulltext'
-        );
+        return $this->scoredSearch($tokens, $match, [$expr], $match, [$expr], $limit, 'fulltext', $termHits);
     }
 
     /**
      * @param list<string> $tokens
      * @return list<array{product_id: int, score: float, match_type: string, title_match: bool, spec_match: bool}>
      */
-    private function likeSearch(array $tokens, int $limit): array
+    private function likeSearch(array $tokens, int $limit, bool $allTerms): array
     {
         $clauses = [];
         $params = [];
@@ -307,19 +337,36 @@ final class Keyword
             $clauses[] = '(' . implode(' LIKE ? OR ', $columns) . ' LIKE ?)';
             $params = array_merge($params, array_fill(0, count($columns), '%' . $this->escapeLike($token) . '%'));
         }
+        $termHits = $allTerms ? null : ['(' . implode(' + ', $clauses) . ')', $params];
 
-        return $this->scoredSearch($tokens, '0', [], implode(' AND ', $clauses), $params, $limit, 'like');
+        return $this->scoredSearch(
+            $tokens,
+            '0',
+            [],
+            implode($allTerms ? ' AND ' : ' OR ', $clauses),
+            $params,
+            $limit,
+            'like',
+            $termHits
+        );
     }
 
     /**
      * Rank the rows matching $where by the field-weighted score: title band,
-     * then spec band, then description-only. $relevance (the engine's own
-     * score, or a constant) only breaks ties between equal field scores, ahead
-     * of popularity.
+     * then spec band (spec match, no title match), then description-only.
+     * $relevance (the engine's own score, or a constant) only breaks ties
+     * between equal field scores, ahead of popularity.
+     *
+     * $termHits (any-terms mode) is an SQL expression counting the tokens a
+     * row holds in any field, with its params. Rows are then ranked by that
+     * count before the bands, a missing token earns no weight, and a row
+     * missing any token is hydrated as a partial match. Without it every row
+     * holds every token ($where requires them all).
      *
      * @param list<string> $tokens
      * @param list<string> $relevanceParams
      * @param list<string> $whereParams
+     * @param null|array{0: string, 1: list<string>} $termHits
      * @return list<array{product_id: int, score: float, match_type: string, title_match: bool, spec_match: bool}>
      */
     private function scoredSearch(
@@ -329,7 +376,8 @@ final class Keyword
         string $where,
         array $whereParams,
         int $limit,
-        string $matchType
+        string $matchType,
+        ?array $termHits = null
     ): array {
         $titleHits = [];
         $specHits = [];
@@ -352,32 +400,40 @@ final class Keyword
             $phrase = '(normalized_title REGEXP ?)';
             $params[] = self::WORD_START . implode(self::BOUNDARY . '+', $tokens);
         }
+        $count = count($tokens);
+        $terms = (string) $count;
+        if ($termHits !== null) {
+            $terms = $termHits[0];
+            $params = array_merge($params, $termHits[1]);
+        }
 
         // Weights come from config as floats; inlined in a fixed format.
         $weight = static fn (float $w): string => sprintf('%.6F', $w);
-        $count = count($tokens);
+        // GREATEST: a word-prefix REGEXP and the engine's own match can
+        // disagree on an odd token edge; never credit a negative count.
         $score = '((' . $weight($this->titleWeight) . ' * title_hits + '
                . $weight($this->specWeight) . ' * spec_hits + '
-               . $weight($this->descWeight) . " * ({$count} - title_hits - spec_hits)) / {$count}"
-               . ' + ' . $weight($this->phraseBonus) . ' * phrase_hit)';
+               . $weight($this->descWeight) . ' * GREATEST(term_hits - title_hits - spec_hits, 0))'
+               . " / {$count} + " . $weight($this->phraseBonus) . ' * phrase_hit)';
 
         // The inner LIMIT keeps the derived table from being merged into the
         // outer query (MySQL and MariaDB both materialize a derived table with
         // a LIMIT); merged, every use of title_hits / spec_hits in the score
         // and ORDER BY re-ran their REGEXPs, 3x slower with the specs.
-        $sql = "SELECT product_id, title_hits, spec_hits, {$score} AS score
+        $sql = "SELECT product_id, title_hits, spec_hits, term_hits < {$count} AS partial, {$score} AS score
                 FROM (
                     SELECT product_id, popularity,
                            {$relevance} AS relevance,
                            (" . implode(' + ', $titleHits) . ") AS title_hits,
                            (" . ($specHits === [] ? '0' : implode(' + ', $specHits)) . ") AS spec_hits,
-                           {$phrase} AS phrase_hit
+                           {$phrase} AS phrase_hit,
+                           {$terms} AS term_hits
                     FROM {$this->table}
                     WHERE {$where}
                     LIMIT " . PHP_INT_MAX . "
                 ) matched
-                ORDER BY (title_hits > 0) DESC, (spec_hits > 0) DESC, score DESC, relevance DESC,
-                         popularity DESC, product_id ASC
+                ORDER BY term_hits DESC, (title_hits > 0) DESC, (title_hits = 0 AND spec_hits > 0) DESC,
+                         score DESC, relevance DESC, popularity DESC, product_id ASC
                 LIMIT " . (int) $limit;
 
         $stmt = $this->pdo->prepare($sql);
@@ -464,7 +520,7 @@ final class Keyword
             static fn (array $row): array => [
                 'product_id'  => (int) $row['product_id'],
                 'score'       => (float) $row['score'],
-                'match_type'  => $matchType,
+                'match_type'  => (int) ($row['partial'] ?? 0) === 1 ? self::MATCH_PARTIAL : $matchType,
                 'title_match' => (int) $row['title_hits'] > 0,
                 'spec_match'  => (int) $row['spec_hits'] > 0,
             ],

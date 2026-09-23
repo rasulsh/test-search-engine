@@ -119,10 +119,6 @@ final class InstallPage
             'desc_weight' => ['وزن توضیحات', ''],
             'spec_weight' => ['وزن مشخصات', ''],
             'phrase_bonus' => ['امتیاز عبارت پیوسته', ''],
-            'desc_index_chars' => [
-                'تعداد نویسه‌های نمایه‌شدهٔ توضیحات',
-                'فقط در ساخت بستهٔ بعدی اثر دارد (SEARCH_DESC_INDEX_CHARS روی دستگاه ساخت).',
-            ],
         ],
     ];
 

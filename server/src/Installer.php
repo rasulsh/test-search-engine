@@ -39,7 +39,6 @@ final class Installer
         'desc_weight'           => 'SEARCH_DESC_WEIGHT',
         'spec_weight'           => 'SEARCH_SPEC_WEIGHT',
         'phrase_bonus'          => 'SEARCH_PHRASE_BONUS',
-        'desc_index_chars'      => 'SEARCH_DESC_INDEX_CHARS',
     ];
 
     /** Numeric fields: [type, min, max]. */
@@ -51,7 +50,6 @@ final class Installer
         'desc_weight'           => ['float', 0, 1000],
         'spec_weight'           => ['float', 0, 1000],
         'phrase_bonus'          => ['float', 0, 1000],
-        'desc_index_chars'      => ['int', 0, 10000000],
     ];
 
     private string $configPath;

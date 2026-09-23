@@ -267,7 +267,8 @@ rebuild + reload (new column and FULLTEXT index); until then the live table has
 no specs and search runs on title and description as before.
 
 **Description index cap and gate (M11).** Only the first
-`SEARCH_DESC_INDEX_CHARS` (default 400, cut back to a word boundary) characters
+`SEARCH_DESC_INDEX_CHARS` (default 400, or `release.py --desc-index-chars N`;
+cut back to a word boundary) characters
 of each cleaned description go into `normalized_desc`, the FULLTEXT column; the
 full description is still stored in `description` for display. Deep spec text
 ("ball bearing" in a case fan's specs) therefore no longer matches, and the
@@ -362,6 +363,8 @@ Every download is pinned (npm version or HuggingFace commit) and checked against
 a hard-coded checksum. The script also checks that the model's `config.json`
 names the configured `SEARCH_MODEL` and dim, so the browser uses the same model
 as `embed.py` (contract 2). Re-running skips files that are already present.
+`pipeline/release.py` runs the same fetch itself when the assets are missing,
+so building a release never needs this step first.
 After fetching, `client/` looks like this (everything except `embedder.js` and
 `tools/` is gitignored):
 
@@ -435,8 +438,9 @@ the form. No config file editing, no separate model upload, no SSH needed.
    TABLE`, `DROP` and `CREATE` are needed by the reload. The installer creates
    the tables.
 2. **Build the release** (step 2 of [Every catalog update](#every-catalog-update)).
-   It includes the browser model, runtime and font by default; fetch them once
-   on the build machine with `python pipeline/tools/fetch_web_model.py`:
+   It includes the browser model, runtime and font by default. The first run
+   downloads them into `client/` on its own (about 150 MB; later runs reuse
+   them), so this one command is all the first deploy needs:
    ```bash
    python pipeline/release.py --csv export.csv --out release.zip
    ```
@@ -466,10 +470,9 @@ the form. No config file editing, no separate model upload, no SSH needed.
      them, `with_details` results carry absolute product links and images;
      leave them empty to keep the exported values as they are;
    - the tuning knobs (`semantic_min_score`, title / description / spec
-     weights, `phrase_bonus`, `desc_index_chars`), pre-filled with the current
-     defaults. `desc_index_chars` only records the value releases are built
-     with (`SEARCH_DESC_INDEX_CHARS` on the build machine); the server never
-     re-indexes.
+     weights, `phrase_bonus`), pre-filled with the current defaults. The
+     description index cap is not asked for: it is fixed when the release is
+     built (`release.py --desc-index-chars`), and the server never re-indexes.
 
    On submit the installer validates the values and tests the database
    connection, creates the schema (`db/schema.sql`), then writes
@@ -610,7 +613,16 @@ python pipeline/release.py --csv export.csv --out release.zip --no-model
 
 `--no-model` leaves out the browser model, runtime and font (about 150 MB) for
 routine catalog updates when the host already has them. Without it the release
-is self-contained (first deploy, or after the model changes).
+is self-contained (first deploy, or after the model changes): if `client/` does
+not have the assets yet, `release.py` downloads them first, with the same
+pinned, checksum-verified fetch as `pipeline/tools/fetch_web_model.py`, and
+reuses them on later runs. A failed download stops the release before the
+embedding run, and no zip is written.
+
+`--desc-index-chars N` sets how many leading description characters are
+keyword-indexed (default `SEARCH_DESC_INDEX_CHARS`, else 400; 0 = the whole
+description). It only affects the build; to change it, build and deploy a new
+release.
 
 On Windows: `pipeline\release.bat --csv export.csv --out release.zip --no-model`
 (same arguments). The command builds the bundle with the **real** embedder
@@ -622,7 +634,7 @@ On Windows: `pipeline\release.bat --csv export.csv --out release.zip --no-model`
 | `data_incoming/` | the bundle: `vectors.bin`, `vectors.idx`, `products.load.sql`, `meta.json`, `spellcheck.txt`, `synonyms.json`, `keymap.json` |
 | `bootstrap.php`, `src/`, `public/` | the server code (including `public/install.php` and `public/client/embedder.js`) |
 | `config.example.php`, `db/schema.sql` | the installer's config template and schema |
-| `public/client/model/`, `vendor/`, `fonts/` | **left out with `--no-model`**: the browser model, runtime, and font from `pipeline/tools/fetch_web_model.py` (about 150 MB) |
+| `public/client/model/`, `vendor/`, `fonts/` | **left out with `--no-model`**: the browser model, runtime, and font (about 150 MB), fetched into `client/` on first use |
 
 `config.php` is **never** in the zip, so unzipping never overwrites the
 server's configuration. Tests, tools, and local data are not packed either.
@@ -841,6 +853,7 @@ M0–M5. Verify each item on the production host before wide rollout.
 - [ ] **M12** — SKU search (exact/prefix SKU matches ranked first, SKU in the title-weighted text), `accept_status = '0'` export filter, one-command `release.py` (+ `release.bat`) producing `release.zip`, and `reload.php?load=1` loading the staging table in PHP before the atomic swap.
 - [ ] **M13** — Specs field: product attributes and PHP-serialized `feature` titles in a FULLTEXT-indexed `normalized_specs` column (`spec_weight`, ranked between title and description-only matches, also in hybrid mode), and in the embedded passage within `SEARCH_PASSAGE_CHAR_LIMIT`.
 - [ ] **M14** — Self-contained release (browser model included by default, `--no-model` for routine updates, `db/schema.sql` packed) and a web installer, `public/install.php`: validates the form, tests the DB connection, creates the schema, writes `config.php` (never overwriting one), loads the staged catalog, then refuses to run again. `store_base` / `image_base` config for absolute `with_details` links.
+- [ ] **M14.1** — `release.py` downloads the browser assets itself when `client/` lacks them (cached; `--no-model` skips), so one command builds a complete release. `desc_index_chars` leaves the installer and server config and becomes `release.py --desc-index-chars`.
 
 ## Contributing
 

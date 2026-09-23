@@ -110,13 +110,6 @@ return [
         'image_base' => $setting('SEARCH_IMAGE_BASE', ''),
     ],
 
-    // Build-time only: the server never re-indexes. Recorded here so the host's
-    // config names the SEARCH_DESC_INDEX_CHARS value releases must be built with
-    // (pipeline/config.py); changing it takes effect with the next release.
-    'build' => [
-        'desc_index_chars' => (int) $setting('SEARCH_DESC_INDEX_CHARS', '400'),
-    ],
-
     // Active bundle plus staging directory used for the atomic reload swap.
     'paths' => [
         'data'          => getenv('SEARCH_DATA_DIR') ?: __DIR__ . '/data',

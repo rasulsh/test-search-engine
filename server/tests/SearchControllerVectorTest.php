@@ -8,6 +8,7 @@ use App\Identifier;
 use App\Keyword;
 use App\Logger;
 use App\Normalizer;
+use App\ProductLoader;
 use App\Ranker;
 use App\SearchController;
 use App\Speller;
@@ -353,6 +354,35 @@ final class SearchControllerVectorTest extends DatabaseTestCase
         self::assertContains(3003, $result['product_ids']);        // above the floor: kept
         self::assertContains(3004, $result['product_ids']);        // no vector: no evidence, kept
         self::assertCount(3, $result['product_ids']);
+    }
+
+    public function testLowCosineSpecMatchIsKeptAboveDescriptionOnlyWithAVector(): void
+    {
+        // M13: a spec (attribute / feature title) match is high-signal, so the
+        // description-only gate does not apply to it, and it leads the
+        // description-only hits even when they are closer in vector space.
+        $this->seedBearingCatalog();
+        (new ProductLoader($this->pdo, 'products'))->load([[
+            'product_id'  => 3005,
+            'title'       => 'Wheel hub kit',
+            'description' => 'Steel hub',
+            'specs'       => 'Type: bearing | Size: 6202',
+        ]]);
+        $bundle = $this->makeBundle([
+            3001 => [0.1, 0.99499, 0.0, 0.0],  // title match
+            3002 => [0.75, 0.66144, 0.0, 0.0], // description only, below the floor
+            3003 => [0.9, 0.43589, 0.0, 0.0],  // description only, above the floor
+            3005 => [0.1, 0.99499, 0.0, 0.0],  // spec match, far below the floor
+        ]);
+
+        $result = $this->controller($bundle)->search([
+            'q'        => 'bearing',
+            'q_vector' => [1.0, 0.0, 0.0, 0.0],
+        ]);
+
+        self::assertSame([3001, 3005], array_slice($result['product_ids'], 0, 2));
+        self::assertNotContains(3002, $result['product_ids']);
+        self::assertEqualsCanonicalizing([3001, 3005, 3003, 3004], $result['product_ids']);
     }
 
     public function testDescriptionOnlyMatchesAreKeptWithoutAVector(): void

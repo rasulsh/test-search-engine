@@ -53,6 +53,11 @@ return [
         'title_weight'      => (float) $setting('SEARCH_TITLE_WEIGHT', '10.0'),
         'desc_weight'       => (float) $setting('SEARCH_DESC_WEIGHT', '1.0'),
         'phrase_bonus'      => (float) $setting('SEARCH_PHRASE_BONUS', '5.0'),
+        // Specs (M13): a token found in the attributes / feature titles
+        // (normalized_specs) but not the title earns spec_weight. Any spec match
+        // ranks above any description-only match, below any title match; the
+        // weight orders rows within the bands. Needs real-catalog tuning.
+        'spec_weight'       => (float) $setting('SEARCH_SPEC_WEIGHT', '6.0'),
         // SKU search (M12): a product whose normalized SKU equals the query
         // ranks first, then SKU prefix matches, above all text matches. Prefix
         // matching needs at least this many characters and a digit in the query.

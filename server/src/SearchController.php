@@ -22,7 +22,7 @@ use Throwable;
  * hit that matched only in the description must also reach `semanticMinScore`
  * (M11): products that merely mention the query in their spec text (case fans
  * for "ball bearing") are otherwise served for things the shop does not sell.
- * Title matches are never dropped, and a hit with no vector is kept (no
+ * Title and specs (attribute / feature title, M13) matches are never dropped, and a hit with no vector is kept (no
  * evidence either way). If neither tier yields anything the response is
  * empty — far neighbours never pad it. Tier 2 is purely
  * additive — if the vector is absent, malformed, or the bundle is unavailable,
@@ -109,7 +109,8 @@ final class SearchController
             (float) ($search['title_weight'] ?? 10.0),
             (float) ($search['desc_weight'] ?? 1.0),
             (float) ($search['phrase_bonus'] ?? 5.0),
-            (int) ($search['sku_prefix_min_length'] ?? 4)
+            (int) ($search['sku_prefix_min_length'] ?? 4),
+            (float) ($search['spec_weight'] ?? 6.0)
         );
         // The bundle dictionary is cached per worker (and in APCu); the table scan
         // is only a fallback for a data directory without spellcheck.txt.
@@ -210,13 +211,24 @@ final class SearchController
             static fn (array $row): int => $row['product_id'],
             array_filter($results, static fn (array $row): bool => $row['title_match'])
         ));
+        $specIds = array_values(array_map(
+            static fn (array $row): int => $row['product_id'],
+            array_filter($results, static fn (array $row): bool => $row['spec_match'] && !$row['title_match'])
+        ));
         $productIds = $keywordIds;
         $cosineScores = null;
 
         // Tier 2 is additive: only reshuffle when a usable vector and bundle are
         // present. Otherwise the keyword ordering above stands.
         if ($queryVector !== null && $this->semanticEnabled()) {
-            [$productIds, $cosineScores] = $this->hybrid($keywordIds, $titleIds, $skuIds, $queryVector, $limit);
+            [$productIds, $cosineScores] = $this->hybrid(
+                $keywordIds,
+                $titleIds,
+                $specIds,
+                $skuIds,
+                $queryVector,
+                $limit
+            );
         }
 
         $latencyMs = (int) round((microtime(true) - $start) * 1000);
@@ -254,25 +266,33 @@ final class SearchController
     /**
      * Global cosine top-K (above the relevance floor) fused below the keyword
      * hits, plus each returned id's cosine (null when it has no vector).
-     * Description-only keyword hits scoring below the floor are dropped first.
+     * Description-only keyword hits (no title or specs match) scoring below the
+     * floor are dropped first.
      * Semantic ids not present in the products table are dropped (the signals
      * provider omits them), so a partial reload degrades instead of surfacing
      * dead ids.
      *
      * @param list<int> $keywordIds
      * @param list<int> $titleIds keyword ids that matched in the title
+     * @param list<int> $specIds keyword ids that matched in the specs, not the title
      * @param list<int> $skuIds keyword ids that matched by SKU, kept first in order
      * @param list<float> $queryVector
      * @return array{0: list<int>, 1: list<?float>}
      */
-    private function hybrid(array $keywordIds, array $titleIds, array $skuIds, array $queryVector, ?int $limit): array
-    {
+    private function hybrid(
+        array $keywordIds,
+        array $titleIds,
+        array $specIds,
+        array $skuIds,
+        array $queryVector,
+        ?int $limit
+    ): array {
         $semantic = $this->vectors->topK($queryVector, $this->semanticTopK, $this->semanticMinScore);
         $semanticIds = array_map(static fn (array $row): int => $row['product_id'], $semantic);
         $known = array_column($semantic, 'score', 'product_id');
 
         if ($this->descOnlyNeedsSemantic) {
-            $descOnly = array_flip(array_diff($keywordIds, $titleIds));
+            $descOnly = array_flip(array_diff($keywordIds, $titleIds, $specIds));
             $known += $this->vectors->scoresFor(
                 $queryVector,
                 array_values(array_diff(array_keys($descOnly), array_keys($known)))
@@ -295,7 +315,7 @@ final class SearchController
             $semanticIds = array_values(array_filter($semanticIds, $exists));
 
             $effectiveLimit = $limit !== null ? max(1, $limit) : $this->defaultLimit;
-            $fused = $this->ranker->fuse($keywordIds, $semanticIds, $signals, $effectiveLimit, $titleIds);
+            $fused = $this->ranker->fuse($keywordIds, $semanticIds, $signals, $effectiveLimit, $titleIds, $specIds);
             $productIds = array_map(static fn (array $row): int => $row['product_id'], $fused);
             // Semantic evidence reorders the title band; SKU hits stay on top.
             $pinned = array_values(array_intersect($skuIds, $keywordIds));
@@ -355,7 +375,10 @@ final class SearchController
      * alternative's results and the suggestion, or empty + null when no
      * alternative returns more than $baseline results.
      *
-     * @return array{0: list<array{product_id: int, score: float, match_type: string, title_match: bool}>, 1: ?string}
+     * @return array{
+     *     0: list<array{product_id: int, score: float, match_type: string, title_match: bool, spec_match: bool}>,
+     *     1: ?string
+     * }
      */
     private function recover(string $raw, string $normalized, ?int $limit, int $baseline): array
     {

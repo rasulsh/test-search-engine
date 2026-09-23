@@ -56,6 +56,7 @@ never hardcoded.
   defaults in `config.php` (see [one-time setup](#one-time-setup-cpanel-host)).
 - Pipeline: the same `SEARCH_MODEL*` variables, plus `EMBEDDER=mock|real`,
   `SEARCH_DESC_CHAR_LIMIT` (description characters in the embedded passage),
+  `SEARCH_PASSAGE_CHAR_LIMIT` (cap on the whole embedded passage, default 1000),
   `SEARCH_DESC_INDEX_CHARS` (leading description characters keyword-indexed,
   default 400; 0 = whole description) and
   `SEARCH_LOAD_MAX_STATEMENT_BYTES` (maximum size of one statement in
@@ -129,6 +130,8 @@ Provide a `.sql` (INSERT statements) or `.csv` with these columns:
 | `sku` | optional product code; exact and prefix SKU queries rank first (see [SKU search](#sku-search)) |
 | `price`, `stock`, `popularity` | numeric |
 | `url`, `image` | display fields |
+| `attributes` | optional; `name: value` pairs joined with ` \| ` (the export's `GROUP_CONCAT`), see [Specs](#specs-field) |
+| `feature` | optional; `oc_product.feature` exactly as stored (PHP `serialize()` output), see [Specs](#specs-field) |
 
 Deriving it from **OpenCart 2.0.3.1** is step 1 of the
 [deploy runbook](#deploy--update-runbook) below. `build.py` decodes the HTML
@@ -139,7 +142,7 @@ export can be taken from the OpenCart tables as-is.
 (little-endian float32, `count × dim`, L2-normalized), `vectors.idx` (one
 `product_id` per line, row order), `products.load.sql` (drops and recreates the
 `products_new` staging table from the `products` definition in `db/schema.sql`,
-so schema changes such as the `sku` columns reach the live table through the
+so schema changes such as the `sku` and `normalized_specs` columns reach the live table through the
 swap with no manual `ALTER`; then its rows, normalized columns from the canonical Normalizer,
 split into statements of at most `SEARCH_LOAD_MAX_STATEMENT_BYTES`, 1 MB by
 default, so each fits a shared host's `max_allowed_packet`),
@@ -150,8 +153,13 @@ default, so each fits a shared host's `max_allowed_packet`),
 `intfloat/multilingual-e5-small` requires **asymmetric prefixes**: `build.py`
 embeds each product passage with `"passage: "`, so the **M4 browser client MUST
 embed the query with `"query: "`** — vectors from mismatched prefixes are not
-comparable. The passage is a bounded composed field
-(`title_fa title_en brand category model` + truncated `desc`) embedded from
+comparable. The passage is a bounded composed field, in priority order
+`title_fa title_en brand category model`, the feature titles, the attribute
+values, then the truncated `desc` (at most `SEARCH_DESC_CHAR_LIMIT`), all within
+`SEARCH_PASSAGE_CHAR_LIMIT` characters (default 1000): the description gives
+way first, then the tail of the specs. With the real e5 tokenizer a
+1000-character passage measured at most 349 tokens on realistic text and 417
+on a digit-heavy worst case, under the model's 512. It is embedded from
 **raw** text (not the keyword-normalized text), so the client can embed the raw
 query without re-implementing the normalizer.
 
@@ -237,6 +245,26 @@ only — the long description is never scanned per row. Knobs:
 starting points, to be tuned on the real catalog. Ranking-only: no bundle
 rebuild or schema change.
 
+<a id="specs-field"></a>**Specs field (M13).** Product attributes and the
+`feature` list are high-signal text that shoppers search for ("ASUS ROG",
+"540 هرتز"). `build.py` composes them into `normalized_specs` (FULLTEXT-indexed
+with the title and description): the attribute `name: value` pairs, then every
+`title` in the PHP-serialized `feature` column, joined with ` | ` and
+normalized like every other column. The description length cap does **not**
+apply to specs. `feature` is parsed by a real PHP unserializer
+(`phpserialize`) over the UTF-8 bytes, because PHP counts string lengths in
+bytes and Persian characters take two; a malformed value (wrong lengths,
+truncated, trailing data) is skipped, and the build prints a warning naming the
+product ids. Each query token not in the title but in the specs earns
+`SEARCH_SPEC_WEIGHT` (default 6; title 10, description 1): `score =
+(title_weight × title hits + spec_weight × spec hits + desc_weight × other
+hits) / tokens`. Every spec match ranks above every description-only match and
+below every title match, whatever the weights, also in the hybrid merge; with a
+query vector, spec matches are exempt from the description-only gate below.
+The weight is a starting point and needs tuning on the real catalog. Needs a
+rebuild + reload (new column and FULLTEXT index); until then the live table has
+no specs and search runs on title and description as before.
+
 **Description index cap and gate (M11).** Only the first
 `SEARCH_DESC_INDEX_CHARS` (default 400, cut back to a word boundary) characters
 of each cleaned description go into `normalized_desc`, the FULLTEXT column; the
@@ -246,7 +274,7 @@ FULLTEXT index over long HTML-derived descriptions shrinks. This is a
 **build-time** setting: rebuild the bundle and reload for it to take effect.
 At query time, when a query vector is present, a keyword hit that matched only
 in the description (no title match) must also reach
-`SEARCH_SEMANTIC_MIN_SCORE`, or it is dropped; title matches are never
+`SEARCH_SEMANTIC_MIN_SCORE`, or it is dropped; title and spec matches are never
 dropped, a hit with no vector is kept, and keyword-only requests are
 unchanged. Disable with `SEARCH_DESC_ONLY_NEEDS_SEMANTIC=0`.
 
@@ -255,7 +283,7 @@ are on incomparable scales, so they are **not** added raw. They are merged by
 weighted **Reciprocal Rank Fusion** (rank-based, scale-free), then light business
 boosts (in-stock, popularity) are applied **after** fusion. Keyword hits always
 lead: every keyword match ranks above every semantic-only neighbour (and title
-keyword matches above description-only ones), the
+keyword matches above spec matches, above description-only ones), the
 semantic side reorders keyword hits among themselves and augments below them.
 Weights are configurable (`SEARCH_RRF_K`, `SEARCH_KEYWORD_WEIGHT`,
 `SEARCH_SEMANTIC_WEIGHT`, `SEARCH_STOCK_BOOST`, `SEARCH_POPULARITY_BOOST`).
@@ -462,6 +490,7 @@ your ids with `SELECT language_id, code FROM oc_language;`, and adjust the
 `oc_` prefix if your install uses another `DB_PREFIX`.
 
 ```sql
+SET SESSION group_concat_max_len = 1000000;   -- default 1024 bytes truncates attributes
 SET @fa := 2, @en := 1;   -- your Persian / English language_id
 
 SELECT
@@ -486,7 +515,15 @@ SELECT
     p.quantity                                                AS stock,
     CONCAT('index.php?route=product/product&product_id=', p.product_id) AS url,
     COALESCE(p.image, '')                                     AS image,
-    p.viewed                                                  AS popularity
+    p.viewed                                                  AS popularity,
+    COALESCE((
+        SELECT GROUP_CONCAT(CONCAT_WS(': ', ad.name, pa.text) SEPARATOR ' | ')
+        FROM oc_product_attribute pa
+        JOIN oc_attribute_description ad
+          ON ad.attribute_id = pa.attribute_id AND ad.language_id = @fa
+        WHERE pa.product_id = p.product_id
+    ), '')                                                    AS attributes,
+    COALESCE(p.feature, '')                                   AS feature
 FROM oc_product p
 JOIN oc_product_to_store ps ON ps.product_id = p.product_id AND ps.store_id = 0
 LEFT JOIN oc_product_description d_fa
@@ -515,6 +552,16 @@ Notes on the query:
   literal text `NULL` in CSV, which would otherwise be indexed as a word.
 - `popularity` uses `viewed`. Replace it with a sales count if you have a
   better signal.
+- `attributes` is every attribute of the product as `name: value`, joined with
+  ` | `, with the names in Persian (`@fa`, language_id 2 here). `oc_attribute_description`
+  is joined on the Persian name only; `pa.text` is whatever value is stored for
+  the product. `GROUP_CONCAT` stops at `group_concat_max_len` bytes (1024 by
+  default), which is why the first line raises it; run it together with the
+  `SELECT`, like the `@fa` / `@en` line. If many `attributes` values in
+  `export.csv` end abruptly at about 1024 bytes, the `SET` was not applied.
+- `feature` is this shop's `oc_product.feature` column (not in stock OpenCart),
+  exported untouched: `build.py` unserializes it (see [Specs](#specs-field)).
+  Do not edit or re-encode it; PHP's byte counts must stay valid.
 - HTML escaping (`&lt;p&gt;`, `&amp;quot;`) and tags are left as stored.
   `build.py` decodes and strips them.
 
@@ -584,7 +631,9 @@ version is kept as the `products_old` table and the `data_old/` directory. The
 "did you mean" dictionary (`spellcheck.txt`) switches with the bundle; nothing
 else needs restarting. Between the unzip and the reload the new code serves the
 old table; a table from before M12 lacks the SKU columns, and the SKU lookup is
-simply skipped until the reload.
+simply skipped until the reload. A table from before M13 lacks
+`normalized_specs`: search then covers title and description only until the
+reload (also after a rollback to such a table).
 
 #### Fallback: manual staging load
 
@@ -658,6 +707,10 @@ M0–M5. Verify each item on the production host before wide rollout.
   card's cosine, and set the floor between them. Confirm with
   `server/tools/eval.php` in hybrid mode. Too high loses cross-language recall;
   too low brings back unrelated neighbours.
+- [ ] Tune `SEARCH_SPEC_WEIGHT` (default 6, between title 10 and description
+  1) with `server/tools/eval.php` on real attribute / feature queries (brands,
+  refresh rates, sizes). Check the build's malformed-`feature` warning count on
+  the real export, and that `attributes` is not cut at 1024 bytes.
 - [ ] Keyboard-layout recovery covers the common US→Persian keys only (M2), and
   synonyms and spelling are untuned. Review `search_logs` zero-result queries
   after launch.
@@ -675,6 +728,14 @@ M0–M5. Verify each item on the production host before wide rollout.
   `search_logs` on the host. Short Persian tokens (shorter than
   `innodb_ft_min_token_size`) use the LIKE fallback, about 150 ms on the same
   data.
+- [ ] **Specs and the LIKE fallback (M13).** A query with a token shorter than
+  `SEARCH_MIN_TOKEN_SIZE` scans every row's title, specs and indexed
+  description. On a synthetic 20k catalog with about 550 characters of specs
+  per product, with the table in memory on local MariaDB 10.11, that path took
+  about **220 ms** (about 105–120 ms without specs); with the table larger
+  than the buffer pool (128 MB default) it was I/O-bound at 600–800 ms. The
+  FULLTEXT path stayed at about 50–60 ms. Measure `latency_ms` for short-token
+  queries on the host with the real specs size.
 - [ ] **LVE memory headroom.** The parsed vector matrix costs about **150 MB
   per PHP worker** (about 300 MB peak while loading). Check the account's LVE
   memory limit (PMEM) and PHP `memory_limit` against
@@ -739,6 +800,7 @@ M0–M5. Verify each item on the production host before wide rollout.
 - [ ] **M10** — Keyword relevance by field: title vs description scored separately (configurable weights), title phrase bonus, title matches always above description-only matches (also in the hybrid merge); keyword latency guard.
 - [ ] **M11** — Keyword index covers only the first `desc_index_chars` of each description (requires a rebuild); with a query vector, description-only keyword hits below the semantic floor are dropped.
 - [ ] **M12** — SKU search (exact/prefix SKU matches ranked first, SKU in the title-weighted text), `accept_status = '0'` export filter, one-command `release.py` (+ `release.bat`) producing `release.zip`, and `reload.php?load=1` loading the staging table in PHP before the atomic swap.
+- [ ] **M13** — Specs field: product attributes and PHP-serialized `feature` titles in a FULLTEXT-indexed `normalized_specs` column (`spec_weight`, ranked between title and description-only matches, also in hybrid mode), and in the embedded passage within `SEARCH_PASSAGE_CHAR_LIMIT`.
 
 ## Contributing
 

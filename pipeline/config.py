@@ -34,6 +34,10 @@ def load() -> dict[str, Any]:
             # Description is truncated to this many characters in the embedding
             # input to bound the composed passage length.
             "desc_char_limit": int(os.getenv("SEARCH_DESC_CHAR_LIMIT", "300")),
+            # Cap on the whole embedded passage (titles, specs, description) so it
+            # stays within the model's token limit (e5-small: 512 tokens); the
+            # description gives way first. 0 = no cap.
+            "passage_char_limit": int(os.getenv("SEARCH_PASSAGE_CHAR_LIMIT", "1000")),
             # Only this many leading characters of the cleaned description are
             # keyword-indexed (normalized_desc); the full text is kept for
             # display. Deep spec text otherwise matches queries for things the

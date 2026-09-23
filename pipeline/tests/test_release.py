@@ -103,7 +103,7 @@ def test_release_bundle_is_the_built_bundle(tmp_path: Path, dev_tree: tuple[Path
     with zipfile.ZipFile(tmp_path / "out" / "release.zip") as archive:
         meta = json.loads(archive.read("data_incoming/meta.json"))
         load_sql = archive.read("data_incoming/products.load.sql").decode("utf-8")
-    assert meta["count"] == 4 and meta["embedder"] == "mock"
+    assert meta["count"] == 6 and meta["embedder"] == "mock"
     assert "CREATE TABLE `products_new`" in load_sql  # self-contained staging load
 
 

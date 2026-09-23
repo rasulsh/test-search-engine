@@ -114,6 +114,7 @@ def main(argv: list[str] | None = None) -> int:
     products = build.read_products(args.csv or args.sql)
     if not products:
         parser.error("no products found in the input")
+    build.warn_malformed_features(products)
 
     out = Path(args.out).resolve()
     with tempfile.TemporaryDirectory() as tmp:

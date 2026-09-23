@@ -20,6 +20,9 @@ CREATE TABLE IF NOT EXISTS products (
     -- Title (fa + en, 511 max) plus the normalized SKU (64 max).
     normalized_title VARCHAR(640)    NOT NULL,
     normalized_desc  MEDIUMTEXT      NOT NULL,
+    -- M13: attribute pairs + feature titles (high-signal, not length-capped).
+    -- Expression default: MySQL 8 rejects a literal default on TEXT columns.
+    normalized_specs MEDIUMTEXT      NOT NULL DEFAULT (''),
     brand            VARCHAR(255)    NOT NULL DEFAULT '',
     category         VARCHAR(255)    NOT NULL DEFAULT '',
     model            VARCHAR(255)    NOT NULL DEFAULT '',
@@ -34,7 +37,7 @@ CREATE TABLE IF NOT EXISTS products (
     PRIMARY KEY (product_id),
     KEY idx_model (model),
     KEY idx_normalized_sku (normalized_sku),
-    FULLTEXT KEY ft_normalized (normalized_title, normalized_desc)
+    FULLTEXT KEY ft_normalized (normalized_title, normalized_specs, normalized_desc)
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_unicode_ci;
 
 CREATE TABLE IF NOT EXISTS search_logs (

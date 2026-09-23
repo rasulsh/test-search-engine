@@ -39,10 +39,10 @@ final class ProductLoader
     {
         $stmt = $this->pdo->prepare(
             "REPLACE INTO {$this->table}
-                (product_id, title, description, normalized_title, normalized_desc,
+                (product_id, title, description, normalized_title, normalized_desc, normalized_specs,
                  brand, category, model, sku, normalized_sku, price, stock, url, image, popularity)
              VALUES
-                (:product_id, :title, :description, :normalized_title, :normalized_desc,
+                (:product_id, :title, :description, :normalized_title, :normalized_desc, :normalized_specs,
                  :brand, :category, :model, :sku, :normalized_sku, :price, :stock, :url, :image, :popularity)"
         );
 
@@ -60,6 +60,9 @@ final class ProductLoader
                 // Same composition as pipeline/build.py: the SKU is title-weighted text.
                 'normalized_title' => trim(($this->normalize)($title) . ' ' . $normalizedSku),
                 'normalized_desc'  => ($this->normalize)($description),
+                // Pre-composed spec text (build.py composes it from attributes
+                // and feature titles).
+                'normalized_specs' => ($this->normalize)((string) ($row['specs'] ?? '')),
                 'brand'            => (string) ($row['brand'] ?? ''),
                 'category'         => (string) ($row['category'] ?? ''),
                 'model'            => (string) ($row['model'] ?? ''),

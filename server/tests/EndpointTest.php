@@ -165,6 +165,49 @@ final class EndpointTest extends TestCase
         self::assertSame([1001], $decoded['product_ids']);
     }
 
+    public function testDefaultSearchResponseHasNoDetails(): void
+    {
+        [, $body] = $this->request('POST', '/search', '{"q":"sony"}');
+
+        $decoded = json_decode((string) $body, true);
+        self::assertSame(['query', 'did_you_mean', 'count', 'product_ids'], array_keys($decoded));
+    }
+
+    public function testSearchWithDetailsReturnsDisplayFieldsInResultOrder(): void
+    {
+        [$status, $body] = $this->request('POST', '/search.php', '{"q":"sony","with_details":true}');
+
+        self::assertSame(200, $status);
+        $decoded = json_decode((string) $body, true);
+        self::assertNotEmpty($decoded['product_ids']);
+        self::assertSame($decoded['product_ids'], array_column($decoded['products'], 'id'));
+        foreach ($decoded['products'] as $product) {
+            self::assertSame(['id', 'title', 'url', 'image', 'price'], array_keys($product));
+        }
+        $byId = array_column($decoded['products'], null, 'id');
+        self::assertSame('Sony WH-1000XM5 Wireless Headphones', $byId[1009]['title']);
+        self::assertSame('/product/sony-wh-1000xm5', $byId[1009]['url']);
+        self::assertSame('/image/sony-headphones.jpg', $byId[1009]['image']);
+        self::assertEquals(349, $byId[1009]['price']);
+    }
+
+    public function testWithDetailsMustBeBooleanTrue(): void
+    {
+        [, $body] = $this->request('POST', '/search', '{"q":"sony","with_details":"true"}');
+
+        self::assertArrayNotHasKey('products', json_decode((string) $body, true));
+    }
+
+    public function testWithDetailsOnEmptyResultIsEmptyList(): void
+    {
+        [$status, $body] = $this->request('POST', '/search', '{"q":"zzzzqqqq","with_details":true}');
+
+        self::assertSame(200, $status);
+        $decoded = json_decode((string) $body, true);
+        self::assertSame([], $decoded['product_ids']);
+        self::assertSame([], $decoded['products']);
+    }
+
     public function testSearchWrongMethodReturns405(): void
     {
         [$status] = $this->request('GET', '/search');

@@ -267,9 +267,9 @@ final class ReloadTest extends DatabaseTestCase
 
     // --- one-command release: load staging from products.load.sql (M12) ------
 
-    private const LOAD_SAMPLE_IDS = [2001, 2002, 2003, 2004];
+    private const LOAD_SAMPLE_IDS = [2001, 2002, 2003, 2004, 2005, 2006];
 
-    /** Incoming bundle for fixtures/products.load.sample.sql (4 products). */
+    /** Incoming bundle for fixtures/products.load.sample.sql (6 products). */
     private function makeIncomingWithLoadFile(?string $loadSql = null): string
     {
         $dir = $this->makeIncoming(count(self::LOAD_SAMPLE_IDS));
@@ -324,13 +324,16 @@ final class ReloadTest extends DatabaseTestCase
 
     public function testLoadStagingFromBundleThenSwap(): void
     {
-        // Live table from before the sku column existed: the load file recreates
-        // staging from the current schema, so the swap brings the new columns.
+        // Live table from before the sku (M12) and specs (M13) columns existed:
+        // the load file recreates staging from the current schema, so the swap
+        // brings the new columns and FULLTEXT index.
         $this->insertProduct('products', 1);
         $this->insertProduct('products', 2);
         $this->pdo->exec(
             'ALTER TABLE products DROP INDEX idx_normalized_sku, DROP COLUMN normalized_sku, DROP COLUMN sku'
         );
+        $this->pdo->exec('ALTER TABLE products DROP INDEX ft_normalized, DROP COLUMN normalized_specs');
+        $this->pdo->exec('ALTER TABLE products ADD FULLTEXT KEY ft_normalized (normalized_title, normalized_desc)');
         $this->pdo->exec('CREATE TABLE products_new (stale INT)'); // leftover from an earlier attempt
         $dataDir = $this->newTempDir('_data');
         file_put_contents($dataDir . '/marker.txt', 'old');
@@ -339,7 +342,7 @@ final class ReloadTest extends DatabaseTestCase
 
         $result = (new Reload($this->pdo, $this->config($dataDir, $incomingDir)))->run(true);
 
-        self::assertSame(4, $result['count']);
+        self::assertSame(count(self::LOAD_SAMPLE_IDS), $result['count']);
         self::assertSame(self::LOAD_SAMPLE_IDS, array_map('intval', $this->pdo
             ->query('SELECT product_id FROM products ORDER BY product_id')
             ->fetchAll(\PDO::FETCH_COLUMN)));
@@ -352,6 +355,10 @@ final class ReloadTest extends DatabaseTestCase
         // The swapped-in table serves SKU search.
         $top = (new Keyword($this->pdo, 'products'))->search('apl ip15p 128')[0];
         self::assertSame([2001, Keyword::MATCH_SKU], [$top['product_id'], $top['match_type']]);
+        // ...and specs search: the feature title outranks a description mention.
+        $hits = (new Keyword($this->pdo, 'products'))->search('540 هرتز');
+        self::assertSame([2005, 2006], array_column($hits, 'product_id'));
+        self::assertTrue($hits[0]['spec_match']);
     }
 
     public function testFailedStagingStatementDoesNotSwap(): void

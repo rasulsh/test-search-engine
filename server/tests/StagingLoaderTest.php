@@ -61,7 +61,7 @@ final class StagingLoaderTest extends DatabaseTestCase
 
         (new StagingLoader($this->pdo, 'products_new'))->load($this->file);
 
-        self::assertSame(4, (int) $this->pdo->query('SELECT COUNT(*) FROM products_new')->fetchColumn());
+        self::assertSame(6, (int) $this->pdo->query('SELECT COUNT(*) FROM products_new')->fetchColumn());
     }
 
     public function testStatementForAnotherTableIsRefusedBeforeRunning(): void

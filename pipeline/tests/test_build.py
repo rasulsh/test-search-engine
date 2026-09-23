@@ -34,7 +34,7 @@ def _config(dim: int = 384) -> dict:
 def test_parse_sql_reads_rows_and_edge_cases() -> None:
     rows = build.parse_sql(INPUT_SQL.read_text(encoding="utf-8"))
 
-    assert len(rows) == 4
+    assert len(rows) == 6
     assert rows[0]["id"] == "2001"
     assert rows[0]["title_en"] == "Apple iPhone 15 Pro"
     # Apostrophe ('' escape) and comma inside a quoted string are preserved.
@@ -221,7 +221,7 @@ def test_build_bundle_format_and_determinism(tmp_path: Path) -> None:
 
     meta = build.build_bundle(products, tmp_path / "b1", config)
 
-    assert meta["count"] == 4
+    assert meta["count"] == 6
     assert meta["dim"] == 384
     assert meta["normalization_version"] == NORMALIZATION_VERSION
     assert meta["embedder"] == "mock"
@@ -231,14 +231,14 @@ def test_build_bundle_format_and_determinism(tmp_path: Path) -> None:
         assert (tmp_path / "b1" / name).exists()
 
     raw = (tmp_path / "b1" / "vectors.bin").read_bytes()
-    assert len(raw) == 4 * 384 * 4
+    assert len(raw) == 6 * 384 * 4
     assert meta["checksum"] == hashlib.sha256(raw).hexdigest()
 
-    vectors = np.frombuffer(raw, dtype="<f4").reshape(4, 384)
-    np.testing.assert_allclose(np.linalg.norm(vectors, axis=1), np.ones(4), atol=1e-6)
+    vectors = np.frombuffer(raw, dtype="<f4").reshape(6, 384)
+    np.testing.assert_allclose(np.linalg.norm(vectors, axis=1), np.ones(6), atol=1e-6)
 
     idx_lines = (tmp_path / "b1" / "vectors.idx").read_text().split()
-    assert idx_lines == ["2001", "2002", "2003", "2004"]
+    assert idx_lines == ["2001", "2002", "2003", "2004", "2005", "2006"]
     assert len(idx_lines) == meta["count"]
 
     # The suggestion dictionary comes from titles/brand/category/model only.

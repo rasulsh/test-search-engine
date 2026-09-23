@@ -19,9 +19,14 @@ use PHPUnit\Framework\Attributes\DataProvider;
  * differs from cPanel, so this is a regression guard; real-host latency is a
  * production-validation item.
  *
- * Runs twice: with the whole description indexed (pre-M11 bundles) and with
- * normalized_desc capped to the pipeline's default desc_index_chars (M11), so
- * the effect of the cap is measured, not assumed.
+ * Runs three shapes, so each change is measured, not assumed: the whole
+ * description indexed (pre-M11 bundles), normalized_desc capped to the
+ * pipeline's default desc_index_chars (M11), and capped plus ~20 attribute
+ * pairs per product in normalized_specs (M13, the default bundle shape) with
+ * another 10% of the catalog mentioning the query only there, so the spec
+ * REGEXPs run on every matching row without a title hit. Rows are inserted
+ * into the indexed table, as products.load.sql does, so the FULLTEXT index is
+ * built incrementally like on the host.
  */
 final class KeywordLatencyGuardTest extends DatabaseTestCase
 {
@@ -30,25 +35,34 @@ final class KeywordLatencyGuardTest extends DatabaseTestCase
     private const RUNS = 5;
     /** Mirrors the default of desc_index_chars in pipeline/config.py. */
     private const DESC_INDEX_CHARS = 400;
+    private const SPEC_PAIRS = 20;
 
-    /** @return array<string, array{int}> */
-    public static function indexCaps(): array
+    /** @return array<string, array{int, bool}> */
+    public static function shapes(): array
     {
-        return ['whole description' => [0], 'capped description' => [self::DESC_INDEX_CHARS]];
+        return [
+            'whole description'          => [0, false],
+            'capped description'         => [self::DESC_INDEX_CHARS, false],
+            'capped description + specs' => [self::DESC_INDEX_CHARS, true],
+        ];
     }
 
-    #[DataProvider('indexCaps')]
-    public function testBroadQueryStaysWithinBudget(int $descIndexChars): void
+    #[DataProvider('shapes')]
+    public function testBroadQueryStaysWithinBudget(int $descIndexChars, bool $withSpecs): void
     {
         $config = require self::repoRoot() . '/server/config.example.php';
         $budgetMs = (float) $config['search']['latency_budget_ms'];
-        $this->seedCatalog($descIndexChars);
+        $this->seedCatalog($descIndexChars, $withSpecs);
 
         $keyword = new Keyword($this->pdo, 'products', 3, 20);
         $query = 'دسته بازی';
 
         $results = $keyword->search($query); // warm the buffer pool
         self::assertCount(20, $results);
+        if ($withSpecs) {
+            // 800 title rows, then the 2000 spec-only rows lead the description band.
+            self::assertTrue($keyword->search($query, 1000)[999]['spec_match']);
+        }
         self::assertSame('fulltext', $results[0]['match_type']);
         self::assertTrue($results[0]['title_match']);
 
@@ -62,11 +76,12 @@ final class KeywordLatencyGuardTest extends DatabaseTestCase
         $median = $times[intdiv(self::RUNS, 2)];
 
         fwrite(STDERR, sprintf(
-            "\n[keyword guard] %d products, ~%d-word descriptions, index cap %s, broad query: "
+            "\n[keyword guard] %d products, ~%d-word descriptions, index cap %s%s, broad query: "
             . "median %.1f ms (max %.1f, budget %d ms)\n",
             self::PRODUCTS,
             self::DESC_WORDS,
             $descIndexChars > 0 ? $descIndexChars . ' chars' : 'none',
+            $withSpecs ? ', ' . self::SPEC_PAIRS . ' spec pairs' : '',
             $median,
             max($times),
             (int) $budgetMs
@@ -74,7 +89,7 @@ final class KeywordLatencyGuardTest extends DatabaseTestCase
         self::assertLessThan($budgetMs, $median, 'field-weighted keyword query exceeded the latency budget');
     }
 
-    private function seedCatalog(int $descIndexChars): void
+    private function seedCatalog(int $descIndexChars, bool $withSpecs): void
     {
         mt_srand(10);
         $filler = [];
@@ -95,9 +110,25 @@ final class KeywordLatencyGuardTest extends DatabaseTestCase
                 array_splice($words, mt_rand(0, self::DESC_WORDS), 0, ['سازگار', 'با', 'دسته', 'بازی']);
             }
             $desc = implode(' ', $words);
+            $specs = [];
+            for ($k = 0; $withSpecs && $k < self::SPEC_PAIRS; $k++) {
+                $specs[] = 'مشخصه' . $k . ': ' . $filler[mt_rand(0, 1999)] . ' ' . $filler[mt_rand(0, 1999)];
+            }
+            if ($withSpecs && $id % 10 === 5) {
+                $specs[] = 'سازگار با دسته بازی'; // spec-only mentions
+            }
 
-            $batch[] = '(?, ?, ?, ?, ?, ?)';
-            array_push($params, $id, $title, $desc, $title, self::indexed($desc, $descIndexChars), $id % 1000);
+            $batch[] = '(?, ?, ?, ?, ?, ?, ?)';
+            array_push(
+                $params,
+                $id,
+                $title,
+                $desc,
+                $title,
+                self::indexed($desc, $descIndexChars),
+                implode(' | ', $specs),
+                $id % 1000
+            );
             if (count($batch) === 500) {
                 $this->flush($batch, $params);
                 $batch = [];
@@ -130,7 +161,8 @@ final class KeywordLatencyGuardTest extends DatabaseTestCase
     private function flush(array $batch, array $params): void
     {
         $this->pdo->prepare(
-            'INSERT INTO products (product_id, title, description, normalized_title, normalized_desc, popularity)
+            'INSERT INTO products (product_id, title, description, normalized_title, normalized_desc,
+                                   normalized_specs, popularity)
              VALUES ' . implode(',', $batch)
         )->execute($params);
     }

@@ -130,6 +130,26 @@
       "name": "combining hamza above",
       "input": "أ",
       "expected": "ا"
+    },
+    {
+      "name": "spec attribute pairs",
+      "input": "برند: ASUS ROG | اندازه صفحه نمایش: ۲۷ اینچ",
+      "expected": "برند: asus rog | اندازه صفحه نمایش: 27 اینچ"
+    },
+    {
+      "name": "spec feature title with zwnj and decimal",
+      "input": "زمان پاسخ‌دهی 0.02 میلی ثانیه",
+      "expected": "زمان پاسخدهی 002 میلی ثانیه"
+    },
+    {
+      "name": "spec feature titles joined",
+      "input": "کیفیت تصویر 2K HDR10 | نرخ نوسازی تصویر 540 هرتز | پنل ۲۷ اینچ Tandem OLED",
+      "expected": "کیفیت تصویر 2k hdr10 | نرخ نوسازی تصویر 540 هرتز | پنل 27 اینچ tandem oled"
+    },
+    {
+      "name": "spec arabic letters and nbsp",
+      "input": "رنگ: مشكي | وزن: ۱٫۵ كيلوگرم",
+      "expected": "رنگ: مشکی | وزن: 1٫5 کیلوگرم"
     }
   ],
   "sku_cases": [

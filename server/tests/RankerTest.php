@@ -112,6 +112,19 @@ final class RankerTest extends TestCase
         self::assertSame([true, true, false], array_column($out, 'keyword'));
     }
 
+    public function testSpecMatchesSitBetweenTitleAndDescriptionOnlyHits(): void
+    {
+        // 3 is description-only but the top semantic neighbour and maximally
+        // boosted; 2 matched in its specs (attributes / feature titles); 1 in
+        // its title.
+        $ranker = new Ranker(60, 0.1, 0.1);
+        $signals = [3 => ['stock' => 9, 'popularity' => 1000]];
+
+        $out = $ranker->fuse([3, 2, 1], [3, 9], $signals, 10, [1], [2]);
+
+        self::assertSame([1, 2, 3, 9], self::ids($out));
+    }
+
     public function testTitleMatchesOutsideTheKeywordListAreIgnored(): void
     {
         // A title id that is not a keyword hit cannot jump the keyword band.

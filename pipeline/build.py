@@ -37,6 +37,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+import phpserialize
+
 import config as pipeline_config
 from embed import create_embedder, embed_passages
 from normalize import NORMALIZATION_VERSION, normalize, normalize_sku
@@ -54,11 +56,15 @@ _kw_spec.loader.exec_module(_keyword)
 INPUT_COLUMNS = (
     "id", "title_fa", "title_en", "desc", "brand", "category",
     "model", "sku", "price", "stock", "url", "image", "popularity",
+    "attributes", "feature",
 )
+
+# GROUP_CONCAT separator of the `attributes` export column (README, step 1).
+ATTRIBUTE_SEPARATOR = " | "
 
 _SERVER_COLUMNS = (
     "product_id", "title", "description", "normalized_title", "normalized_desc",
-    "brand", "category", "model", "sku", "normalized_sku",
+    "normalized_specs", "brand", "category", "model", "sku", "normalized_sku",
     "price", "stock", "url", "image", "popularity",
 )
 
@@ -97,6 +103,62 @@ def clean_text(value: str | None) -> str | None:
             break
         text = decoded
     return _SPACE.sub(" ", _TAG.sub(" ", text)).strip()
+
+
+def attribute_pairs(raw: str | None) -> list[tuple[str, str]]:
+    """(name, value) pairs from the aggregated `attributes` export column
+    ("name: value | name: value"). A part without ": " is a bare value."""
+    pairs: list[tuple[str, str]] = []
+    for part in str(raw or "").split(ATTRIBUTE_SEPARATOR):
+        # The trailing space keeps a name with an empty value ("name:") a pair.
+        name, sep, value = ((clean_text(part) or "") + " ").partition(": ")
+        if not sep:
+            name, value = "", name
+        if value.strip():
+            pairs.append((name.strip(), value.strip()))
+    return pairs
+
+
+def feature_titles(raw: str | None) -> list[str] | None:
+    """Every "title" value in the PHP-serialized `feature` column.
+
+    PHP serialize() counts string lengths in BYTES, so the text is parsed as
+    UTF-8 bytes by a real unserializer. Returns [] for an empty field and None
+    for a malformed one (wrong lengths, truncation, trailing data). A value
+    whose quotes were HTML-escaped as a whole is retried unescaped.
+    """
+    text = str(raw or "").strip()
+    if not text:
+        return []
+    for candidate in dict.fromkeys((text, html.unescape(text))):
+        stream = io.BytesIO(candidate.encode("utf-8"))
+        try:
+            data = phpserialize.load(stream, decode_strings=True)
+        except (ValueError, RecursionError):
+            continue
+        if stream.read(1):
+            continue
+        return [title for title in map(clean_text, _titles(data)) if title]
+    return None
+
+
+def _titles(data: Any) -> list[str]:
+    if not isinstance(data, dict):
+        return []
+    found: list[str] = []
+    for key, value in data.items():
+        if key == "title" and isinstance(value, str):
+            found.append(value)
+        else:
+            found.extend(_titles(value))
+    return found
+
+
+def compose_specs(product: dict[str, Any]) -> str:
+    """High-signal spec text: attribute pairs, then feature titles."""
+    pairs = [f"{name}: {value}" if name else value
+             for name, value in attribute_pairs(product.get("attributes"))]
+    return ATTRIBUTE_SEPARATOR.join(pairs + (feature_titles(product.get("feature")) or []))
 
 
 def _clean_row(row: dict[str, Any]) -> dict[str, Any]:
@@ -203,19 +265,33 @@ def _finalize_field(raw: str, quoted: bool) -> str | None:
 
 # --- Transform -------------------------------------------------------------
 
-def compose_passage(product: dict[str, Any], desc_char_limit: int) -> str:
-    """Bounded field embedded per product: titles + brand + category + model +
-    a truncated description. RAW text (not normalized), so the M4 client can
-    embed the raw query without re-implementing the normalizer."""
+def compose_passage(
+    product: dict[str, Any], desc_char_limit: int, passage_char_limit: int = 0
+) -> str:
+    """Bounded field embedded per product, in priority order: titles, brand,
+    category, model, feature titles, attribute values, then a truncated
+    description. At most passage_char_limit characters (0 = no cap) so it stays
+    within the model's token limit: the description gives way first, then the
+    tail of the specs. RAW text (not normalized), so the M4 client can embed
+    the raw query without re-implementing the normalizer."""
     parts = [
         product.get("title_fa"),
         product.get("title_en"),
         product.get("brand"),
         product.get("category"),
         product.get("model"),
-        (str(product.get("desc") or ""))[:desc_char_limit],
+        *(feature_titles(product.get("feature")) or []),
+        *(value for _, value in attribute_pairs(product.get("attributes"))),
     ]
-    return " ".join(str(p).strip() for p in parts if p is not None and str(p).strip())
+    head = " ".join(str(p).strip() for p in parts if p is not None and str(p).strip())
+    desc_chars = desc_char_limit
+    if passage_char_limit > 0:
+        cut = index_description(head, passage_char_limit)
+        # A cut head leaves no room for the description, only a word gap.
+        desc_chars = 0 if cut != head else min(desc_char_limit, passage_char_limit - len(head) - 1)
+        head = cut
+    desc = (str(product.get("desc") or ""))[:max(0, desc_chars)].strip()
+    return " ".join(p for p in (head, desc) if p)
 
 
 def index_description(description: str, max_chars: int) -> str:
@@ -246,6 +322,8 @@ def to_server_row(product: dict[str, Any], desc_index_chars: int = 0) -> dict[st
         # the product through FULLTEXT; exact/prefix hits rank first separately.
         "normalized_title": f"{normalize(title)} {normalized_sku}".strip(),
         "normalized_desc": normalize(index_description(description, desc_index_chars)),
+        # Not capped like the description: specs are the high-signal text.
+        "normalized_specs": normalize(compose_specs(product)),
         "brand": str(product.get("brand") or ""),
         "category": str(product.get("category") or ""),
         "model": str(product.get("model") or ""),
@@ -317,6 +395,17 @@ def build_products_sql(
 
 # --- Orchestration ---------------------------------------------------------
 
+def warn_malformed_features(products: list[dict[str, Any]]) -> int:
+    """Report (stderr) and return how many `feature` fields failed to parse.
+    Those products are still indexed, just without their feature titles."""
+    malformed = [str(p.get("id")) for p in products if feature_titles(p.get("feature")) is None]
+    if malformed:
+        print(f"Warning: {len(malformed)} products have a malformed `feature` field "
+              f"(ids {', '.join(malformed[:10])}{', ...' if len(malformed) > 10 else ''}); "
+              "their feature titles are not indexed.", file=_sys.stderr)
+    return len(malformed)
+
+
 def build_bundle(
     products: list[dict[str, Any]], out_dir: str | Path, config: dict[str, Any]
 ) -> dict[str, Any]:
@@ -325,12 +414,13 @@ def build_bundle(
 
     dim = int(config["model"]["dim"])
     desc_limit = int(config["build"]["desc_char_limit"])
+    passage_limit = int(config["build"].get("passage_char_limit", 0))
     products_table = config["build"]["products_table"]
     staging_table = f"{products_table}_new"
 
     desc_index_chars = int(config["build"].get("desc_index_chars", 0))
     server_rows = [to_server_row(p, desc_index_chars) for p in products]
-    passages = [compose_passage(p, desc_limit) for p in products]
+    passages = [compose_passage(p, desc_limit, passage_limit) for p in products]
 
     embedder = create_embedder(config)
     vectors = embed_passages(embedder, passages).astype("<f4")
@@ -394,6 +484,7 @@ def main(argv: list[str] | None = None) -> int:
     if not products:
         parser.error("no products found in the input")
 
+    warn_malformed_features(products)
     meta = build_bundle(products, args.out, config)
     print(f"Built bundle: {meta['count']} products, dim {meta['dim']}, embedder {meta['embedder']}")
     return 0

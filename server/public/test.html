@@ -430,6 +430,8 @@
   const CLIENT_BASE = new URL('./client/', location.href);
   // The service is deployed in a subdirectory of the store (e.g. /search-api/),
   // so relative product URLs and OpenCart image paths resolve from the parent.
+  // Set store_base / image_base in config.php (install.php asks for them) and
+  // the server returns absolute links, which these bases leave untouched.
   const STORE_BASE = new URL('../', location.href);
   const IMAGE_BASE = new URL('image/', STORE_BASE);
   const LIMIT = 24;

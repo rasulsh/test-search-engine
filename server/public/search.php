@@ -42,7 +42,12 @@ try {
 
     // Opt-in display fields (e.g. the test page); the default response is unchanged.
     if (($request['with_details'] ?? false) === true) {
-        $details = new ProductDetails($pdo, $config['db']['products_table']);
+        $details = new ProductDetails(
+            $pdo,
+            $config['db']['products_table'],
+            (string) ($config['storefront']['store_base'] ?? ''),
+            (string) ($config['storefront']['image_base'] ?? '')
+        );
         $result['products'] = $details->fetch($result['product_ids']);
     }
 } catch (Throwable) {

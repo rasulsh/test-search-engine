@@ -3,7 +3,9 @@
 /**
  * Example server configuration.
  *
- * Copy this file to `server/config.php` (gitignored) for the target host. Values
+ * public/install.php writes `server/config.php` (gitignored) from this file on
+ * the first deploy, replacing the defaults below; it can also be copied by hand.
+ * Values
  * are read from the environment with safe defaults so the same file works in dev
  * and on cPanel. Nothing here — model, dimension, thresholds, table names — may
  * be hardcoded elsewhere in the server; read it from this config.
@@ -97,6 +99,22 @@ return [
         'suggest_min_frequency' => (int) $setting('SEARCH_SUGGEST_MIN_FREQUENCY', '2'),
         'suggest_max_distance'  => (int) $setting('SEARCH_SUGGEST_MAX_DISTANCE', '2'),
         'latency_budget_ms' => (int) (getenv('SEARCH_LATENCY_BUDGET_MS') ?: 200),
+    ],
+
+    // Absolute bases for the product `url` / `image` values exported from
+    // OpenCart (relative, e.g. "index.php?route=..." and "catalog/x.jpg"). When
+    // set, `with_details` responses carry absolute links; empty keeps the values
+    // as exported (the test page then resolves them against its parent directory).
+    'storefront' => [
+        'store_base' => $setting('SEARCH_STORE_BASE', ''),
+        'image_base' => $setting('SEARCH_IMAGE_BASE', ''),
+    ],
+
+    // Build-time only: the server never re-indexes. Recorded here so the host's
+    // config names the SEARCH_DESC_INDEX_CHARS value releases must be built with
+    // (pipeline/config.py); changing it takes effect with the next release.
+    'build' => [
+        'desc_index_chars' => (int) $setting('SEARCH_DESC_INDEX_CHARS', '400'),
     ],
 
     // Active bundle plus staging directory used for the atomic reload swap.

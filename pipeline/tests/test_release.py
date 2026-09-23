@@ -24,7 +24,7 @@ def dev_tree(tmp_path: Path) -> tuple[Path, Path]:
     must never ship (config.php, live data, local browser-asset copy)."""
     server = tmp_path / "server"
     for rel in ("bootstrap.php", "config.php", "config.example.php", "src/Keyword.php",
-                "public/index.php", "public/reload.php", "public/test.html",
+                "public/index.php", "public/reload.php", "public/test.html", "public/install.php",
                 "public/client/model/stale.onnx", "data/vectors.bin",
                 "data_incoming/old.txt", "tests/KeywordTest.php", "tools/eval.php"):
         (server / rel).parent.mkdir(parents=True, exist_ok=True)
@@ -50,7 +50,7 @@ def _release(tmp_path: Path, tree: tuple[Path, Path], *extra: str) -> list[str]:
 def test_release_packs_bundle_under_data_incoming_and_the_server_code(
     tmp_path: Path, dev_tree: tuple[Path, Path]
 ) -> None:
-    names = _release(tmp_path, dev_tree)
+    names = _release(tmp_path, dev_tree, "--no-model")
 
     assert sorted(n for n in names if n.startswith("data_incoming/")) == sorted(
         f"data_incoming/{f}" for f in BUNDLE_FILES
@@ -60,27 +60,35 @@ def test_release_packs_bundle_under_data_incoming_and_the_server_code(
         assert code in names
     # Never shipped: the server's own config, live data, dev-only files.
     assert not any(n.endswith("config.php") for n in names)
-    assert "config.example.php" in names  # first-deploy template only
+    assert "config.example.php" in names  # install.php's template
     assert not any(n.startswith(("data/", "tests/", "tools/")) for n in names)
     assert "data_incoming/old.txt" not in names
-    # Routine release: no browser model or runtime.
+    # --no-model: no browser model or runtime.
     assert not any(n.startswith(("public/client/model/", "public/client/vendor/",
                                  "public/client/fonts/")) for n in names)
     assert not (tmp_path / "out" / "release.zip.tmp").exists()
 
 
-def test_with_model_adds_the_browser_assets(tmp_path: Path, dev_tree: tuple[Path, Path]) -> None:
-    names = _release(tmp_path, dev_tree, "--with-model")
+def test_release_is_self_contained_by_default(
+    tmp_path: Path, dev_tree: tuple[Path, Path]
+) -> None:
+    names = _release(tmp_path, dev_tree)
 
     assert "public/client/model/m/onnx/model_quantized.onnx" in names
     assert "public/client/vendor/transformers.min.js" in names
     assert "public/client/fonts/Vazirmatn-Variable.woff2" in names
+    assert "public/client/embedder.js" in names
     assert "public/client/model/stale.onnx" not in names  # local copy never packed
     assert not any(n.startswith("public/client/tools/") for n in names)
     assert not any(n.endswith("config.php") for n in names)
+    # First deploy needs nothing else: the web installer, its template, the schema.
+    assert {"public/install.php", "config.example.php", "db/schema.sql"} <= set(names)
+    with zipfile.ZipFile(tmp_path / "out" / "release.zip") as archive:
+        schema = archive.read("db/schema.sql").decode("utf-8")
+    assert schema == (REPO_ROOT / "db" / "schema.sql").read_text(encoding="utf-8")
 
 
-def test_with_model_fails_without_fetched_assets(
+def test_default_release_fails_without_fetched_assets(
     tmp_path: Path, dev_tree: tuple[Path, Path]
 ) -> None:
     server, client = dev_tree
@@ -92,10 +100,13 @@ def test_with_model_fails_without_fetched_assets(
     (client / "model" / "m").rmdir()
     (client / "model").rmdir()
     out = tmp_path / "release.zip"
-    with pytest.raises(FileNotFoundError, match="fetch_web_model"):
-        release.main(["--sql", str(INPUT_SQL), "--out", str(out), "--mock", "--with-model",
+    with pytest.raises(FileNotFoundError, match="fetch_web_model.*--no-model"):
+        release.main(["--sql", str(INPUT_SQL), "--out", str(out), "--mock",
                       "--server-dir", str(server), "--client-dir", str(client)])
     assert not out.exists()
+    # --no-model still works on such a machine.
+    names = _release(tmp_path, dev_tree, "--no-model")
+    assert "public/install.php" in names
 
 
 def test_release_bundle_is_the_built_bundle(tmp_path: Path, dev_tree: tuple[Path, Path]) -> None:
@@ -125,18 +136,22 @@ def test_release_defaults_to_the_real_embedder(monkeypatch: pytest.MonkeyPatch) 
 def test_real_repository_release_via_the_cli(tmp_path: Path) -> None:
     # Runs the script as an operator would, against the real server/ tree.
     out = tmp_path / "release.zip"
+    # --no-model: CI has no fetched browser assets.
     result = subprocess.run(
         [sys.executable, str(REPO_ROOT / "pipeline" / "release.py"),
-         "--sql", str(INPUT_SQL), "--out", str(out), "--mock"],
+         "--sql", str(INPUT_SQL), "--out", str(out), "--mock", "--no-model"],
         capture_output=True, text=True, check=False, cwd=tmp_path,
     )
     assert result.returncode == 0, result.stderr
     with zipfile.ZipFile(out) as archive:
         names = archive.namelist()
     assert "src/StagingLoader.php" in names and "public/reload.php" in names
-    assert "data_incoming/meta.json" in names
+    assert "src/Installer.php" in names and "public/install.php" in names
+    assert "db/schema.sql" in names and "data_incoming/meta.json" in names
     assert not any(n.endswith("config.php") for n in names)
-    assert "reload.php?load=1" in result.stdout
+    # The printed hint is the real flow, without stale example paths.
+    assert "install.php" in result.stdout and "reload.php?load=1" in result.stdout
+    assert "~/search-service" not in result.stdout and "<shop>" not in result.stdout
 
 
 def test_windows_wrapper_forwards_arguments() -> None:

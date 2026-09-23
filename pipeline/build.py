@@ -99,6 +99,11 @@ def _clean_row(row: dict[str, Any]) -> dict[str, Any]:
 
 
 def parse_csv(text: str) -> list[dict[str, Any]]:
+    # Real HTML descriptions exceed the 128 KB default; sys.maxsize overflows a C long on Windows.
+    try:
+        csv.field_size_limit(_sys.maxsize)
+    except OverflowError:
+        csv.field_size_limit(2**31 - 1)
     return [dict(row) for row in csv.DictReader(io.StringIO(text))]
 
 

@@ -163,7 +163,8 @@ final class InstallEndpointTest extends DatabaseTestCase
         self::assertMatchesRegularExpression('/name="reload_token" value="[0-9a-f]{64}"/', $body);
         self::assertStringContainsString('name="model_name" value="intfloat/multilingual-e5-small"', $body);
         self::assertStringContainsString('name="semantic_min_score" value="0.82"', $body);
-        self::assertStringContainsString('name="desc_index_chars" value="400"', $body);
+        // Build-time only (release.py --desc-index-chars): not a server setting.
+        self::assertStringNotContainsString('desc_index_chars', $body);
         self::assertStringContainsString('type="password" id="db_password" name="db_password" value=""', $body);
         foreach (
             ['db_host', 'db_name', 'db_user', 'store_base', 'image_base', 'title_weight', 'desc_weight',

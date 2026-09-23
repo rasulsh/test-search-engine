@@ -71,7 +71,6 @@ final class InstallerTest extends TestCase
             'desc_weight' => '0.5',
             'spec_weight' => '6',
             'phrase_bonus' => '4.5',
-            'desc_index_chars' => '300',
         ], $overrides);
     }
 
@@ -149,7 +148,8 @@ final class InstallerTest extends TestCase
         self::assertEqualsWithDelta(0.5, $config['search']['desc_weight'], 1e-9);
         self::assertEqualsWithDelta(6.0, $config['search']['spec_weight'], 1e-9);
         self::assertEqualsWithDelta(4.5, $config['search']['phrase_bonus'], 1e-9);
-        self::assertSame(300, $config['build']['desc_index_chars']);
+        // Build-time only: not asked for, not written to the server's config.
+        self::assertArrayNotHasKey('build', $config);
         // Everything the form does not ask for keeps the template default.
         self::assertSame(60, $config['search']['rrf_k']);
         self::assertSame('products', $config['db']['products_table']);
@@ -180,7 +180,7 @@ final class InstallerTest extends TestCase
         self::assertSame('1.0', $first['desc_weight']);
         self::assertSame('6.0', $first['spec_weight']);
         self::assertSame('5.0', $first['phrase_bonus']);
-        self::assertSame('400', $first['desc_index_chars']);
+        self::assertArrayNotHasKey('desc_index_chars', $first);
         self::assertSame('', $first['db_password']);
         self::assertMatchesRegularExpression('/^[0-9a-f]{64}$/', $first['reload_token']);
         self::assertNotSame($first['reload_token'], $installer->defaults()['reload_token']);

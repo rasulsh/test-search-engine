@@ -25,7 +25,7 @@ def _config(dim: int = 384) -> dict:
             "normalization_version": NORMALIZATION_VERSION,
         },
         "build": {"products_table": "products", "desc_char_limit": 300,
-                  "max_statement_bytes": 1_000_000},
+                  "desc_index_chars": 400, "max_statement_bytes": 1_000_000},
     }
 
 
@@ -111,6 +111,29 @@ def test_to_server_row_combines_titles_and_normalizes() -> None:
     assert row["price"] == 1199.0
 
 
+def test_index_description_cuts_at_a_word_boundary() -> None:
+    assert build.index_description("alpha beta gamma", 8) == "alpha"  # "bet" dropped
+    assert build.index_description("alpha beta gamma", 10) == "alpha beta"  # ends on a word
+    assert build.index_description("alpha beta", 100) == "alpha beta"
+    assert build.index_description("alpha beta", 0) == "alpha beta"  # 0 disables the cap
+    assert build.index_description("x" * 50, 10) == ""  # no whitespace to cut back to
+    # A cut after a ZWNJ (not a word character) still drops the fragment.
+    assert build.index_description("aaa bbb\u200ccc", 8) == "aaa"
+
+
+def test_to_server_row_indexes_only_the_leading_description() -> None:
+    desc = "Silent case fan with RGB lighting. " + "filler " * 80 + "ball bearing motor"
+    product = {"id": "7", "title_fa": "", "title_en": "Case Fan", "desc": desc}
+
+    row = build.to_server_row(product, desc_index_chars=400)
+
+    assert row["description"] == desc  # full text kept for display
+    assert "rgb" in row["normalized_desc"]
+    assert "bearing" not in row["normalized_desc"]  # deep spec text not indexed
+    assert len(row["normalized_desc"]) <= 400
+    assert "bearing" in build.to_server_row(product, desc_index_chars=0)["normalized_desc"]
+
+
 def _row(product_id: int, title_en: str = "", desc: str = "") -> dict:
     return build.to_server_row({"id": str(product_id), "title_fa": "", "title_en": title_en,
                                 "desc": desc, "brand": "", "category": "", "model": "",
@@ -181,6 +204,15 @@ def test_build_bundle_format_and_determinism(tmp_path: Path) -> None:
 
     synonyms = json.loads((tmp_path / "b1" / "synonyms.json").read_text())
     assert isinstance(synonyms, list)
+
+    # normalized_desc in the load file honours desc_index_chars.
+    capped = build.build_bundle(products, tmp_path / "b3", {**config, "build": {
+        **config["build"], "desc_index_chars": 10}})
+    load_sql = (tmp_path / "b3" / "products.load.sql").read_text(encoding="utf-8")
+    assert capped["checksum"] == meta["checksum"]  # embeddings unaffected by the cap
+    full_sql = (tmp_path / "b1" / "products.load.sql").read_text(encoding="utf-8")
+    assert full_sql.count("titanium") == 2  # description + normalized_desc
+    assert load_sql.count("titanium") == 1  # only in the display description now
 
     # Deterministic: a second build yields the same vectors.
     meta2 = build.build_bundle(products, tmp_path / "b2", config)

@@ -213,7 +213,22 @@ def compose_passage(product: dict[str, Any], desc_char_limit: int) -> str:
     return " ".join(str(p).strip() for p in parts if p is not None and str(p).strip())
 
 
-def to_server_row(product: dict[str, Any]) -> dict[str, Any]:
+def index_description(description: str, max_chars: int) -> str:
+    """Leading part of a description that is keyword-indexed.
+
+    Cut back to whitespace so the last indexed token is never a fragment that a
+    prefix match could hit (a mid-word cut may land after a diacritic or ZWNJ,
+    which are not word characters). max_chars <= 0 keeps the whole text.
+    """
+    if max_chars <= 0 or len(description) <= max_chars:
+        return description
+    head = description[:max_chars]
+    if not description[max_chars].isspace():
+        head = re.sub(r"\S+$", "", head)
+    return head.rstrip()
+
+
+def to_server_row(product: dict[str, Any], desc_index_chars: int = 0) -> dict[str, Any]:
     title = f"{product.get('title_fa') or ''} {product.get('title_en') or ''}".strip()
     description = str(product.get("desc") or "")
     return {
@@ -221,7 +236,7 @@ def to_server_row(product: dict[str, Any]) -> dict[str, Any]:
         "title": title,
         "description": description,
         "normalized_title": normalize(title),
-        "normalized_desc": normalize(description),
+        "normalized_desc": normalize(index_description(description, desc_index_chars)),
         "brand": str(product.get("brand") or ""),
         "category": str(product.get("category") or ""),
         "model": str(product.get("model") or ""),
@@ -277,7 +292,8 @@ def build_bundle(
     desc_limit = int(config["build"]["desc_char_limit"])
     staging_table = f"{config['build']['products_table']}_new"
 
-    server_rows = [to_server_row(p) for p in products]
+    desc_index_chars = int(config["build"].get("desc_index_chars", 0))
+    server_rows = [to_server_row(p, desc_index_chars) for p in products]
     passages = [compose_passage(p, desc_limit) for p in products]
 
     embedder = create_embedder(config)

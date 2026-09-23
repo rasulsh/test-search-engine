@@ -195,7 +195,7 @@ that helps.
 | reason | fix |
 | --- | --- |
 | `missing_meta`, `invalid_meta` | `data_incoming/meta.json` is absent or not JSON. Re-upload the bundle. |
-| `model_mismatch`, `dim_mismatch`, `normalization_version_mismatch` | The bundle was built with a different model, dim, or normalization rules than `server/config.php` (contract 3). Rebuild, or change config deliberately (see [Changing the model](#changing-the-model)). The first M15 release needs `normalization_version` 3 in `config.php` (README, [upgrading to M15](./README.md#upgrading-to-m15)). |
+| `model_mismatch`, `dim_mismatch`, `normalization_version_mismatch` | The bundle was built with a different model, dim, or normalization rules than `server/config.php` (contract 3). Rebuild, or change config deliberately (see [Changing the model](#changing-the-model)). `normalization_version` itself follows the deployed code, except in a `config.php` from before M15.1, which needs a one-time edit (README, [normalization version upgrades](./README.md#upgrading-to-m15)). |
 | `invalid_aliases`, `invalid_synonyms` | `data_incoming/aliases.json` or `synonyms.json` is not a JSON list of lists of strings (`details.file` names it). Fix `pipeline/aliases.json` (see README, [aliases](./README.md#aliases)) and rebuild. |
 | `missing_index`, `missing_vectors` | `vectors.idx` / `vectors.bin` not uploaded. |
 | `missing_staging_table` | `products_new` does not exist. Call with `?load=1`, or load `products.load.sql` into the database first. |

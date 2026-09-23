@@ -17,6 +17,7 @@ import pytest
 
 import config as pipeline_config
 import release
+from normalize import NORMALIZATION_VERSION
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 INPUT_SQL = REPO_ROOT / "fixtures" / "products.input.sql"
@@ -225,6 +226,19 @@ def test_release_bundle_is_the_built_bundle(tmp_path: Path, dev_tree: tuple[Path
         load_sql = archive.read("data_incoming/products.load.sql").decode("utf-8")
     assert meta["count"] == 6 and meta["embedder"] == "mock"
     assert "CREATE TABLE `products_new`" in load_sql  # self-contained staging load
+
+
+def test_release_stamps_the_code_version_whatever_the_environment_says(
+    tmp_path: Path, dev_tree: tuple[Path, Path], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # M15.1: the server's config tracks Normalizer::VERSION, so the release must
+    # carry the code's version, never a stale SEARCH_NORMALIZATION_VERSION.
+    monkeypatch.setattr(release, "NORMALIZATION_VERSION", NORMALIZATION_VERSION + 1)
+    monkeypatch.setenv("SEARCH_NORMALIZATION_VERSION", str(NORMALIZATION_VERSION))
+    _release(tmp_path, dev_tree)
+    with zipfile.ZipFile(tmp_path / "out" / "release.zip") as archive:
+        meta = json.loads(archive.read("data_incoming/meta.json"))
+    assert meta["normalization_version"] == NORMALIZATION_VERSION + 1
 
 
 def test_release_ships_the_alias_file(tmp_path: Path, dev_tree: tuple[Path, Path]) -> None:

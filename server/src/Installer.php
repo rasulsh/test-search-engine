@@ -41,6 +41,13 @@ final class Installer
         'phrase_bonus'          => 'SEARCH_PHRASE_BONUS',
     ];
 
+    /**
+     * Template default of SEARCH_NORMALIZATION_VERSION: the code's own version.
+     * Kept in config.php when the form keeps it, so a later rules bump needs no
+     * config edit; any other value is written as a literal pin.
+     */
+    private const VERSION_DEFAULT = '\App\Normalizer::VERSION';
+
     /** Numeric fields: [type, min, max]. */
     private const NUMBERS = [
         'model_dim'             => ['int', 1, 8192],
@@ -268,6 +275,9 @@ final class Installer
         }
         foreach ($replacements as $env => $value) {
             [$offset, $length, $literal] = self::findDefault($php, $env);
+            if ($literal === self::VERSION_DEFAULT && $value === (string) Normalizer::VERSION) {
+                continue;
+            }
             $new = str_starts_with($literal, "'") ? var_export($value, true) : $value;
             $php = substr_replace($php, $new, $offset, $length);
         }
@@ -360,14 +370,15 @@ final class Installer
 
     /**
      * Locate the default literal for $env in the template: the right side of
-     * `getenv('X') ?: <literal>` or the second argument of `$setting('X', '<literal>')`.
+     * `getenv('X') ?: <literal>` or the second argument of `$setting('X', '<literal>')`
+     * (a quoted string, a number, or VERSION_DEFAULT).
      *
      * @return array{int, int, string} byte offset, length, literal source
      */
     private static function findDefault(string $php, string $env): array
     {
         $name = preg_quote($env, '/');
-        $literal = "('(?:[^'\\\\]|\\\\.)*'|-?\\d+(?:\\.\\d+)?)";
+        $literal = "('(?:[^'\\\\]|\\\\.)*'|-?\\d+(?:\\.\\d+)?|" . preg_quote(self::VERSION_DEFAULT, '/') . ')';
         $pattern = "/(?:getenv\\('{$name}'\\)\\s*\\?:\\s*|\\\$setting\\('{$name}',\\s*){$literal}/";
         if (preg_match_all($pattern, $php, $matches, PREG_OFFSET_CAPTURE) !== 1) {
             throw new InstallerException('template_mismatch', ['key' => $env]);
@@ -379,6 +390,9 @@ final class Installer
 
     private static function literalValue(string $literal): string
     {
+        if ($literal === self::VERSION_DEFAULT) {
+            return (string) Normalizer::VERSION;
+        }
         if (!str_starts_with($literal, "'")) {
             return $literal;
         }

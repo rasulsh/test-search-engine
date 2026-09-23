@@ -37,7 +37,10 @@ return [
         'name'                  => getenv('SEARCH_MODEL') ?: 'intfloat/multilingual-e5-small',
         'revision'              => getenv('SEARCH_MODEL_REVISION') ?: 'main',
         'dim'                   => (int) (getenv('SEARCH_MODEL_DIM') ?: 384),
-        'normalization_version' => (int) (getenv('SEARCH_NORMALIZATION_VERSION') ?: 3),
+        // Defaults to the deployed code's rules, as the pipeline stamps its own
+        // into meta.json, so a rules change needs no edit here. Set the variable
+        // only to pin a version deliberately.
+        'normalization_version' => (int) (getenv('SEARCH_NORMALIZATION_VERSION') ?: \App\Normalizer::VERSION),
     ],
 
     'search' => [

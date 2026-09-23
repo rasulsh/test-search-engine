@@ -3,7 +3,8 @@
 This module MUST stay byte-for-byte identical in output to
 server/src/Normalizer.php (contract 1). Both are driven by the same rules and
 verified against fixtures/normalization_cases.json. Bump NORMALIZATION_VERSION
-in BOTH files whenever the rules change.
+in BOTH files whenever the rules change; build.py stamps it into meta.json and
+the server's config defaults to Normalizer::VERSION, so no config edit follows.
 
 Rules (applied in this order):
   1. Remove zero-width characters (incl. ZWNJ / half-space).

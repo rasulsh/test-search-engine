@@ -9,7 +9,8 @@ namespace App;
  *
  * MUST stay byte-for-byte identical in output to pipeline/normalize.py
  * (contract 1). Both are verified against fixtures/normalization_cases.json.
- * Bump VERSION here and NORMALIZATION_VERSION there together when rules change.
+ * Bump VERSION here and NORMALIZATION_VERSION there together when rules change;
+ * config and meta.json follow the constants, so nothing else needs editing.
  *
  * Rules, in order: remove zero-width chars (incl. ZWNJ), remove Arabic diacritics
  * and tatweel, unify Arabic letters to Persian, fold Persian/Arabic-Indic digits,

@@ -6,6 +6,7 @@ namespace App\Tests;
 
 use App\Installer;
 use App\InstallerException;
+use App\Normalizer;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 
@@ -76,11 +77,12 @@ final class InstallerTest extends TestCase
 
     /**
      * Evaluate a config file in a clean PHP process (no SEARCH_* environment,
-     * which would override the file's values) and return what it yields.
+     * which would override the file's values) and return what it yields. App\
+     * classes the file names (Normalizer::VERSION) load from $srcDir.
      *
      * @return array<string, mixed>
      */
-    public static function evaluateConfig(string $path): array
+    public static function evaluateConfig(string $path, ?string $srcDir = null): array
     {
         $env = array_filter(
             getenv(),
@@ -88,7 +90,14 @@ final class InstallerTest extends TestCase
             ARRAY_FILTER_USE_KEY
         );
         $process = proc_open(
-            [PHP_BINARY, '-r', 'echo json_encode(require $argv[1]);', $path],
+            [
+                PHP_BINARY,
+                '-r',
+                'spl_autoload_register(fn ($c) => require $argv[2] . "/" . substr($c, 4) . ".php");'
+                . 'echo json_encode(require $argv[1]);',
+                $path,
+                $srcDir ?? dirname(__DIR__) . '/src',
+            ],
             [1 => ['pipe', 'w'], 2 => ['pipe', 'w']],
             $pipes,
             null,
@@ -164,6 +173,8 @@ final class InstallerTest extends TestCase
         self::assertStringContainsString("getenv('SEARCH_DB_USER') ?: 'cpuser_search'", $php);
         self::assertStringContainsString("\$setting('SEARCH_TITLE_WEIGHT', '12.0')", $php);
         self::assertStringContainsString("(int) (getenv('SEARCH_MODEL_DIM') ?: 384)", $php);
+        // validInput() pins version 2, which differs from the code's: a literal.
+        self::assertStringContainsString("(int) (getenv('SEARCH_NORMALIZATION_VERSION') ?: 2)", $php);
         self::assertStringContainsString('Written by public/install.php', $php);
     }
 
@@ -174,7 +185,7 @@ final class InstallerTest extends TestCase
 
         self::assertSame('intfloat/multilingual-e5-small', $first['model_name']);
         self::assertSame('384', $first['model_dim']);
-        self::assertSame('3', $first['normalization_version']);
+        self::assertSame((string) Normalizer::VERSION, $first['normalization_version']);
         self::assertSame('0.82', $first['semantic_min_score']);
         self::assertSame('10.0', $first['title_weight']);
         self::assertSame('1.0', $first['desc_weight']);

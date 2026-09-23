@@ -293,6 +293,22 @@ def test_malformed_alias_file_fails_the_build_before_embedding(
     assert not (tmp_path / "b").exists()
 
 
+def test_build_stamps_the_code_version_whatever_the_environment_says(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # M15.1: a rules bump (NORMALIZATION_VERSION + 1) reaches meta.json with no
+    # config edit, and a stale SEARCH_NORMALIZATION_VERSION cannot mislabel it.
+    bumped = NORMALIZATION_VERSION + 1
+    monkeypatch.setattr(build, "NORMALIZATION_VERSION", bumped)
+    monkeypatch.setenv("SEARCH_NORMALIZATION_VERSION", str(NORMALIZATION_VERSION))
+    monkeypatch.setenv("EMBEDDER", "mock")
+
+    assert build.main(["--sql", str(INPUT_SQL), "--out", str(tmp_path / "b")]) == 0
+
+    meta = json.loads((tmp_path / "b" / "meta.json").read_text(encoding="utf-8"))
+    assert meta["normalization_version"] == bumped
+
+
 LOAD_SAMPLE = REPO_ROOT / "fixtures" / "products.load.sample.sql"
 LOAD_SAMPLE_HEADER = (
     "-- GENERATED from fixtures/products.input.sql by build.py's load-file writer\n"

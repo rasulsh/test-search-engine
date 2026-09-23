@@ -237,8 +237,7 @@ are a dimension or a unit (`1920 x 1080`, `12 V` stay as they are). The SKU
 canonicalization skips this rule (`X 12` stays the code `x12`). Known trade-off:
 a standalone `x` or `v` that is really a letter becomes a number on both the
 product and the query side (`Xbox Series X` → `xbox series 10`), which still
-matches itself. Needs a rebuild + reload, and `normalization_version` 3 in
-`config.php` (see [upgrading](#upgrading-to-m15)).
+matches itself. Needs a rebuild + reload (see [upgrading](#upgrading-to-m15)).
 
 <a id="aliases"></a>**Synonyms and aliases (M15).** A product listed under
 one name form is also found by another. At search time the normalized query
@@ -525,7 +524,8 @@ the form. No config file editing, no separate model upload, no SSH needed.
      (it is stored in `config.php`);
    - model name, dimension and normalization version: keep the defaults unless
      the release was built with another model (a mismatch with the staged
-     bundle is rejected before anything is written);
+     bundle is rejected before anything is written). The normalization version
+     default is the code's own and follows later releases; another number pins it;
    - `STORE_BASE` / `IMAGE_BASE`: absolute store and image URLs (for example
      `https://shop.example.com/` and `https://shop.example.com/image/`). With
      them, `with_details` results carry absolute product links and images;
@@ -744,16 +744,27 @@ reload (also after a rollback to such a table). A table from before M15 lacks
 the `idx_title_scan` index: synonym / alias expansion is then skipped (the
 literal query is still served) until the reload.
 
-<a id="upgrading-to-m15"></a>**Upgrading to M15 (normalization version 3).**
-The Roman-numeral rule changes the normalized text, so the release's bundle
-has `normalization_version` 3 and a `config.php` written by an earlier
-installer still says 2: the reload is refused with
-`normalization_version_mismatch` and **nothing is swapped**. Before the first
-M15 reload, change `SEARCH_NORMALIZATION_VERSION` in `server/config.php` from
-`?: 2` to `?: 3` (or set the environment variable to 3). Deploy the code and
-reload together: until the reload the new code normalizes queries with version
-3 against the old table (only queries containing a standalone Roman numeral
-are affected) and serves no aliases.
+<a id="upgrading-to-m15"></a>**Normalization version upgrades (M15.1).**
+A release that changes the normalization rules (M15's Roman numerals made it
+version 3) needs **no config edit**: the pipeline stamps its own
+`NORMALIZATION_VERSION` into `meta.json`, and `config.php` defaults to the
+deployed code's `Normalizer::VERSION`, so the new code and its bundle always
+agree. The installer writes that default into `config.php` unless you type a
+different number, which pins it (as does setting `SEARCH_NORMALIZATION_VERSION`).
+
+A `config.php` written before M15.1 has the number hardcoded (`?: 2` or `?: 3`).
+If it says 2, the M15 bundle is refused with `normalization_version_mismatch`
+and **nothing is swapped**; if it says 3, the next rules bump would be. Edit it
+once, so this never recurs: replace the `'normalization_version'` line in
+`server/config.php` with
+
+```php
+        'normalization_version' => (int) (getenv('SEARCH_NORMALIZATION_VERSION') ?: \App\Normalizer::VERSION),
+```
+
+Deploy the code and reload together: until the reload the new code normalizes
+queries with the new rules against the old table (for M15, only queries
+containing a standalone Roman numeral are affected, and no aliases are served).
 
 #### Fallback: manual staging load
 
@@ -934,6 +945,7 @@ M0–M5. Verify each item on the production host before wide rollout.
 - [ ] **M14** — Self-contained release (browser model included by default, `--no-model` for routine updates, `db/schema.sql` packed) and a web installer, `public/install.php`: validates the form, tests the DB connection, creates the schema, writes `config.php` (never overwriting one), loads the staged catalog, then refuses to run again. `store_base` / `image_base` config for absolute `with_details` links.
 - [ ] **M15** — Name / alias / form matching: standalone Roman numerals → digits (normalization version 3), query-side expansion from `synonyms.json` and an owner-maintained `aliases.json` (whole terms, title-only variants), `desc_index_chars` default 800.
 - [ ] **M14.1** — `release.py` downloads the browser assets itself when `client/` lacks them (cached; `--no-model` skips), so one command builds a complete release. `desc_index_chars` leaves the installer and server config and becomes `release.py --desc-index-chars`.
+- [ ] **M15.1** — `normalization_version` in `config.php` (and the installer prefill) defaults to the code's `Normalizer::VERSION`, and the pipeline always stamps its own `NORMALIZATION_VERSION`, so a rules bump reloads with no config edit.
 
 ## Contributing
 

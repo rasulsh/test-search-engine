@@ -100,10 +100,11 @@ Response `200`:
 Semantics the storefront should know:
 
 - **Keyword-only** (no usable `q_vector`, or no bundle loaded): FULLTEXT
-  results. `count` can be `0`.
+  results. Products whose title matches the query come before products that
+  match only in their description. `count` can be `0`.
 - **Hybrid** (`q_vector` present and a bundle loaded): cosine neighbours below
   `SEARCH_SEMANTIC_MIN_SCORE` are dropped. Every keyword hit ranks above every
-  semantic-only product; the semantic side reorders keyword hits among
+  semantic-only product (title matches above description-only matches); the semantic side reorders keyword hits among
   themselves and adds relevant products below them (weighted Reciprocal Rank
   Fusion, then in-stock and popularity boosts). A query with no keyword hit and
   no neighbour above the floor returns `count: 0`, so either response can come

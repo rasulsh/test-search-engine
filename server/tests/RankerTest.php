@@ -98,6 +98,28 @@ final class RankerTest extends TestCase
         self::assertSame([3, 1, 2, 9], self::ids($out));
     }
 
+    public function testTitleMatchedKeywordHitsLeadDescriptionOnlyHits(): void
+    {
+        // 2 matched only in its description but is the top semantic neighbour
+        // and maximally boosted; 1 matched in its title. The title band leads,
+        // then description-only keyword hits, then semantic-only ids.
+        $ranker = new Ranker(60, 0.1, 0.1);
+        $signals = [2 => ['stock' => 9, 'popularity' => 1000], 1 => ['stock' => 0, 'popularity' => 0]];
+
+        $out = $ranker->fuse([2, 1], [2, 9], $signals, 10, [1]);
+
+        self::assertSame([1, 2, 9], self::ids($out));
+        self::assertSame([true, true, false], array_column($out, 'keyword'));
+    }
+
+    public function testTitleMatchesOutsideTheKeywordListAreIgnored(): void
+    {
+        // A title id that is not a keyword hit cannot jump the keyword band.
+        $ranker = new Ranker(60, 0.0, 0.0);
+
+        self::assertSame([1, 9], self::ids($ranker->fuse([1], [9], [], 10, [9])));
+    }
+
     public function testWeightsControlHowMuchEachListReorders(): void
     {
         // Keyword order [1, 2], semantic order [2, 1]: equal weights tie (broken

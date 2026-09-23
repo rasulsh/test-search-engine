@@ -202,11 +202,27 @@ returns an empty result instead of `limit` far neighbours. Hybrid responses
 carry `cosine_scores` so the test page can show each result's similarity while
 tuning.
 
+**Keyword field weighting (`server/src/Keyword.php`).** Title and description
+are scored separately so a product named by the query beats one whose long
+description merely mentions it (on the real catalog, "دوال شاک" ranked PS5
+bundles above the controllers, and "بلبرینگ" ranked case fans above bearings).
+Each query token is credited to the best field it matched: `score =
+(title_weight × title hits + desc_weight × other hits) / tokens`, plus
+`phrase_bonus` when the tokens appear adjacent and in order in the title. Any
+row with a title match ranks above every description-only row, whatever the
+weights (description-only matches are kept, below); the weights order rows
+inside those two bands. Title hits are word-prefix matches on the short title
+only — the long description is never scanned per row. Knobs:
+`SEARCH_TITLE_WEIGHT` (10), `SEARCH_DESC_WEIGHT` (1), `SEARCH_PHRASE_BONUS` (5);
+starting points, to be tuned on the real catalog. Ranking-only: no bundle
+rebuild or schema change.
+
 **Hybrid merge (`server/src/Ranker.php`).** Keyword (FULLTEXT) and cosine scores
 are on incomparable scales, so they are **not** added raw. They are merged by
 weighted **Reciprocal Rank Fusion** (rank-based, scale-free), then light business
 boosts (in-stock, popularity) are applied **after** fusion. Keyword hits always
-lead: every keyword match ranks above every semantic-only neighbour, the
+lead: every keyword match ranks above every semantic-only neighbour (and title
+keyword matches above description-only ones), the
 semantic side reorders keyword hits among themselves and augments below them.
 Weights are configurable (`SEARCH_RRF_K`, `SEARCH_KEYWORD_WEIGHT`,
 `SEARCH_SEMANTIC_WEIGHT`, `SEARCH_STOCK_BOOST`, `SEARCH_POPULARITY_BOOST`).
@@ -611,6 +627,7 @@ M0–M5. Verify each item on the production host before wide rollout.
 - [ ] **M6** — Follow-up: "did you mean" served from the bundle's `spellcheck.txt` (cached per worker + APCu, refreshed on `/reload`); zero-result latency guard.
 - [ ] **M8** — Search test page (`server/public/test.html`), opt-in `with_details` on `/search`, `fetch_web_model.py` for self-hosted browser assets.
 - [ ] **M9** — Relevance tuning: semantic cosine floor (empty result instead of far neighbours), keyword-first hybrid fusion, frequency-gated "did you mean" from high-signal fields, cosine score + "no results" state on the test page.
+- [ ] **M10** — Keyword relevance by field: title vs description scored separately (configurable weights), title phrase bonus, title matches always above description-only matches (also in the hybrid merge); keyword latency guard.
 
 ## Contributing
 

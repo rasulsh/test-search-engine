@@ -44,6 +44,7 @@ export class QueryEmbedder {
    * @param {number} [options.dim]
    * @param {string} [options.queryPrefix]
    * @param {object} [options.transformers] Injected transformers.js module (tests / offline runner).
+   * @param {Function} [options.progressCallback] Receives transformers.js download progress events.
    */
   constructor(options = {}) {
     this.modelId = options.modelId ?? MODEL_ID;
@@ -51,6 +52,7 @@ export class QueryEmbedder {
     this.dim = options.dim ?? EMBEDDING_DIM;
     this.queryPrefix = options.queryPrefix ?? QUERY_PREFIX;
     this._transformers = options.transformers ?? null;
+    this._progressCallback = options.progressCallback ?? null;
     this._extractor = null;
   }
 
@@ -60,9 +62,11 @@ export class QueryEmbedder {
       return this._extractor;
     }
     const transformers = this._transformers ?? (await import('@xenova/transformers'));
-    this._extractor = await transformers.pipeline('feature-extraction', this.modelId, {
-      revision: this.revision,
-    });
+    const pipelineOptions = { revision: this.revision };
+    if (this._progressCallback) {
+      pipelineOptions.progress_callback = this._progressCallback;
+    }
+    this._extractor = await transformers.pipeline('feature-extraction', this.modelId, pipelineOptions);
     return this._extractor;
   }
 

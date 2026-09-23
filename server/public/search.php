@@ -3,7 +3,8 @@
 /**
  * POST /search. Reachable directly or included by the front controller.
  * Tier 1 (keyword) always; Tier 2 (semantic) is added when the request carries a
- * query vector and a bundle is loaded (see App\SearchController).
+ * query vector and a bundle is loaded (see App\SearchController). With
+ * `"with_details": true` the response also carries display fields per result.
  */
 
 declare(strict_types=1);
@@ -12,6 +13,7 @@ use App\Db;
 use App\Identifier;
 use App\Keyword;
 use App\Logger;
+use App\ProductDetails;
 use App\Ranker;
 use App\SearchController;
 use App\Speller;
@@ -97,6 +99,11 @@ try {
         (int) $config['search']['default_limit']
     );
     $result = $controller->search($request);
+
+    // Opt-in display fields (e.g. the test page); the default response is unchanged.
+    if (($request['with_details'] ?? false) === true) {
+        $result['products'] = (new ProductDetails($pdo, $productsTable))->fetch($result['product_ids']);
+    }
 } catch (Throwable) {
     http_response_code(500);
     echo json_encode(['error' => 'internal_error'], JSON_UNESCAPED_UNICODE);

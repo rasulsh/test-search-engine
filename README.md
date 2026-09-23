@@ -101,7 +101,7 @@ vendor/bin/phpunit
 
 | endpoint | purpose |
 | --- | --- |
-| `POST /search` | `{q, q_vector?, customer_id?, limit?}`, returns ordered `product_ids` + `did_you_mean`. Keyword tier always; hybrid when a valid `q_vector` is sent and a bundle is loaded. |
+| `POST /search` | `{q, q_vector?, customer_id?, limit?, with_details?}`, returns ordered `product_ids` + `did_you_mean` (plus `products` display fields only with `"with_details": true`). Keyword tier always; hybrid when a valid `q_vector` is sent and a bundle is loaded. |
 | `GET /health` | Database reachability + live product count, for monitoring. |
 | `POST /reload` | Token-protected (`X-Reload-Token`). Validates the staged bundle and swaps it in atomically. |
 
@@ -227,6 +227,85 @@ self-hosted model is present under `client/model/` (see
 the JS side uses exactly those files with remote loading disabled, so the check
 covers what shoppers' browsers run: an int8-quantized ONNX model against the
 full-precision pipeline model. On the M5 run it measured 0.9956–0.9985.
+
+## Search test page
+
+`server/public/test.html` is a standalone Persian (RTL) search page for trying
+the live service: type a query, see result cards (image, title, price), the
+result count, a clickable "did you mean", and the round-trip time. A **Semantic
+(AI)** switch compares the two tiers on the same query. Off sends `q` only
+(keyword). On also embeds the query in the browser (`"query: "` prefix) and sends
+`q_vector` (hybrid). Clicking a card opens the product in a new tab.
+
+It makes **no third-party requests**. The page, runtime, WASM, model and font are
+all served from the service's own directory, and every path is relative, so the
+page works under any subdirectory. If the model is missing, fails, or is still
+downloading after 30 s, the search runs keyword-only and a short notice says so.
+If the service itself fails, an error notice is shown.
+
+### 1. Fetch the browser assets (developer machine)
+
+```bash
+python pipeline/tools/fetch_web_model.py        # stdlib only; writes into client/
+```
+
+Every download is pinned (npm version or HuggingFace commit) and checked against
+a hard-coded checksum. The script also checks that the model's `config.json`
+names the configured `SEARCH_MODEL` and dim, so the browser uses the same model
+as `embed.py` (contract 2). Re-running skips files that are already present.
+After fetching, `client/` looks like this (everything except `embedder.js` and
+`tools/` is gitignored):
+
+```
+client/
+    embedder.js
+    vendor/transformers.min.js
+    vendor/ort-wasm.wasm  ort-wasm-simd.wasm  ort-wasm-threaded.wasm  ort-wasm-simd-threaded.wasm
+    model/intfloat/multilingual-e5-small/config.json  tokenizer.json  tokenizer_config.json
+    model/intfloat/multilingual-e5-small/special_tokens_map.json
+    model/intfloat/multilingual-e5-small/onnx/model_quantized.onnx     (~118 MB)
+    fonts/Vazirmatn-Variable.woff2  fonts/OFL.txt
+```
+
+Then run the parity check
+([Offline model-parity check](#offline-model-parity-check)). It uses exactly
+these files.
+
+### 2. Upload (cPanel)
+
+The page expects a `client/` folder **next to it**, that is, inside the web-exposed
+directory that holds `search.php`:
+
+```
+public_html/search-api/          <- server/public (search.php, health.php, test.html, ...)
+    test.html
+    client/                      <- upload the whole client/ folder from step 1 here
+        embedder.js  vendor/  model/  fonts/
+```
+
+- Upload in **binary** mode (`.onnx`, `.wasm`, `.woff2`).
+- **`.wasm` must be served as `application/wasm`.** LiteSpeed does this by
+  default. Check with
+  `curl -sI https://shop.example.com/search-api/client/vendor/ort-wasm-simd.wasm`,
+  and if needed add `AddType application/wasm .wasm` to the folder's `.htaccess`.
+- `client/tools/` does not need to be uploaded.
+- Open `https://shop.example.com/search-api/test.html`. The first visit
+  downloads about 135 MB (the model, ~118 MB, and `tokenizer.json`, ~17 MB). The
+  browser caches them for later visits. HTTPS is needed for that cache.
+
+### Store links and prices
+
+The service only knows the product `url` and `image` exactly as exported, for
+example `index.php?route=product/product&product_id=42` and `catalog/x.jpg`. The
+page resolves relative values against the **store root, taken as the parent of
+the page's directory** (`../`), and images against `../image/`, which matches
+OpenCart's layout when the service is at `/<store>/search-api/`. If yours
+differs, edit `STORE_BASE` / `IMAGE_BASE` at the top of the page's script. Prices
+are shown as stored, with no currency label. Set `PRICE_SUFFIX` to add one.
+
+The page is public wherever `server/public` is. It reads nothing the search
+endpoint does not already expose, but delete it or protect the directory if you
+don't want it reachable in production.
 
 ## Deploy / update runbook
 
@@ -496,6 +575,7 @@ M0–M5. Verify each item on the production host before wide rollout.
 - [x] **M4** — Semantic tier: browser query embedder, cosine top-K + caching, RRF hybrid + business boosts, `/search` vector path, latency guard, eval harness.
 - [x] **M5** — Integration + docs: `INTEGRATION.md` (HTTP contract, storefront reference, model self-hosting), operator runbook, Go-Live checklist.
 - [ ] **M6** — Follow-up: "did you mean" served from the bundle's `spellcheck.txt` (cached per worker + APCu, refreshed on `/reload`); zero-result latency guard.
+- [ ] **M8** — Search test page (`server/public/test.html`), opt-in `with_details` on `/search`, `fetch_web_model.py` for self-hosted browser assets.
 
 ## Contributing
 

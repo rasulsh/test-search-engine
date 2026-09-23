@@ -9,6 +9,10 @@ composer.lock
 # Node / client model assets
 node_modules/
 /client/model/
+# Self-hosted browser runtime + font (pipeline/tools/fetch_web_model.py)
+/client/vendor/
+/client/fonts/
+/server/public/client
 # Offline-only client deps (installed ad hoc for the model-parity check)
 /client/package.json
 /client/package-lock.json

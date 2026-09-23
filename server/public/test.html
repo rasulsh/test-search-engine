@@ -1,0 +1,753 @@
+<!doctype html>
+<html lang="fa" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>آزمایش جستجو</title>
+<!--
+  Search test page. Fully self-contained and same-origin: every URL below is
+  RELATIVE to this page, so it works under any subdirectory, and nothing is loaded
+  from a CDN or HuggingFace. Browser assets (./client/) come from
+  pipeline/tools/fetch_web_model.py; see README, "Search test page".
+-->
+<style>
+  @font-face {
+    font-family: 'Vazirmatn';
+    src: url('./client/fonts/Vazirmatn-Variable.woff2') format('woff2');
+    font-weight: 100 900;
+    font-display: swap;
+  }
+
+  :root {
+    --bg: #ffffff;
+    --surface: #ffffff;
+    --surface-2: #f1f3f4;
+    --text: #202124;
+    --muted: #5f6368;
+    --border: #dfe1e5;
+    --accent: #1a73e8;
+    --accent-soft: #e8f0fe;
+    --warn-bg: #fef7e0;
+    --warn-text: #7a5a00;
+    --error-bg: #fce8e6;
+    --error-text: #a50e0e;
+    --shadow: 0 1px 6px rgba(32, 33, 36, 0.28);
+    --card-shadow: 0 1px 3px rgba(60, 64, 67, 0.15), 0 1px 2px rgba(60, 64, 67, 0.1);
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #202124;
+      --surface: #303134;
+      --surface-2: #3c4043;
+      --text: #e8eaed;
+      --muted: #9aa0a6;
+      --border: #5f6368;
+      --accent: #8ab4f8;
+      --accent-soft: #394457;
+      --warn-bg: #413816;
+      --warn-text: #fdd663;
+      --error-bg: #3c1e1e;
+      --error-text: #f28b82;
+      --shadow: 0 1px 6px rgba(0, 0, 0, 0.5);
+      --card-shadow: 0 1px 3px rgba(0, 0, 0, 0.5);
+    }
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    min-height: 100vh;
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'Vazirmatn', Tahoma, 'Segoe UI', sans-serif;
+    font-size: 15px;
+    line-height: 1.6;
+  }
+
+  main {
+    max-width: 1080px;
+    margin: 0 auto;
+    padding: 0 16px 48px;
+  }
+
+  header {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding-top: 22vh;
+    transition: padding-top 0.25s ease;
+  }
+
+  body.has-results header { padding-top: 24px; }
+
+  h1 {
+    margin: 0 0 24px;
+    font-size: 40px;
+    font-weight: 800;
+    letter-spacing: -0.5px;
+    color: var(--accent);
+  }
+
+  body.has-results h1 { font-size: 24px; margin-bottom: 14px; }
+
+  h1 span { color: var(--text); font-weight: 300; }
+
+  form {
+    display: flex;
+    align-items: center;
+    width: 100%;
+    max-width: 640px;
+    height: 48px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 24px;
+    padding: 0 6px 0 16px;
+  }
+
+  form:hover, form:focus-within { box-shadow: var(--shadow); border-color: transparent; }
+
+  input[type="search"] {
+    flex: 1;
+    min-width: 0;
+    height: 100%;
+    border: 0;
+    outline: 0;
+    background: transparent;
+    color: var(--text);
+    font: inherit;
+    font-size: 16px;
+    padding: 0 12px;
+  }
+
+  button {
+    font: inherit;
+    cursor: pointer;
+  }
+
+  .search-button {
+    height: 36px;
+    padding: 0 18px;
+    border: 0;
+    border-radius: 18px;
+    background: var(--accent);
+    color: var(--bg);
+    font-weight: 600;
+  }
+
+  .search-button:disabled { opacity: 0.6; cursor: progress; }
+
+  .controls {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: center;
+    gap: 10px 16px;
+    margin-top: 16px;
+    color: var(--muted);
+    font-size: 14px;
+  }
+
+  .toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    padding: 4px 6px 4px 12px;
+    border: 1px solid var(--border);
+    border-radius: 20px;
+    background: var(--surface);
+    color: var(--text);
+    cursor: pointer;
+    user-select: none;
+  }
+
+  .toggle input { position: absolute; opacity: 0; pointer-events: none; }
+
+  .switch {
+    position: relative;
+    width: 36px;
+    height: 20px;
+    border-radius: 10px;
+    background: var(--border);
+    transition: background 0.2s;
+    flex: none;
+  }
+
+  .switch::after {
+    content: '';
+    position: absolute;
+    top: 2px;
+    right: 2px;
+    width: 16px;
+    height: 16px;
+    border-radius: 50%;
+    background: #fff;
+    transition: transform 0.2s;
+  }
+
+  .toggle input:checked + .switch { background: var(--accent); }
+  .toggle input:checked + .switch::after { transform: translateX(-16px); }
+  .toggle input:focus-visible + .switch { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+  .model-status {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--border);
+    flex: none;
+  }
+
+  .model-status[data-state="loading"] .dot { background: #f9ab00; }
+  .model-status[data-state="ready"] .dot { background: #1e8e3e; }
+  .model-status[data-state="failed"] .dot { background: #d93025; }
+
+  .progress {
+    width: 100%;
+    max-width: 640px;
+    height: 3px;
+    margin-top: 10px;
+    border-radius: 2px;
+    background: var(--surface-2);
+    overflow: hidden;
+  }
+
+  .progress > div {
+    height: 100%;
+    width: 0;
+    background: var(--accent);
+    transition: width 0.2s;
+  }
+
+  .notice {
+    max-width: 640px;
+    margin: 16px auto 0;
+    padding: 10px 14px;
+    border-radius: 8px;
+    background: var(--warn-bg);
+    color: var(--warn-text);
+    font-size: 14px;
+  }
+
+  .notice.error { background: var(--error-bg); color: var(--error-text); }
+
+  .summary {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px 14px;
+    margin: 24px 0 6px;
+    color: var(--muted);
+    font-size: 14px;
+  }
+
+  .badge {
+    padding: 0 8px;
+    border-radius: 10px;
+    background: var(--surface-2);
+    font-size: 12px;
+    line-height: 20px;
+  }
+
+  .badge.hybrid { background: var(--accent-soft); color: var(--accent); }
+
+  .did-you-mean { margin: 6px 0 0; font-size: 16px; }
+
+  .did-you-mean button {
+    padding: 0;
+    border: 0;
+    background: none;
+    color: var(--accent);
+    font-weight: 700;
+    font-style: italic;
+    text-decoration: underline;
+  }
+
+  .results {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+    gap: 16px;
+    margin: 18px 0 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .card {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    overflow: hidden;
+    border-radius: 12px;
+    background: var(--surface);
+    box-shadow: var(--card-shadow);
+    color: inherit;
+    text-decoration: none;
+    transition: box-shadow 0.15s, transform 0.15s;
+  }
+
+  .card:hover, .card:focus-visible { box-shadow: var(--shadow); transform: translateY(-2px); outline: none; }
+
+  .thumb {
+    aspect-ratio: 1 / 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: #fff;
+    border-bottom: 1px solid var(--surface-2);
+  }
+
+  .thumb img {
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+    padding: 12px;
+  }
+
+  .thumb.empty::after {
+    content: '';
+    width: 40%;
+    height: 40%;
+    border-radius: 8px;
+    background: var(--surface-2);
+  }
+
+  .card-body {
+    display: flex;
+    flex: 1;
+    flex-direction: column;
+    gap: 8px;
+    padding: 12px 14px 14px;
+  }
+
+  .title {
+    display: -webkit-box;
+    -webkit-line-clamp: 3;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+    margin: 0;
+    font-size: 14px;
+    font-weight: 500;
+  }
+
+  .price {
+    margin-top: auto;
+    font-weight: 700;
+    color: var(--text);
+  }
+
+  .meta { color: var(--muted); font-size: 12px; }
+
+  .empty-state {
+    margin: 40px 0;
+    text-align: center;
+    color: var(--muted);
+  }
+
+  footer {
+    margin-top: 40px;
+    text-align: center;
+    color: var(--muted);
+    font-size: 12px;
+  }
+
+  @media (max-width: 480px) {
+    header { padding-top: 14vh; }
+    h1 { font-size: 30px; }
+    .results { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+    .card-body { padding: 10px; }
+    .search-button { padding: 0 14px; }
+  }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>جستجو <span>آزمایشی</span></h1>
+
+    <form id="search-form" role="search">
+      <input id="q" type="search" name="q" autocomplete="off" maxlength="200"
+             placeholder="نام محصول، برند یا مدل را بنویسید…" aria-label="عبارت جستجو">
+      <button id="submit" class="search-button" type="submit">جستجو</button>
+    </form>
+
+    <div class="controls">
+      <label class="toggle" title="روشن: جستجوی ترکیبی (کلیدواژه + معنایی). خاموش: فقط کلیدواژه.">
+        <span>جستجوی معنایی (AI): <b id="semantic-label">روشن</b></span>
+        <input id="semantic" type="checkbox" checked>
+        <span class="switch" aria-hidden="true"></span>
+      </label>
+      <span id="model-status" class="model-status" data-state="idle" aria-live="polite">
+        <span class="dot"></span><span id="model-status-text">مدل هنوز بارگذاری نشده</span>
+      </span>
+    </div>
+
+    <div id="progress" class="progress" hidden><div></div></div>
+  </header>
+
+  <div id="notice" class="notice" role="status" hidden></div>
+
+  <section id="output" aria-live="polite">
+    <div id="summary" class="summary" hidden></div>
+    <p id="did-you-mean" class="did-you-mean" hidden></p>
+    <ol id="results" class="results"></ol>
+    <p id="empty" class="empty-state" hidden></p>
+  </section>
+
+  <footer>صفحهٔ آزمایشی سرویس جستجو · همهٔ فایل‌ها از همین دامنه بارگذاری می‌شوند</footer>
+</main>
+
+<script type="module">
+  // ---- Configuration (all paths are relative to this page) --------------------
+  const SEARCH_URL = './search.php';
+  const CLIENT_BASE = new URL('./client/', location.href);
+  // The service is deployed in a subdirectory of the store (e.g. /search-api/),
+  // so relative product URLs and OpenCart image paths resolve from the parent.
+  const STORE_BASE = new URL('../', location.href);
+  const IMAGE_BASE = new URL('image/', STORE_BASE);
+  const LIMIT = 24;
+  const MAX_QUERY_CHARS = 200;
+  // First search waits this long for the model download before going keyword-only
+  // (the download continues in the background for the next search).
+  const MODEL_WAIT_MS = 30000;
+  const EMBED_TIMEOUT_MS = 5000;
+  const PRICE_SUFFIX = '';
+  const STORAGE_KEY = 'search-test:semantic';
+
+  // UI strings (Persian by request); code, identifiers and console output stay English.
+  const TEXT = {
+    on: 'روشن',
+    off: 'خاموش',
+    modelIdle: 'مدل هنوز بارگذاری نشده',
+    modelLoading: 'در حال بارگذاری مدل…',
+    modelLoadingPct: (pct) => `در حال بارگذاری مدل… ${fmt(pct)}٪`,
+    modelReady: 'مدل آماده است',
+    modelFailed: 'مدل در دسترس نیست',
+    noticeModelFailed: 'مدل معنایی بارگذاری نشد؛ نتایج فقط بر اساس کلیدواژه است.',
+    noticeModelSlow: 'مدل معنایی هنوز در حال بارگذاری است؛ این جستجو فقط با کلیدواژه انجام شد.',
+    noticeEmbedFailed: 'ساخت بردار عبارت جستجو ناموفق بود؛ نتایج فقط بر اساس کلیدواژه است.',
+    serviceError: 'ارتباط با سرویس جستجو برقرار نشد. کمی بعد دوباره امتحان کنید.',
+    searching: 'در حال جستجو…',
+    results: (n) => `${fmt(n)} نتیجه`,
+    roundTrip: (ms) => `زمان پاسخ: ${fmt(ms)} میلی‌ثانیه`,
+    embedTime: (ms) => `ساخت بردار: ${fmt(ms)} میلی‌ثانیه`,
+    modeHybrid: 'ترکیبی (کلیدواژه + معنایی)',
+    modeKeyword: 'فقط کلیدواژه',
+    didYouMean: 'منظورتان این بود: ',
+    noResults: (q) => `برای «${q}» نتیجه‌ای پیدا نشد.`,
+    noTitle: 'بدون عنوان',
+  };
+
+  const numberFormat = new Intl.NumberFormat('fa-IR');
+  function fmt(n) {
+    return numberFormat.format(n);
+  }
+
+  const $ = (id) => document.getElementById(id);
+  const form = $('search-form');
+  const input = $('q');
+  const submitButton = $('submit');
+  const semanticToggle = $('semantic');
+
+  // ---- Embedder (loaded once, lazily; any failure means keyword-only) ---------
+  let embedder = null;
+  let modelState = 'idle'; // idle | loading | ready | failed
+  let modelPromise = null;
+  const downloads = new Map();
+
+  function setModelStatus(state, text) {
+    modelState = state;
+    $('model-status').dataset.state = state;
+    $('model-status-text').textContent = text;
+    $('progress').hidden = state !== 'loading';
+  }
+
+  function onProgress(event) {
+    if (event.status !== 'progress' || !event.total) {
+      return;
+    }
+    downloads.set(event.file, { loaded: event.loaded, total: event.total });
+    let loaded = 0;
+    let total = 0;
+    for (const d of downloads.values()) {
+      loaded += d.loaded;
+      total += d.total;
+    }
+    const pct = Math.min(100, Math.round((loaded / total) * 100));
+    $('progress').firstElementChild.style.width = `${pct}%`;
+    if (modelState === 'loading') {
+      $('model-status-text').textContent = TEXT.modelLoadingPct(pct);
+    }
+  }
+
+  function loadModel() {
+    if (modelPromise) {
+      return modelPromise;
+    }
+    setModelStatus('loading', TEXT.modelLoading);
+    modelPromise = (async () => {
+      const transformers = await import(new URL('vendor/transformers.min.js', CLIENT_BASE).href);
+      const { QueryEmbedder } = await import(new URL('embedder.js', CLIENT_BASE).href);
+      // Self-hosted only: never fall back to huggingface.co or a CDN.
+      transformers.env.allowRemoteModels = false;
+      transformers.env.allowLocalModels = true;
+      transformers.env.localModelPath = new URL('model/', CLIENT_BASE).href;
+      // Absolute URL: the inference worker cannot resolve a relative path.
+      transformers.env.backends.onnx.wasm.wasmPaths = new URL('vendor/', CLIENT_BASE).href;
+      // Inference in a Web Worker keeps the page responsive and lets timeouts fire.
+      transformers.env.backends.onnx.wasm.proxy = true;
+      const instance = new QueryEmbedder({ transformers, progressCallback: onProgress });
+      await instance.init();
+      embedder = instance;
+      setModelStatus('ready', TEXT.modelReady);
+    })().catch((err) => {
+      console.warn('search-test: embedder unavailable, using keyword-only search', err);
+      setModelStatus('failed', TEXT.modelFailed);
+      modelPromise = null; // the next semantic search or toggle retries
+      throw err;
+    });
+    return modelPromise;
+  }
+
+  function withTimeout(promise, ms) {
+    let timer;
+    const timeout = new Promise((resolve) => {
+      timer = setTimeout(resolve, ms, { timedOut: true });
+    });
+    return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+  }
+
+  // Resolves to {vector, ms} or {notice}; never rejects.
+  async function queryVector(q) {
+    try {
+      const loaded = await withTimeout(loadModel(), MODEL_WAIT_MS);
+      if (loaded?.timedOut) {
+        return { notice: TEXT.noticeModelSlow };
+      }
+    } catch {
+      return { notice: TEXT.noticeModelFailed };
+    }
+    const start = performance.now();
+    try {
+      const result = await withTimeout(embedder.embed(q), EMBED_TIMEOUT_MS);
+      if (!Array.isArray(result)) {
+        return { notice: TEXT.noticeEmbedFailed };
+      }
+      return { vector: result, ms: Math.round(performance.now() - start) };
+    } catch (err) {
+      console.warn('search-test: query embedding failed', err);
+      return { notice: TEXT.noticeEmbedFailed };
+    }
+  }
+
+  // ---- Search ------------------------------------------------------------------
+  let searchSeq = 0;
+
+  async function runSearch(rawQuery) {
+    const q = rawQuery.trim().slice(0, MAX_QUERY_CHARS);
+    if (!q) {
+      return;
+    }
+    const seq = ++searchSeq;
+    submitButton.disabled = true;
+    showNotice(null);
+    const semantic = semanticToggle.checked;
+    if (semantic && modelState !== 'ready') {
+      showNotice(TEXT.searching);
+    }
+
+    const body = { q, limit: LIMIT, with_details: true };
+    let notice = null;
+    let embedMs = null;
+    if (semantic) {
+      const embedded = await queryVector(q);
+      if (embedded.vector) {
+        body.q_vector = embedded.vector;
+        embedMs = embedded.ms;
+      } else {
+        notice = embedded.notice;
+      }
+    }
+
+    const start = performance.now();
+    let data = null;
+    try {
+      const res = await fetch(SEARCH_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      if (!res.ok) {
+        throw new Error(`search service returned HTTP ${res.status}`);
+      }
+      data = await res.json();
+    } catch (err) {
+      console.warn('search-test: search request failed', err);
+    }
+    const roundTripMs = Math.round(performance.now() - start);
+
+    if (seq !== searchSeq) {
+      return; // a newer search superseded this one
+    }
+    submitButton.disabled = false;
+    if (!data) {
+      showNotice(TEXT.serviceError, true);
+      return;
+    }
+    showNotice(notice);
+    render(q, data, { hybrid: 'q_vector' in body, roundTripMs, embedMs });
+    const url = new URL(location.href);
+    url.searchParams.set('q', q);
+    history.replaceState(null, '', url);
+  }
+
+  // ---- Rendering ----------------------------------------------------------------
+  function showNotice(text, isError = false) {
+    const el = $('notice');
+    el.hidden = !text;
+    el.textContent = text ?? '';
+    el.classList.toggle('error', isError);
+  }
+
+  // Only http(s) links; a relative value resolves against the store.
+  function safeUrl(value, base) {
+    if (typeof value !== 'string' || value === '') {
+      return null;
+    }
+    try {
+      const url = new URL(value, base);
+      return url.protocol === 'http:' || url.protocol === 'https:' ? url.href : null;
+    } catch {
+      return null;
+    }
+  }
+
+  function el(tag, className, text) {
+    const node = document.createElement(tag);
+    if (className) {
+      node.className = className;
+    }
+    if (text !== undefined) {
+      node.textContent = text;
+    }
+    return node;
+  }
+
+  function card(product) {
+    const href = safeUrl(product.url, STORE_BASE);
+    const link = el(href ? 'a' : 'div', 'card');
+    if (href) {
+      link.href = href;
+      link.target = '_blank';
+      link.rel = 'noopener';
+    }
+
+    const thumb = el('div', 'thumb');
+    const src = safeUrl(product.image, IMAGE_BASE);
+    if (src) {
+      const img = el('img');
+      img.src = src;
+      img.alt = '';
+      img.loading = 'lazy';
+      img.decoding = 'async';
+      img.addEventListener('error', () => {
+        img.remove();
+        thumb.classList.add('empty');
+      });
+      thumb.append(img);
+    } else {
+      thumb.classList.add('empty');
+    }
+
+    const bodyEl = el('div', 'card-body');
+    bodyEl.append(el('h3', 'title', product.title || TEXT.noTitle));
+    if (typeof product.price === 'number' && product.price > 0) {
+      bodyEl.append(el('div', 'price', `${fmt(product.price)}${PRICE_SUFFIX ? ` ${PRICE_SUFFIX}` : ''}`));
+    }
+    bodyEl.append(el('div', 'meta', `#${product.id}`));
+
+    link.append(thumb, bodyEl);
+    const item = el('li');
+    item.append(link);
+    return item;
+  }
+
+  function render(q, data, { hybrid, roundTripMs, embedMs }) {
+    document.body.classList.add('has-results');
+
+    const summary = $('summary');
+    summary.replaceChildren(
+      el('span', null, TEXT.results(data.count ?? 0)),
+      el('span', null, TEXT.roundTrip(roundTripMs)),
+      ...(embedMs !== null ? [el('span', null, TEXT.embedTime(embedMs))] : []),
+      el('span', `badge${hybrid ? ' hybrid' : ''}`, hybrid ? TEXT.modeHybrid : TEXT.modeKeyword),
+    );
+    summary.hidden = false;
+
+    const suggestion = $('did-you-mean');
+    suggestion.replaceChildren();
+    suggestion.hidden = !data.did_you_mean;
+    if (data.did_you_mean) {
+      const button = el('button', null, data.did_you_mean);
+      button.type = 'button';
+      button.addEventListener('click', () => {
+        input.value = data.did_you_mean;
+        runSearch(data.did_you_mean);
+      });
+      suggestion.append(TEXT.didYouMean, button);
+    }
+
+    const products = Array.isArray(data.products)
+      ? data.products
+      : (data.product_ids ?? []).map((id) => ({ id }));
+    $('results').replaceChildren(...products.map(card));
+
+    const empty = $('empty');
+    empty.hidden = products.length > 0;
+    empty.textContent = products.length > 0 ? '' : TEXT.noResults(q);
+  }
+
+  // ---- Wiring --------------------------------------------------------------------
+  function applyToggle() {
+    const on = semanticToggle.checked;
+    $('semantic-label').textContent = on ? TEXT.on : TEXT.off;
+    try {
+      localStorage.setItem(STORAGE_KEY, on ? '1' : '0');
+    } catch {
+      // storage unavailable (private mode): the toggle still works for this visit
+    }
+    if (on && modelState !== 'ready') {
+      loadModel().catch(() => {});
+    }
+  }
+
+  try {
+    if (localStorage.getItem(STORAGE_KEY) === '0') {
+      semanticToggle.checked = false;
+    }
+  } catch {
+    // ignore: default is on
+  }
+  semanticToggle.addEventListener('change', applyToggle);
+  applyToggle();
+
+  form.addEventListener('submit', (event) => {
+    event.preventDefault();
+    runSearch(input.value);
+  });
+
+  const initial = new URL(location.href).searchParams.get('q');
+  if (initial) {
+    input.value = initial;
+    runSearch(initial);
+  } else {
+    input.focus();
+  }
+</script>
+</body>
+</html>

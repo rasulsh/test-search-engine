@@ -72,6 +72,7 @@ Request headers: `Content-Type: application/json`.
 | `q_vector` | number[] | no | L2-normalized query embedding from `client/embedder.js` (length = configured dim, 384 by default). Absent, non-numeric, or wrong-length vectors are **ignored** and the request is answered keyword-only. Never an error. |
 | `customer_id` | string | no | Stored in `search_logs` only. **Must be a JSON string.** A number is silently logged as `NULL`, so send `String(id)`. Longer than 64 characters: the search is answered but its log row is dropped. |
 | `limit` | int | no | Maximum number of ids to return. Values below 1, or non-numeric values, are treated as 1. The default is `SEARCH_DEFAULT_LIMIT` (20). There is no server-side maximum, so the storefront should keep it at 50 or less. |
+| `with_details` | bool | no | Only the JSON value `true` enables it (a string `"true"` or `1` is ignored). Adds a `products` array with display fields. Omit it and the response is exactly as below. Used by the search test page; the storefront renders from OpenCart and does not need it. |
 
 Response `200`:
 
@@ -91,6 +92,7 @@ Response `200`:
 | `did_you_mean` | `null`, or a string when the literal query matched nothing and results came from a keyboard-layout fix (`ئشزذخخن` returns `macbook`) or a spelling fix (`macbok` returns `macbook`). The returned ids are for the suggestion. Show it as "Showing results for …". It derives from shopper input, so render it as text, never as HTML. |
 | `count` | `product_ids.length`. |
 | `product_ids` | Ordered OpenCart `product_id`s, best first. The service returns ids only; the storefront renders the products. |
+| `products` | Only with `"with_details": true`: `[{"id", "title", "url", "image", "price"}]` in the same order as `product_ids`, read from the `products` table (`title` is the stored title, `url`/`image` exactly as exported, `price` a number). An id missing from the table is skipped. |
 
 Semantics the storefront should know:
 
@@ -384,6 +386,12 @@ npm --prefix client install @xenova/transformers@2.17.2   # also used by the par
 # copy client/node_modules/@xenova/transformers/dist/{transformers.min.js,ort-wasm*.wasm}
 # to public_html/search-client/vendor/
 ```
+
+`python pipeline/tools/fetch_web_model.py` does all of the above in one step. It
+downloads the same pinned files (model at the commit above, transformers.js
+2.17.2, plus the Vazirmatn font for the test page), verifies each file's
+checksum, and writes them to `client/model/`, `client/vendor/` and
+`client/fonts/`. See the README, "Search test page".
 
 The browser model is int8-quantized, while the offline pipeline embeds products
 with the full-precision model. **Run the parity check before trusting Tier 2.**

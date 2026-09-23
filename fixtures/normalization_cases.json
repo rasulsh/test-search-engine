@@ -131,5 +131,52 @@
       "input": "أ",
       "expected": "ا"
     }
+  ],
+  "sku_cases": [
+    {
+      "name": "empty sku",
+      "input": "",
+      "expected": ""
+    },
+    {
+      "name": "plain upper",
+      "input": "AB1234",
+      "expected": "ab1234"
+    },
+    {
+      "name": "hyphen and space",
+      "input": "AB-12 34",
+      "expected": "ab1234"
+    },
+    {
+      "name": "dots slashes underscores",
+      "input": "ab.12/34_x",
+      "expected": "ab1234x"
+    },
+    {
+      "name": "leading and trailing separators",
+      "input": " -SKU-99- ",
+      "expected": "sku99"
+    },
+    {
+      "name": "persian digits",
+      "input": "کد-۱۲۳",
+      "expected": "کد123"
+    },
+    {
+      "name": "zwnj and arabic kaf",
+      "input": "كد‌الف 7",
+      "expected": "کدالف7"
+    },
+    {
+      "name": "punctuation only",
+      "input": "-/._ #",
+      "expected": ""
+    },
+    {
+      "name": "hash and plus",
+      "input": "#A+B 1",
+      "expected": "ab1"
+    }
   ]
 }

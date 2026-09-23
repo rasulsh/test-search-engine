@@ -53,6 +53,10 @@ return [
         'title_weight'      => (float) $setting('SEARCH_TITLE_WEIGHT', '10.0'),
         'desc_weight'       => (float) $setting('SEARCH_DESC_WEIGHT', '1.0'),
         'phrase_bonus'      => (float) $setting('SEARCH_PHRASE_BONUS', '5.0'),
+        // SKU search (M12): a product whose normalized SKU equals the query
+        // ranks first, then SKU prefix matches, above all text matches. Prefix
+        // matching needs at least this many characters and a digit in the query.
+        'sku_prefix_min_length' => (int) $setting('SEARCH_SKU_PREFIX_MIN_LENGTH', '4'),
         // Global cosine top-K width for Tier 2 (candidates fused with keyword).
         'semantic_top_k'    => (int) (getenv('SEARCH_SEMANTIC_TOP_K') ?: 100),
         // Relevance floor (cosine) for Tier 2 neighbours. The nearest vectors of

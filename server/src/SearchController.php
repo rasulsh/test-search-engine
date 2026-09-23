@@ -108,7 +108,8 @@ final class SearchController
             null,
             (float) ($search['title_weight'] ?? 10.0),
             (float) ($search['desc_weight'] ?? 1.0),
-            (float) ($search['phrase_bonus'] ?? 5.0)
+            (float) ($search['phrase_bonus'] ?? 5.0),
+            (int) ($search['sku_prefix_min_length'] ?? 4)
         );
         // The bundle dictionary is cached per worker (and in APCu); the table scan
         // is only a fallback for a data directory without spellcheck.txt.
@@ -188,7 +189,13 @@ final class SearchController
         $didYouMean = null;
         $applied = false;
 
-        if (count($results) < $this->suggestMinResults && $normalized !== '') {
+        $skuIds = array_values(array_map(
+            static fn (array $row): int => $row['product_id'],
+            array_filter($results, static fn (array $row): bool => $row['match_type'] === Keyword::MATCH_SKU)
+        ));
+
+        // A SKU hit is the product the shopper asked for by code: no suggestion.
+        if ($skuIds === [] && count($results) < $this->suggestMinResults && $normalized !== '') {
             [$alternative, $didYouMean] = $this->recover($raw, $normalized, $limit, count($results));
             // A literal match, however thin, is what the shopper typed: keep it
             // and only offer the suggestion. With no literal match, serve it.
@@ -209,7 +216,7 @@ final class SearchController
         // Tier 2 is additive: only reshuffle when a usable vector and bundle are
         // present. Otherwise the keyword ordering above stands.
         if ($queryVector !== null && $this->semanticEnabled()) {
-            [$productIds, $cosineScores] = $this->hybrid($keywordIds, $titleIds, $queryVector, $limit);
+            [$productIds, $cosineScores] = $this->hybrid($keywordIds, $titleIds, $skuIds, $queryVector, $limit);
         }
 
         $latencyMs = (int) round((microtime(true) - $start) * 1000);
@@ -254,10 +261,11 @@ final class SearchController
      *
      * @param list<int> $keywordIds
      * @param list<int> $titleIds keyword ids that matched in the title
+     * @param list<int> $skuIds keyword ids that matched by SKU, kept first in order
      * @param list<float> $queryVector
      * @return array{0: list<int>, 1: list<?float>}
      */
-    private function hybrid(array $keywordIds, array $titleIds, array $queryVector, ?int $limit): array
+    private function hybrid(array $keywordIds, array $titleIds, array $skuIds, array $queryVector, ?int $limit): array
     {
         $semantic = $this->vectors->topK($queryVector, $this->semanticTopK, $this->semanticMinScore);
         $semanticIds = array_map(static fn (array $row): int => $row['product_id'], $semantic);
@@ -289,6 +297,13 @@ final class SearchController
             $effectiveLimit = $limit !== null ? max(1, $limit) : $this->defaultLimit;
             $fused = $this->ranker->fuse($keywordIds, $semanticIds, $signals, $effectiveLimit, $titleIds);
             $productIds = array_map(static fn (array $row): int => $row['product_id'], $fused);
+            // Semantic evidence reorders the title band; SKU hits stay on top.
+            $pinned = array_values(array_intersect($skuIds, $keywordIds));
+            $productIds = array_slice(
+                array_values(array_unique(array_merge($pinned, $productIds))),
+                0,
+                $effectiveLimit
+            );
         }
 
         $missing = array_values(array_diff($productIds, array_keys($known)));

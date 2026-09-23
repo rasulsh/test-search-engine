@@ -40,26 +40,31 @@ final class ProductLoader
         $stmt = $this->pdo->prepare(
             "REPLACE INTO {$this->table}
                 (product_id, title, description, normalized_title, normalized_desc,
-                 brand, category, model, price, stock, url, image, popularity)
+                 brand, category, model, sku, normalized_sku, price, stock, url, image, popularity)
              VALUES
                 (:product_id, :title, :description, :normalized_title, :normalized_desc,
-                 :brand, :category, :model, :price, :stock, :url, :image, :popularity)"
+                 :brand, :category, :model, :sku, :normalized_sku, :price, :stock, :url, :image, :popularity)"
         );
 
         $count = 0;
         foreach ($rows as $row) {
             $title = (string) ($row['title'] ?? '');
             $description = (string) ($row['description'] ?? '');
+            $sku = (string) ($row['sku'] ?? '');
+            $normalizedSku = Normalizer::normalizeSku($sku);
 
             $stmt->execute([
                 'product_id'       => (int) ($row['product_id'] ?? 0),
                 'title'            => $title,
                 'description'      => $description,
-                'normalized_title' => ($this->normalize)($title),
+                // Same composition as pipeline/build.py: the SKU is title-weighted text.
+                'normalized_title' => trim(($this->normalize)($title) . ' ' . $normalizedSku),
                 'normalized_desc'  => ($this->normalize)($description),
                 'brand'            => (string) ($row['brand'] ?? ''),
                 'category'         => (string) ($row['category'] ?? ''),
                 'model'            => (string) ($row['model'] ?? ''),
+                'sku'              => $sku,
+                'normalized_sku'   => $normalizedSku,
                 'price'            => (float) ($row['price'] ?? 0),
                 'stock'            => (int) ($row['stock'] ?? 0),
                 'url'              => (string) ($row['url'] ?? ''),

@@ -39,7 +39,7 @@ from typing import Any
 
 import config as pipeline_config
 from embed import create_embedder, embed_passages
-from normalize import NORMALIZATION_VERSION, normalize
+from normalize import NORMALIZATION_VERSION, normalize, normalize_sku
 
 # keyword.py shadows the stdlib `keyword` module (pre-imported under pytest), so
 # load the local file by path rather than via a plain import.
@@ -53,13 +53,18 @@ _kw_spec.loader.exec_module(_keyword)
 # Documented input columns build.py expects.
 INPUT_COLUMNS = (
     "id", "title_fa", "title_en", "desc", "brand", "category",
-    "model", "price", "stock", "url", "image", "popularity",
+    "model", "sku", "price", "stock", "url", "image", "popularity",
 )
 
 _SERVER_COLUMNS = (
     "product_id", "title", "description", "normalized_title", "normalized_desc",
-    "brand", "category", "model", "price", "stock", "url", "image", "popularity",
+    "brand", "category", "model", "sku", "normalized_sku",
+    "price", "stock", "url", "image", "popularity",
 )
+
+# The staging table is created from the live table's definition in the schema,
+# so products.load.sql is self-contained and carries schema changes.
+SCHEMA_PATH = Path(__file__).resolve().parents[1] / "db" / "schema.sql"
 
 
 # --- Input parsing ---------------------------------------------------------
@@ -71,7 +76,7 @@ def read_products(path: str | Path) -> list[dict[str, Any]]:
     return [_clean_row(row) for row in rows]
 
 
-_TEXT_COLUMNS = ("title_fa", "title_en", "desc", "brand", "category", "model")
+_TEXT_COLUMNS = ("title_fa", "title_en", "desc", "brand", "category", "model", "sku")
 _TAG = re.compile(r"<[^>]*>")
 _SPACE = re.compile(r"\s+")  # str.isspace() set: ZWNJ is NOT whitespace, so it survives
 
@@ -231,15 +236,21 @@ def index_description(description: str, max_chars: int) -> str:
 def to_server_row(product: dict[str, Any], desc_index_chars: int = 0) -> dict[str, Any]:
     title = f"{product.get('title_fa') or ''} {product.get('title_en') or ''}".strip()
     description = str(product.get("desc") or "")
+    sku = str(product.get("sku") or "")
+    normalized_sku = normalize_sku(sku)
     return {
         "product_id": int(product["id"]),
         "title": title,
         "description": description,
-        "normalized_title": normalize(title),
+        # The SKU joins the title-weighted text so a partial code still finds
+        # the product through FULLTEXT; exact/prefix hits rank first separately.
+        "normalized_title": f"{normalize(title)} {normalized_sku}".strip(),
         "normalized_desc": normalize(index_description(description, desc_index_chars)),
         "brand": str(product.get("brand") or ""),
         "category": str(product.get("category") or ""),
         "model": str(product.get("model") or ""),
+        "sku": sku,
+        "normalized_sku": normalized_sku,
         "price": float(product.get("price") or 0),
         "stock": int(product.get("stock") or 0),
         "url": str(product.get("url") or ""),
@@ -248,12 +259,36 @@ def to_server_row(product: dict[str, Any], desc_index_chars: int = 0) -> dict[st
     }
 
 
+def staging_ddl(schema_sql: str, products_table: str, staging_table: str) -> str:
+    """DROP + CREATE for the staging table, copied from the live table's
+    definition in db/schema.sql. Comment lines are dropped so the statement can
+    be split on ";" line ends without tracking comment syntax."""
+    code = "\n".join(
+        line for line in schema_sql.splitlines() if not line.strip().startswith("--")
+    )
+    match = re.search(
+        rf"CREATE TABLE IF NOT EXISTS `?{re.escape(products_table)}`?\s*(\(.*?;)",
+        code,
+        re.DOTALL,
+    )
+    if match is None:
+        raise ValueError(f"no CREATE TABLE for {products_table!r} in the schema")
+    return (
+        f"DROP TABLE IF EXISTS `{staging_table}`;\n"
+        f"CREATE TABLE `{staging_table}` {match.group(1)}\n"
+    )
+
+
 def build_products_sql(
-    server_rows: list[dict[str, Any]], staging_table: str, max_statement_bytes: int
+    server_rows: list[dict[str, Any]],
+    staging_table: str,
+    max_statement_bytes: int,
+    ddl: str = "",
 ) -> str:
     """REPLACE statements for the staging table, each at most max_statement_bytes
     (a single oversized row still gets its own statement). One statement for a
-    whole catalog exceeds a shared host's max_allowed_packet and fails the load."""
+    whole catalog exceeds a shared host's max_allowed_packet and fails the load.
+    `ddl` (see staging_ddl) is emitted first, so the file recreates the table."""
     def quote(value: Any) -> str:
         if isinstance(value, (int, float)):
             return str(value)
@@ -277,7 +312,7 @@ def build_products_sql(
         size += tup_size
     if batch:
         statements.append(header + ",\n".join(batch) + ";\n")
-    return "SET NAMES utf8mb4;\n\n" + "\n".join(statements)
+    return "SET NAMES utf8mb4;\n\n" + (ddl + "\n" if ddl else "") + "\n".join(statements)
 
 
 # --- Orchestration ---------------------------------------------------------
@@ -290,7 +325,8 @@ def build_bundle(
 
     dim = int(config["model"]["dim"])
     desc_limit = int(config["build"]["desc_char_limit"])
-    staging_table = f"{config['build']['products_table']}_new"
+    products_table = config["build"]["products_table"]
+    staging_table = f"{products_table}_new"
 
     desc_index_chars = int(config["build"].get("desc_index_chars", 0))
     server_rows = [to_server_row(p, desc_index_chars) for p in products]
@@ -308,7 +344,10 @@ def build_bundle(
     )
     (out / "products.load.sql").write_text(
         build_products_sql(
-            server_rows, staging_table, int(config["build"]["max_statement_bytes"])
+            server_rows,
+            staging_table,
+            int(config["build"]["max_statement_bytes"]),
+            staging_ddl(SCHEMA_PATH.read_text(encoding="utf-8"), products_table, staging_table),
         ),
         encoding="utf-8",
     )

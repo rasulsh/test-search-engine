@@ -15,7 +15,13 @@ use PHPUnit\Framework\TestCase;
  */
 final class NormalizerParityTest extends TestCase
 {
-    /** @return array{normalization_version: int, cases: list<array{name: string, input: string, expected: string}>} */
+    /**
+     * @return array{
+     *     normalization_version: int,
+     *     cases: list<array{name: string, input: string, expected: string}>,
+     *     sku_cases: list<array{name: string, input: string, expected: string}>
+     * }
+     */
     private static function fixture(): array
     {
         $path = dirname(__DIR__, 2) . '/fixtures/normalization_cases.json';
@@ -50,6 +56,23 @@ final class NormalizerParityTest extends TestCase
     public function testNormalizationIsIdempotent(string $input, string $expected): void
     {
         self::assertSame($expected, Normalizer::normalize($expected));
+    }
+
+    /**
+     * @return iterable<string, array{0: string, 1: string}>
+     */
+    public static function skuCaseProvider(): iterable
+    {
+        foreach (self::fixture()['sku_cases'] as $case) {
+            yield $case['name'] => [$case['input'], $case['expected']];
+        }
+    }
+
+    #[DataProvider('skuCaseProvider')]
+    public function testSkuNormalizationMatchesExpected(string $input, string $expected): void
+    {
+        self::assertSame($expected, Normalizer::normalizeSku($input));
+        self::assertSame($expected, Normalizer::normalizeSku($expected));
     }
 
     public function testNullNormalizesToEmptyString(): void

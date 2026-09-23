@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Tests;
 
+use App\Keyword;
 use App\Reload;
 use App\ReloadException;
 use App\Speller;
@@ -262,6 +263,172 @@ final class ReloadTest extends DatabaseTestCase
         $this->createStaging(3);
         $incoming = $this->makeIncoming(3, self::DIM, ['checksum' => 'deadbeef']);
         $this->expectReloadReason($incoming, 'checksum_mismatch');
+    }
+
+    // --- one-command release: load staging from products.load.sql (M12) ------
+
+    private const LOAD_SAMPLE_IDS = [2001, 2002, 2003, 2004];
+
+    /** Incoming bundle for fixtures/products.load.sample.sql (4 products). */
+    private function makeIncomingWithLoadFile(?string $loadSql = null): string
+    {
+        $dir = $this->makeIncoming(count(self::LOAD_SAMPLE_IDS));
+        $sample = (string) file_get_contents(self::repoRoot() . '/fixtures/products.load.sample.sql');
+        file_put_contents($dir . '/products.load.sql', $loadSql ?? $sample);
+
+        return $dir;
+    }
+
+    private function sampleLoadSql(): string
+    {
+        return (string) file_get_contents(self::repoRoot() . '/fixtures/products.load.sample.sql');
+    }
+
+    private function stagingExists(): bool
+    {
+        return (int) $this->pdo->query(
+            "SELECT COUNT(*) FROM information_schema.tables
+             WHERE table_schema = DATABASE() AND table_name = 'products_new'"
+        )->fetchColumn() > 0;
+    }
+
+    /** Live table and directory are exactly as before a rejected reload. */
+    private function assertNothingSwapped(string $dataDir, string $incomingDir): void
+    {
+        self::assertSame([1, 2], array_map('intval', $this->pdo
+            ->query('SELECT product_id FROM products ORDER BY product_id')
+            ->fetchAll(\PDO::FETCH_COLUMN)));
+        self::assertSame(0, (int) $this->pdo->query(
+            "SELECT COUNT(*) FROM information_schema.tables
+             WHERE table_schema = DATABASE() AND table_name = 'products_old'"
+        )->fetchColumn());
+        self::assertFileExists($dataDir . '/marker.txt');
+        self::assertDirectoryDoesNotExist($dataDir . '_old');
+        self::assertDirectoryExists($incomingDir);
+    }
+
+    /** @return array{0: string, 1: string} data dir (with a marker) and a failing reason */
+    private function runLoadExpectingFailure(string $incomingDir): array
+    {
+        $this->insertProduct('products', 1);
+        $this->insertProduct('products', 2);
+        $dataDir = $this->newTempDir('_data');
+        file_put_contents($dataDir . '/marker.txt', 'old');
+        try {
+            (new Reload($this->pdo, $this->config($dataDir, $incomingDir)))->run(true);
+            self::fail('expected ReloadException');
+        } catch (ReloadException $e) {
+            return [$dataDir, $e->reason()];
+        }
+    }
+
+    public function testLoadStagingFromBundleThenSwap(): void
+    {
+        // Live table from before the sku column existed: the load file recreates
+        // staging from the current schema, so the swap brings the new columns.
+        $this->insertProduct('products', 1);
+        $this->insertProduct('products', 2);
+        $this->pdo->exec(
+            'ALTER TABLE products DROP INDEX idx_normalized_sku, DROP COLUMN normalized_sku, DROP COLUMN sku'
+        );
+        $this->pdo->exec('CREATE TABLE products_new (stale INT)'); // leftover from an earlier attempt
+        $dataDir = $this->newTempDir('_data');
+        file_put_contents($dataDir . '/marker.txt', 'old');
+        $this->tempDirs[] = $dataDir . '_old';
+        $incomingDir = $this->makeIncomingWithLoadFile();
+
+        $result = (new Reload($this->pdo, $this->config($dataDir, $incomingDir)))->run(true);
+
+        self::assertSame(4, $result['count']);
+        self::assertSame(self::LOAD_SAMPLE_IDS, array_map('intval', $this->pdo
+            ->query('SELECT product_id FROM products ORDER BY product_id')
+            ->fetchAll(\PDO::FETCH_COLUMN)));
+        self::assertSame(2, $this->rowCount('products_old'));
+        self::assertFileExists($dataDir . '/products.load.sql');
+        self::assertFileExists($dataDir . '_old/marker.txt');
+        // Escaped text survived the statement splitter intact.
+        self::assertSame("world's best noise cancelling, over-ear", $this->pdo
+            ->query('SELECT description FROM products WHERE product_id = 2002')->fetchColumn());
+        // The swapped-in table serves SKU search.
+        $top = (new Keyword($this->pdo, 'products'))->search('apl ip15p 128')[0];
+        self::assertSame([2001, Keyword::MATCH_SKU], [$top['product_id'], $top['match_type']]);
+    }
+
+    public function testFailedStagingStatementDoesNotSwap(): void
+    {
+        // The second REPLACE names a column that does not exist: the load stops
+        // there, with the first statement's rows already in staging.
+        $sql = $this->sampleLoadSql();
+        $second = strpos($sql, 'REPLACE INTO', strpos($sql, 'REPLACE INTO') + 1);
+        self::assertIsInt($second);
+        $sql = substr($sql, 0, $second) . str_replace('(product_id,', '(no_such_column,', substr($sql, $second));
+        $incomingDir = $this->makeIncomingWithLoadFile($sql);
+
+        [$dataDir, $reason] = $this->runLoadExpectingFailure($incomingDir);
+
+        self::assertSame('staging_load_failed', $reason);
+        $this->assertNothingSwapped($dataDir, $incomingDir);
+        self::assertGreaterThan(0, $this->rowCount('products_new')); // partial, never swapped
+    }
+
+    public function testTruncatedLoadFileDoesNotSwap(): void
+    {
+        // Cut mid-statement (an interrupted upload).
+        $sql = $this->sampleLoadSql();
+        $incomingDir = $this->makeIncomingWithLoadFile(substr($sql, 0, (int) (strlen($sql) * 0.8)));
+
+        [$dataDir, $reason] = $this->runLoadExpectingFailure($incomingDir);
+
+        self::assertSame('staging_load_failed', $reason);
+        $this->assertNothingSwapped($dataDir, $incomingDir);
+    }
+
+    public function testLoadMissingItsLastStatementIsCaughtByTheCountCheck(): void
+    {
+        // Cut exactly at a statement boundary: every statement succeeds, but
+        // staging holds fewer rows than meta.count, so nothing is swapped.
+        $sql = $this->sampleLoadSql();
+        $incomingDir = $this->makeIncomingWithLoadFile(substr($sql, 0, (int) strrpos($sql, 'REPLACE INTO')));
+
+        [$dataDir, $reason] = $this->runLoadExpectingFailure($incomingDir);
+
+        self::assertSame('count_mismatch', $reason);
+        $this->assertNothingSwapped($dataDir, $incomingDir);
+    }
+
+    public function testStatementOutsideTheStagingTableIsRefused(): void
+    {
+        $incomingDir = $this->makeIncomingWithLoadFile("SET NAMES utf8mb4;\nDROP TABLE products;\n");
+
+        [$dataDir, $reason] = $this->runLoadExpectingFailure($incomingDir);
+
+        self::assertSame('unexpected_statement', $reason);
+        $this->assertNothingSwapped($dataDir, $incomingDir);
+    }
+
+    public function testMissingLoadFileIsRejected(): void
+    {
+        $incomingDir = $this->makeIncoming(4); // no products.load.sql
+
+        [$dataDir, $reason] = $this->runLoadExpectingFailure($incomingDir);
+
+        self::assertSame('missing_load_sql', $reason);
+        $this->assertNothingSwapped($dataDir, $incomingDir);
+    }
+
+    public function testIncompatibleBundleIsRejectedBeforeLoading(): void
+    {
+        $incomingDir = $this->makeIncomingWithLoadFile();
+        file_put_contents($incomingDir . '/meta.json', (string) json_encode(array_merge(
+            json_decode((string) file_get_contents($incomingDir . '/meta.json'), true),
+            ['model' => 'other/model']
+        )));
+
+        [$dataDir, $reason] = $this->runLoadExpectingFailure($incomingDir);
+
+        self::assertSame('model_mismatch', $reason);
+        self::assertFalse($this->stagingExists()); // the load never started
+        $this->assertNothingSwapped($dataDir, $incomingDir);
     }
 
     private function expectReloadReason(string $incomingDir, string $reason): void

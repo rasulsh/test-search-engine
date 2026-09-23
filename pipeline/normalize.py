@@ -82,3 +82,10 @@ def normalize(text: str | None) -> str:
     text = re.sub(r" +", " ", text)
 
     return text.strip()
+
+
+def normalize_sku(sku: str | None) -> str:
+    """Canonical SKU: normalized text with every non-letter/non-digit removed,
+    so "AB-12 34", "ab.1234" and "AB1234" are one code. Mirrors
+    Normalizer::normalizeSku (letters/digits as in the shared tokenizer)."""
+    return "".join(ch for ch in normalize(sku) if ch.isalnum())

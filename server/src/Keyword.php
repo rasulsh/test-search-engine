@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App;
 
 use PDO;
+use PDOException;
 
 /**
  * Tier 1 keyword search over the FULLTEXT-indexed normalized_* columns.
@@ -29,6 +30,12 @@ use PDO;
  * (the FULLTEXT "word*" semantics) via REGEXP. Every row with at least one
  * token in its title ranks above every description-only row, whatever the
  * weights; the weights order rows within those two bands.
+ *
+ * SKU (M12): shoppers paste product codes. A product whose normalized SKU
+ * equals the query's (Normalizer::normalizeSku) ranks first, then SKU prefix
+ * matches, above every text match. Prefix matching needs at least
+ * sku_prefix_min_length characters and a digit, so an ordinary word ("sony")
+ * never pulls products whose code happens to start with it to the top.
  */
 final class Keyword
 {
@@ -41,6 +48,12 @@ final class Keyword
     private float $titleWeight;
     private float $descWeight;
     private float $phraseBonus;
+    private int $skuPrefixMinLength;
+
+    public const MATCH_SKU = 'sku';
+    /** SKU hits outrank any text score (title band tops out near title_weight + phrase_bonus). */
+    private const SKU_EXACT_SCORE = 2000000.0;
+    private const SKU_PREFIX_SCORE = 1000000.0;
 
     /** Non-word boundary, matching Tokenizer's split on [^\p{L}\p{N}]. */
     private const BOUNDARY = '[^\\p{L}\\p{N}]';
@@ -53,7 +66,8 @@ final class Keyword
         ?callable $normalizer = null,
         float $titleWeight = 10.0,
         float $descWeight = 1.0,
-        float $phraseBonus = 5.0
+        float $phraseBonus = 5.0,
+        int $skuPrefixMinLength = 4
     ) {
         $this->pdo = $pdo;
         $this->table = Identifier::quote($productsTable);
@@ -65,6 +79,7 @@ final class Keyword
         $this->titleWeight = max(0.0, $titleWeight);
         $this->descWeight = max(0.0, $descWeight);
         $this->phraseBonus = max(0.0, $phraseBonus);
+        $this->skuPrefixMinLength = max(1, $skuPrefixMinLength);
     }
 
     /**
@@ -78,6 +93,28 @@ final class Keyword
             return [];
         }
 
+        $skuHits = $this->skuSearch(Normalizer::normalizeSku($query), $limit);
+        $textHits = $this->textSearch($tokens, $limit);
+        if ($skuHits === []) {
+            return $textHits;
+        }
+
+        $seen = array_flip(array_column($skuHits, 'product_id'));
+        foreach ($textHits as $hit) {
+            if (!isset($seen[$hit['product_id']])) {
+                $skuHits[] = $hit;
+            }
+        }
+
+        return array_slice($skuHits, 0, $limit);
+    }
+
+    /**
+     * @param list<string> $tokens
+     * @return list<array{product_id: int, score: float, match_type: string, title_match: bool}>
+     */
+    private function textSearch(array $tokens, int $limit): array
+    {
         foreach ($tokens as $token) {
             if (mb_strlen($token) < $this->minTokenSize) {
                 return $this->likeSearch($tokens, $limit);
@@ -85,6 +122,49 @@ final class Keyword
         }
 
         return $this->fulltextSearch($tokens, $limit);
+    }
+
+    /**
+     * Exact SKU matches first, then prefix matches (shortest code first), via
+     * the normalized_sku index. SKU hits count as title matches, so the
+     * description-only gate and the hybrid merge keep them.
+     *
+     * @return list<array{product_id: int, score: float, match_type: string, title_match: bool}>
+     */
+    private function skuSearch(string $sku, int $limit): array
+    {
+        if ($sku === '') {
+            return [];
+        }
+        $prefix = mb_strlen($sku) >= $this->skuPrefixMinLength && preg_match('/\p{N}/u', $sku) === 1;
+
+        $sql = "SELECT product_id, normalized_sku = ? AS exact_hit
+                FROM {$this->table}
+                WHERE " . ($prefix ? 'normalized_sku LIKE ?' : 'normalized_sku = ?') . "
+                ORDER BY exact_hit DESC, CHAR_LENGTH(normalized_sku) ASC, popularity DESC, product_id ASC
+                LIMIT " . (int) $limit;
+        try {
+            $stmt = $this->pdo->prepare($sql);
+            $stmt->execute([$sku, $prefix ? $this->escapeLike($sku) . '%' : $sku]);
+        } catch (PDOException $e) {
+            // 42S22 (unknown column): a products table from a bundle built before
+            // M12 is still live, e.g. between code upload and reload. Text search
+            // still finds the product; the next reload adds the column.
+            if ($e->getCode() === '42S22') {
+                return [];
+            }
+            throw $e;
+        }
+
+        return array_map(
+            static fn (array $row): array => [
+                'product_id'  => (int) $row['product_id'],
+                'score'       => (int) $row['exact_hit'] === 1 ? self::SKU_EXACT_SCORE : self::SKU_PREFIX_SCORE,
+                'match_type'  => self::MATCH_SKU,
+                'title_match' => true,
+            ],
+            $stmt->fetchAll(PDO::FETCH_ASSOC)
+        );
     }
 
     /**

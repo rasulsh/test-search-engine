@@ -22,8 +22,11 @@ def _error_codes() -> set[str]:
 
 
 def _reload_reasons() -> set[str]:
-    source = (REPO_ROOT / "server" / "src" / "Reload.php").read_text(encoding="utf-8")
-    return set(re.findall(r"new ReloadException\(\s*'([a-z_]+)'", source))
+    reasons: set[str] = set()
+    for php in (REPO_ROOT / "server" / "src").glob("*.php"):
+        source = php.read_text(encoding="utf-8")
+        reasons |= set(re.findall(r"new ReloadException\(\s*'([a-z_]+)'", source))
+    return reasons
 
 
 def test_every_endpoint_error_code_is_documented() -> None:
@@ -35,6 +38,6 @@ def test_every_endpoint_error_code_is_documented() -> None:
 
 def test_every_reload_reason_is_documented() -> None:
     reasons = _reload_reasons()
-    assert {"model_mismatch", "dim_mismatch", "count_mismatch"} <= reasons
+    assert {"model_mismatch", "dim_mismatch", "count_mismatch", "staging_load_failed"} <= reasons
     missing = sorted(reason for reason in reasons if f"`{reason}`" not in DOC)
     assert not missing, f"invalid_bundle reasons missing from INTEGRATION.md: {missing}"

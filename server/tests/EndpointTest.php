@@ -19,6 +19,7 @@ final class EndpointTest extends TestCase
     private static $process = null;
     private static string $baseUrl = '';
     private static ?string $dataDir = null;
+    private static ?string $incomingDir = null;
 
     public static function setUpBeforeClass(): void
     {
@@ -67,6 +68,19 @@ final class EndpointTest extends TestCase
         file_put_contents(self::$dataDir . '/spellcheck.txt', "body\t9\nsony\t2\n");
         $env['SEARCH_DATA_DIR'] = self::$dataDir;
 
+        // A staged bundle whose meta is compatible but which has no
+        // products.load.sql, so /reload stops before any swap either way.
+        self::$incomingDir = sys_get_temp_dir() . '/endpoint_incoming_' . uniqid('', true);
+        mkdir(self::$incomingDir, 0777, true);
+        file_put_contents(self::$incomingDir . '/meta.json', (string) json_encode([
+            'model' => getenv('SEARCH_MODEL') ?: 'intfloat/multilingual-e5-small',
+            'dim' => (int) (getenv('SEARCH_MODEL_DIM') ?: 384),
+            'normalization_version' => 2,
+            'count' => 0,
+        ]));
+        file_put_contents(self::$incomingDir . '/vectors.idx', '');
+        $env['SEARCH_DATA_INCOMING_DIR'] = self::$incomingDir;
+
         $descriptors = [
             0 => ['pipe', 'r'],
             1 => ['file', '/dev/null', 'w'],
@@ -99,6 +113,12 @@ final class EndpointTest extends TestCase
             @unlink(self::$dataDir . '/spellcheck.txt');
             @rmdir(self::$dataDir);
             self::$dataDir = null;
+        }
+        if (self::$incomingDir !== null) {
+            @unlink(self::$incomingDir . '/meta.json');
+            @unlink(self::$incomingDir . '/vectors.idx');
+            @rmdir(self::$incomingDir);
+            self::$incomingDir = null;
         }
     }
 
@@ -235,6 +255,19 @@ final class EndpointTest extends TestCase
 
         self::assertSame(401, $status);
         self::assertSame('unauthorized', json_decode((string) $body, true)['error']);
+    }
+
+    public function testReloadLoadFlagLoadsStagingFromTheBundle(): void
+    {
+        // Without ?load=1 the operator must have loaded staging already; with it
+        // the endpoint loads products.load.sql itself (missing here).
+        [$status, $body] = $this->request('POST', '/reload', '{"token":"test-secret"}');
+        self::assertSame(422, $status);
+        self::assertSame('missing_staging_table', json_decode((string) $body, true)['reason']);
+
+        [$status, $body] = $this->request('POST', '/reload.php?load=1', '{"token":"test-secret"}');
+        self::assertSame(422, $status);
+        self::assertSame('missing_load_sql', json_decode((string) $body, true)['reason']);
     }
 
     public function testReloadWrongMethodReturns405(): void

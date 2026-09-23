@@ -36,6 +36,16 @@ final class Normalizer
     }
 
     /**
+     * Canonical SKU: normalized text with every non-letter/non-digit removed,
+     * so "AB-12 34", "ab.1234" and "AB1234" are one code. Stricter than the
+     * model-name rule, which only drops separators between ASCII characters.
+     */
+    public static function normalizeSku(?string $sku): string
+    {
+        return (string) preg_replace('/[^\p{L}\p{N}]+/u', '', self::normalize($sku));
+    }
+
+    /**
      * Build the per-character search/replace arrays once. Kept in the exact
      * order of the Python translation table so results match.
      *

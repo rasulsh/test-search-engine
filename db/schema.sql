@@ -5,6 +5,10 @@
 -- M2's Normalizer will populate these columns canonically. In M1 they hold a
 -- passthrough copy of the raw text; this keeps the index shape stable across
 -- milestones (no schema migration in M2).
+--
+-- pipeline/build.py copies the products definition below into
+-- products.load.sql as the staging table's DDL, so a rebuilt bundle carries
+-- schema changes to the live table through the reload swap (no ALTER needed).
 
 SET NAMES utf8mb4;
 
@@ -13,11 +17,15 @@ CREATE TABLE IF NOT EXISTS products (
     title            VARCHAR(512)    NOT NULL,
     description      MEDIUMTEXT      NOT NULL,
     -- FULLTEXT-indexed, normalized copies (passthrough in M1, canonical in M2).
-    normalized_title VARCHAR(512)    NOT NULL,
+    -- Title (fa + en, 511 max) plus the normalized SKU (64 max).
+    normalized_title VARCHAR(640)    NOT NULL,
     normalized_desc  MEDIUMTEXT      NOT NULL,
     brand            VARCHAR(255)    NOT NULL DEFAULT '',
     category         VARCHAR(255)    NOT NULL DEFAULT '',
     model            VARCHAR(255)    NOT NULL DEFAULT '',
+    sku              VARCHAR(64)     NOT NULL DEFAULT '',
+    -- Normalizer::normalizeSku(sku): exact/prefix SKU lookups ranked first.
+    normalized_sku   VARCHAR(64)     NOT NULL DEFAULT '',
     price            DECIMAL(15, 4)  NOT NULL DEFAULT 0,
     stock            INT             NOT NULL DEFAULT 0,
     url              VARCHAR(1024)   NOT NULL DEFAULT '',
@@ -25,6 +33,7 @@ CREATE TABLE IF NOT EXISTS products (
     popularity       INT UNSIGNED    NOT NULL DEFAULT 0,
     PRIMARY KEY (product_id),
     KEY idx_model (model),
+    KEY idx_normalized_sku (normalized_sku),
     FULLTEXT KEY ft_normalized (normalized_title, normalized_desc)
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_unicode_ci;
 

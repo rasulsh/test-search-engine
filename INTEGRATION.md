@@ -143,14 +143,25 @@ configure the uptime monitor to use `GET`.
 Operator-only. It validates the staged bundle and swaps it in atomically. See
 the README runbook for the steps before it.
 
+Query parameter `load=1` (optional): before validating, load
+`data_incoming/products.load.sql` into the `products_new` staging table from
+PHP (the one-command release path). The compatibility check (model, dim,
+normalization version) runs first, so an incompatible bundle is rejected before
+anything is loaded; the load itself must succeed completely, and the usual
+consistency checks then run on the loaded table, before any swap. Without
+`load=1`, the operator must have loaded the staging table already (manual
+fallback). The request may run for a while on a full catalog; it keeps going if
+the client disconnects.
+
 Authentication: send the token configured in `SEARCH_RELOAD_TOKEN`, either as
 a header (preferred) or as a JSON body field. The header wins when both are
 sent.
 
 ```bash
 curl -sS -X POST -H "X-Reload-Token: $SEARCH_RELOAD_TOKEN" \
-     https://shop.example.com/search-api/reload.php
+     "https://shop.example.com/search-api/reload.php?load=1"
 # or: -H 'Content-Type: application/json' -d '{"token":"..."}'
+# manual fallback (staging already loaded): same URL without ?load=1
 ```
 
 Success `200`:
@@ -181,7 +192,10 @@ that helps.
 | `missing_meta`, `invalid_meta` | `data_incoming/meta.json` is absent or not JSON. Re-upload the bundle. |
 | `model_mismatch`, `dim_mismatch`, `normalization_version_mismatch` | The bundle was built with a different model, dim, or normalization rules than `server/config.php` (contract 3). Rebuild, or change config deliberately (see [Changing the model](#changing-the-model)). |
 | `missing_index`, `missing_vectors` | `vectors.idx` / `vectors.bin` not uploaded. |
-| `missing_staging_table` | `products_new` does not exist. Create it and load `products.load.sql`. |
+| `missing_staging_table` | `products_new` does not exist. Call with `?load=1`, or load `products.load.sql` into the database first. |
+| `missing_load_sql` | `?load=1` was sent but `data_incoming/products.load.sql` is absent. Re-extract `release.zip` (or upload the file). |
+| `staging_load_failed` | A statement of `products.load.sql` failed (`details.statement` is its number, `details.error` the database error), or the file ends mid-statement (truncated upload). The staging table may be partial; it is never swapped in. Re-extract the release, or on hosts with tight limits use the manual fallback load. |
+| `unexpected_statement` | `products.load.sql` contains a statement that is not one `build.py` writes for `products_new` (`details.start` shows its beginning). Nothing after it ran. Rebuild the release; never hand-edit the file. |
 | `count_mismatch` | `meta.count`, `vectors.idx` lines, and `products_new` rows disagree. Usually an incomplete SQL load: recreate `products_new` and reload the SQL. |
 | `vectors_size_mismatch`, `checksum_mismatch` | `vectors.bin` is truncated or corrupted (such as an interrupted upload or FTP ASCII mode). Re-upload it in binary mode. |
 | `directory_swap_failed` | Renaming `data_incoming` to `data` failed (permissions). The table swap was rolled back, so the service is unchanged. |

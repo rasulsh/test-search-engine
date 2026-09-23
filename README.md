@@ -105,7 +105,7 @@ vendor/bin/phpunit
 | --- | --- |
 | `POST /search` | `{q, q_vector?, customer_id?, limit?, with_details?}`, returns ordered `product_ids` + `did_you_mean` / `did_you_mean_applied` (plus `cosine_scores` on hybrid responses, and `products` display fields only with `"with_details": true`). Keyword tier always; hybrid when a valid `q_vector` is sent and a bundle is loaded. |
 | `GET /health` | Database reachability + live product count, for monitoring. |
-| `POST /reload` | Token-protected (`X-Reload-Token`). Validates the staged bundle and swaps it in atomically. |
+| `POST /reload` | Token-protected (`X-Reload-Token`). Validates the staged bundle and swaps it in atomically. With `?load=1` it first loads `data_incoming/products.load.sql` into the staging table itself. |
 
 The exact request/response JSON, headers, status codes, and every error and
 `invalid_bundle` reason are in [`INTEGRATION.md`](./INTEGRATION.md#http-contract).
@@ -126,6 +126,7 @@ Provide a `.sql` (INSERT statements) or `.csv` with these columns:
 | `title_fa`, `title_en` | Persian and English titles |
 | `desc` | description (truncated for the embedding input) |
 | `brand`, `category`, `model` | facets; `model` also feeds catalog synonyms |
+| `sku` | optional product code; exact and prefix SKU queries rank first (see [SKU search](#sku-search)) |
 | `price`, `stock`, `popularity` | numeric |
 | `url`, `image` | display fields |
 
@@ -136,8 +137,10 @@ export can be taken from the OpenCart tables as-is.
 
 **Bundle output** (`build.py --csv export.csv --out ./bundle`): `vectors.bin`
 (little-endian float32, `count × dim`, L2-normalized), `vectors.idx` (one
-`product_id` per line, row order), `products.load.sql` (rows for the
-`products_new` staging table, normalized columns from the canonical Normalizer,
+`product_id` per line, row order), `products.load.sql` (drops and recreates the
+`products_new` staging table from the `products` definition in `db/schema.sql`,
+so schema changes such as the `sku` columns reach the live table through the
+swap with no manual `ALTER`; then its rows, normalized columns from the canonical Normalizer,
 split into statements of at most `SEARCH_LOAD_MAX_STATEMENT_BYTES`, 1 MB by
 default, so each fits a shared host's `max_allowed_packet`),
 `synonyms.json`, `spellcheck.txt`, `keymap.json`, and `meta.json`
@@ -195,6 +198,21 @@ byte per character so the edit distance runs in PHP's native `levenshtein()`,
 with results identical to a multibyte Levenshtein. Only if `spellcheck.txt` is
 missing does it fall back to scanning the `products` table, which is too slow
 for the budget on a full catalog.
+
+<a id="sku-search"></a>**SKU search (M12).** Shoppers can search by product
+code. The SKU is stored raw (`sku`) and canonicalized (`normalized_sku`,
+indexed): normalized like model codes, then every non-letter/non-digit is
+removed, so `AB-12 34`, `ab.1234` and `AB1234` are the same code
+(`Normalizer::normalizeSku` / `normalize_sku`, parity-tested on the shared
+fixture). A product whose normalized SKU equals the query's ranks at the very
+top, then SKU prefix matches (shortest code first), above every title match,
+also in hybrid mode and with no "did you mean" on an exact hit. Prefix
+matching needs at least `SEARCH_SKU_PREFIX_MIN_LENGTH` (default 4) characters
+and a digit, so a word like "sony" never pins products whose code starts with
+it. The normalized SKU is also appended to the title-weighted text, so a code
+typed with other words, or a partial code, still matches through FULLTEXT
+like any title word. Needs a rebuild + reload (new columns); until then the
+SKU lookup is skipped and text search answers.
 
 **Relevance floor.** The nearest vectors of a query with no relevant product
 are still unrelated items (on the real catalog, "ball bearing" returned case
@@ -379,12 +397,22 @@ Replace them with yours.
 
 ### One-time setup (cPanel host)
 
-1. **Upload the service code.** Put the repo's `server/` directory at
-   `~/search-service/server/`, outside `public_html`. Expose only its `public/`
-   directory on the store's domain, as a symlink (via SSH) or a copy:
+1. **Upload the service code.** Build a first release with the browser model
+   included (step 2 of [Every catalog update](#every-catalog-update); fetch the
+   assets once with `python pipeline/tools/fetch_web_model.py`):
+   ```bash
+   python pipeline/release.py --csv export.csv --out release.zip --with-model
+   ```
+   Extract it into `~/search-service/server/`, outside `public_html`. Expose
+   only its `public/` directory on the store's domain, as a symlink:
    ```bash
    ln -s ~/search-service/server/public ~/public_html/search-api
    ```
+   Use the symlink, not a copy: later releases update `server/public/` in
+   place, and a copy would keep serving the old files. (Without SSH, the File
+   Manager cannot create a symlink; then re-copy `public/` into
+   `public_html/search-api/` after every extract.) Leave `data_incoming/` for
+   the first reload in step 4.
    The storefront must reach the service on the **same origin**. There is no
    CORS support. See [INTEGRATION.md, Deployment shape](./INTEGRATION.md#deployment-shape).
 2. **Create the database.** In cPanel, open MySQL Databases. Create a database
@@ -407,15 +435,25 @@ Replace them with yours.
    still override the file where the host supports them. Set
    `SEARCH_MIN_TOKEN_SIZE` to the host's `innodb_ft_min_token_size`
    (`SHOW VARIABLES LIKE 'innodb_ft_min_token_size'`, usually 3).
-4. **Check health:** `curl -sS https://shop.example.com/search-api/health.php`
-   should return `{"status":"ok",…,"product_count":0}`. A count of 0 is
-   expected until the first reload.
-5. **Host the browser model and storefront assets.** Follow
+4. **Check health, then load the first catalog:**
+   `curl -sS https://shop.example.com/search-api/health.php` should return
+   `{"status":"ok",…,"product_count":0}`. Then run the reload from step 3 of
+   [Every catalog update](#every-catalog-update)
+   (`reload.php?load=1`); `product_count` becomes the catalog size.
+5. **Host the browser model and storefront assets.** `--with-model` already
+   placed them under `public/client/`; check them as described in
    [INTEGRATION.md, Self-hosting the model](./INTEGRATION.md#self-hosting-the-model-no-huggingface-no-cdn).
    Then install the storefront snippet through the OpenCart module
    ([INTEGRATION.md, Storefront reference](./INTEGRATION.md#storefront-reference)).
 
 ### Every catalog update
+
+The whole update is three commands: export, `release`, and one `curl` after
+unzipping on the host.
+
+```
+OpenCart DB --(1) export.csv--> dev/GPU machine --(2) release.zip--> cPanel host --(3) unzip + curl reload.php?load=1
+```
 
 **1. Export from OpenCart 2.0.3.1** to `build.py`'s input columns. Product
 names and descriptions live in `oc_product_description`, one row per
@@ -443,6 +481,7 @@ SELECT
         WHERE pc.product_id = p.product_id
     ), '')                                                    AS category,
     p.model                                                   AS model,
+    COALESCE(p.sku, '')                                       AS sku,
     p.price                                                   AS price,
     p.quantity                                                AS stock,
     CONCAT('index.php?route=product/product&product_id=', p.product_id) AS url,
@@ -456,12 +495,20 @@ LEFT JOIN oc_product_description d_en
        ON d_en.product_id = p.product_id AND d_en.language_id = @en
 LEFT JOIN oc_manufacturer m ON m.manufacturer_id = p.manufacturer_id
 WHERE p.status = 1
+  AND p.accept_status = '0'
 ORDER BY p.product_id;
 ```
 
 Notes on the query:
-- Only enabled products (`status = 1`) in the default store are exported.
-  Disabled products drop out of search at the next reload.
+- Only enabled products (`status = 1`) in the default store **that are
+  customer-facing (`accept_status = '0'`)** are exported. `accept_status` is a
+  column this shop added to `oc_product`; it is not in stock OpenCart 2.0.3.1.
+  Products with any other value (pending review, rejected) never reach search.
+  Disabled or non-accepted products drop out of search at the next reload.
+  `build.py` applies no filter of its own: it indexes exactly the rows it is
+  given, so the filter lives in this query.
+- `sku` is OpenCart's `oc_product.sku`. Empty is fine; those products just
+  have no SKU match. See [SKU search](#sku-search).
 - `category` is every category the product is in (Persian and English names),
   capped at 255 characters to fit the `products.category` column.
 - `COALESCE` keeps NULLs out of the export. phpMyAdmin writes a SQL NULL as the
@@ -478,53 +525,89 @@ first row"** and keep the defaults (`"` enclosure, `"` escape). Save it as
 reader understands `''` quoting, not the backslash escapes (`\'`) that
 phpMyAdmin and mysqldump write.
 
-**2. Build the bundle** on the GPU machine (Python 3.11+):
+**2. Build the release** on the GPU machine (Python 3.11+), from the repo root:
 
 ```bash
-pip install -r pipeline/requirements.txt 'sentence-transformers>=2.2'
-EMBEDDER=real python pipeline/build.py --csv export.csv --out ./bundle
-# -> Built bundle: <count> products, dim 384, embedder real
-cat bundle/meta.json   # model, dim, normalization_version, count, checksum
+pip install -r pipeline/requirements.txt 'sentence-transformers>=2.2'   # once
+python pipeline/release.py --csv export.csv --out release.zip
+# -> Built release.zip: <count> products, dim 384, embedder real, <n> files
 ```
 
-`EMBEDDER=real` is required for production. The default `mock` produces
-random vectors that are only good for tests. `SEARCH_MODEL`,
-`SEARCH_MODEL_REVISION` and `SEARCH_MODEL_DIM` must match `server/config.php`.
+On Windows: `pipeline\release.bat --csv export.csv --out release.zip`
+(same arguments). The command builds the bundle with the **real** embedder
+(whatever `EMBEDDER` says; `--mock` exists for tests only) and packs one
+`release.zip`, laid out relative to the host's `server/` directory:
 
-**3. Upload and stage** on the cPanel host:
+| in the zip | what |
+| --- | --- |
+| `data_incoming/` | the bundle: `vectors.bin`, `vectors.idx`, `products.load.sql`, `meta.json`, `spellcheck.txt`, `synonyms.json`, `keymap.json` |
+| `bootstrap.php`, `src/`, `public/` | the server code (including `public/client/embedder.js`) |
+| `public/client/model/`, `vendor/`, `fonts/` | **only with `--with-model`**: the browser model, runtime, and font from `pipeline/tools/fetch_web_model.py` (about 150 MB; first deploy, or after the model changes) |
 
-- Upload the bundle files into `~/search-service/server/data_incoming/`. Create
-  the directory if needed; it must not contain an old bundle. Use **binary**
-  mode for `vectors.bin`, for example SFTP, or a zip extracted with the cPanel
-  File Manager. A corrupted file is caught later as `vectors_size_mismatch` or
-  `checksum_mismatch`.
-- Recreate the staging table and load the rows. This leaves `products` live
-  and untouched:
-  ```bash
-  mysql -u cpuser_search -p cpuser_search \
-        -e 'DROP TABLE IF EXISTS products_new; CREATE TABLE products_new LIKE products;'
-  mysql -u cpuser_search -p cpuser_search < bundle/products.load.sql
-  ```
-  Without SSH, run the two statements in phpMyAdmin's SQL tab, then Import
-  `products.load.sql`. For a large catalog, gzip it first: phpMyAdmin accepts
-  `.sql.gz`, and a 20k-product file shrank from 46 MB to 12 MB in testing.
-  Check that `SELECT COUNT(*) FROM products_new` equals `count` in `meta.json`.
+`config.php` is **never** in the zip, so unzipping never overwrites the
+server's configuration. Tests, tools, and local data are not packed either.
+`SEARCH_MODEL`, `SEARCH_MODEL_REVISION` and `SEARCH_MODEL_DIM` must match
+`server/config.php` (the reload rejects a mismatch). New config keys come with
+defaults, so an older `config.php` keeps working.
 
-**4. Reload.** This validates, then swaps atomically:
+**3. Deploy** on the cPanel host: unzip, then one `curl`.
 
 ```bash
+cd ~/search-service/server && unzip -o ~/release.zip
 curl -sS -X POST -H "X-Reload-Token: $SEARCH_RELOAD_TOKEN" \
-     https://shop.example.com/search-api/reload.php
+     "https://shop.example.com/search-api/reload.php?load=1"
 # {"ok":true,"count":20000,"model":"intfloat/multilingual-e5-small","dim":384}
 curl -sS https://shop.example.com/search-api/health.php   # product_count == count
 ```
 
-A `422 invalid_bundle` means nothing was swapped. Its `reason` names the
-failed check; the fixes are in
-[INTEGRATION.md](./INTEGRATION.md#post-reload). After a success, the
-previous version is kept as the `products_old` table and the `data_old/`
-directory. The "did you mean" dictionary (`spellcheck.txt`) switches with the
-bundle; nothing else needs restarting.
+Without SSH: upload `release.zip` into `~/search-service/server/` with the
+cPanel File Manager, choose **Extract**, and allow it to overwrite, then run
+the `curl` from any machine. `data_incoming/` should not hold an old bundle
+before extracting; a failed earlier reload can leave one, and the extract then
+overwrites every bundle file anyway.
+
+With `?load=1` the reload does, in order, and stops at the first failure:
+1. Checks `meta.json` against `config.php` (model, dim, normalization
+   version), before loading anything.
+2. Loads `data_incoming/products.load.sql` into `products_new`: the file drops
+   and recreates the staging table, then inserts the rows. It is streamed one
+   statement at a time (each at most 1 MB), and only statements aimed at
+   `products_new` are accepted.
+3. Checks counts, `vectors.bin` size, and checksum against the staging table.
+4. Swaps tables and directories atomically, keeping the previous version.
+
+A `422 invalid_bundle` means **nothing was swapped** and the live catalog is
+unchanged. `reason` names the failed check (`staging_load_failed` also
+reports the failing statement number); the fixes are in
+[INTEGRATION.md](./INTEGRATION.md#post-reload). After a success, the previous
+version is kept as the `products_old` table and the `data_old/` directory. The
+"did you mean" dictionary (`spellcheck.txt`) switches with the bundle; nothing
+else needs restarting. Between the unzip and the reload the new code serves the
+old table; a table from before M12 lacks the SKU columns, and the SKU lookup is
+simply skipped until the reload.
+
+#### Fallback: manual staging load
+
+The in-PHP load for 20k products (about 46 MB of SQL) runs inside one web
+request. If the host's time or memory limits cut it off (`curl` returns a
+timeout or `500`, or `staging_load_failed` names a server limit), load the
+staging table yourself and reload **without** `?load=1`:
+
+```bash
+mysql -u cpuser_search -p cpuser_search < ~/search-service/server/data_incoming/products.load.sql
+curl -sS -X POST -H "X-Reload-Token: $SEARCH_RELOAD_TOKEN" \
+     https://shop.example.com/search-api/reload.php
+```
+
+`products.load.sql` recreates `products_new` itself, so no `CREATE TABLE`
+step is needed. Without SSH, Import it in phpMyAdmin (gzip it first: it
+accepts `.sql.gz`, and a 20k-product file shrank from 46 MB to 12 MB in
+testing). Check that `SELECT COUNT(*) FROM products_new` equals `count` in
+`meta.json`. The bundle files can also be uploaded without the zip: copy them
+into `~/search-service/server/data_incoming/` in **binary** mode (for example
+SFTP). A corrupted file is caught as `vectors_size_mismatch` or
+`checksum_mismatch`. `python pipeline/build.py --csv export.csv --out ./bundle`
+(with `EMBEDDER=real`) builds just the bundle.
 
 ### Rollback (one step)
 
@@ -606,6 +689,17 @@ M0–M5. Verify each item on the production host before wide rollout.
   `products.load.sql`. Statements are at most 1 MB
   (`SEARCH_LOAD_MAX_STATEMENT_BYTES`), and the file is about 46 MB (12 MB
   gzipped) for 20k products.
+- [ ] **In-PHP staging load (`reload.php?load=1`) within host limits.** It
+  streams one ≤1 MB statement at a time (memory stays near one statement), and
+  asks for no time limit and to survive a client disconnect, but hosts can
+  forbid both, and LiteSpeed / the LVE may still stop a long request. Time a
+  full 20k load on the host and compare it with `max_execution_time` and the LiteSpeed
+  request timeout. If it is cut off, the live catalog stays untouched; use the
+  [manual fallback](#fallback-manual-staging-load). For scale: a synthetic
+  20k-product release (44 MB `products.load.sql`) loaded, validated and
+  swapped in about 2.6 s with a 33 MB peak under `memory_limit=64M` on a local
+  MariaDB 10.11 dev container. That was not a shared host, and real
+  descriptions are longer.
 - [ ] The reload's table and directory swaps are each atomic, but not atomic
   together. A process kill between them is recovered with the rollback above.
 
@@ -644,6 +738,7 @@ M0–M5. Verify each item on the production host before wide rollout.
 - [ ] **M9** — Relevance tuning: semantic cosine floor (empty result instead of far neighbours), keyword-first hybrid fusion, frequency-gated "did you mean" from high-signal fields, cosine score + "no results" state on the test page.
 - [ ] **M10** — Keyword relevance by field: title vs description scored separately (configurable weights), title phrase bonus, title matches always above description-only matches (also in the hybrid merge); keyword latency guard.
 - [ ] **M11** — Keyword index covers only the first `desc_index_chars` of each description (requires a rebuild); with a query vector, description-only keyword hits below the semantic floor are dropped.
+- [ ] **M12** — SKU search (exact/prefix SKU matches ranked first, SKU in the title-weighted text), `accept_status = '0'` export filter, one-command `release.py` (+ `release.bat`) producing `release.zip`, and `reload.php?load=1` loading the staging table in PHP before the atomic swap.
 
 ## Contributing
 

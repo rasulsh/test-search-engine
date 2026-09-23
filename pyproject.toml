@@ -13,6 +13,7 @@ select = ["E", "F", "I", "UP", "B"]
 [tool.ruff.lint.per-file-ignores]
 # build.py fixes sys.path before its imports to avoid the stdlib `keyword` clash.
 "pipeline/build.py" = ["E402"]
+"pipeline/release.py" = ["E402"]
 # The tools add pipeline/ to sys.path before importing the pipeline modules.
 "pipeline/tools/model_parity.py" = ["E402"]
 "pipeline/tools/fetch_web_model.py" = ["E402"]

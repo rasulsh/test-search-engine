@@ -2,7 +2,9 @@
 
 /**
  * POST /reload. Token-protected. Validates the staged bundle and atomically
- * swaps it in (see App\Reload). Reachable directly or via the front controller.
+ * swaps it in (see App\Reload). With ?load=1 it first loads
+ * data_incoming/products.load.sql into the staging table itself (one-command
+ * release). Reachable directly or via the front controller.
  */
 
 declare(strict_types=1);
@@ -44,9 +46,21 @@ if (!hash_equals($configuredToken, $provided)) {
     return;
 }
 
+$loadStaging = ($_GET['load'] ?? '') === '1';
+if ($loadStaging) {
+    // The staging load can outlast default limits; a disconnecting client must
+    // not abort it half-way. Either call may be disabled on shared hosts.
+    if (function_exists('ignore_user_abort')) {
+        ignore_user_abort(true);
+    }
+    if (function_exists('set_time_limit')) {
+        @set_time_limit(0);
+    }
+}
+
 try {
     $db = new Db($config['db']);
-    $result = (new Reload($db->pdo(), $config))->run();
+    $result = (new Reload($db->pdo(), $config))->run($loadStaging);
 } catch (ReloadException $e) {
     http_response_code(422);
     echo json_encode(

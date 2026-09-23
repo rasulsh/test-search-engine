@@ -1,17 +1,19 @@
 """One-command release: catalog export in -> a single deployable release.zip.
 
-    python pipeline/release.py --csv export.csv --out release.zip [--with-model]
+    python pipeline/release.py --csv export.csv --out release.zip [--no-model]
 
 Builds the bundle with the real embedder and packs, relative to the host's
-`server/` directory:
+`server/` directory, everything the site needs:
 
     data_incoming/        the bundle (vectors, products.load.sql, meta.json, ...)
-    bootstrap.php, config.example.php, src/, public/
+    bootstrap.php, config.example.php, src/, public/ (incl. public/install.php)
+    db/schema.sql         read by install.php on the first deploy
     public/client/embedder.js
-    public/client/{model,vendor,fonts}/   only with --with-model (first deploy)
+    public/client/{model,vendor,fonts}/   left out with --no-model
 
-config.php is never packed, so unzipping over the server keeps its config.
-On the host: unzip in server/, then POST reload.php?load=1 (see README).
+config.php is never packed, so extracting over the server keeps its config.
+First deploy: extract, then open install.php. Updates: extract, then POST
+reload.php?load=1 (see README).
 """
 
 from __future__ import annotations
@@ -42,7 +44,8 @@ from normalize import NORMALIZATION_VERSION
 REPO_ROOT = Path(__file__).resolve().parents[1]
 # config.example.php is the template for a first deploy; config.php is never packed.
 SERVER_CODE = ("bootstrap.php", "config.example.php", "src", "public")
-# Large browser assets fetched by tools/fetch_web_model.py; first deploy only.
+# Large browser assets fetched by tools/fetch_web_model.py; --no-model skips them
+# for routine updates when the host already has them.
 CLIENT_ASSETS = ("model", "vendor", "fonts")
 CLIENT_CODE = ("embedder.js",)
 
@@ -61,6 +64,7 @@ def release_entries(
 ) -> list[tuple[Path, str]]:
     """(source file, path inside the zip) for every file the release carries."""
     entries = [(f, f"data_incoming/{f.name}") for f in sorted(bundle_dir.iterdir()) if f.is_file()]
+    entries.append((build.SCHEMA_PATH, "db/schema.sql"))
     for relative in SERVER_CODE:
         for source, arcname in _files(server_dir, relative):
             # public/client on a dev machine is the (gitignored) local copy of
@@ -73,7 +77,8 @@ def release_entries(
         if not (client_dir / relative).exists():
             raise FileNotFoundError(
                 f"{client_dir / relative} is missing"
-                + (" (run pipeline/tools/fetch_web_model.py first)" if with_model else "")
+                + (" (run pipeline/tools/fetch_web_model.py first, or pass --no-model "
+                   "if the host already has the model)" if with_model else "")
             )
         entries += [(s, f"public/client/{a}") for s, a in _files(client_dir, relative)]
 
@@ -98,8 +103,9 @@ def main(argv: list[str] | None = None) -> int:
     source.add_argument("--csv", help="CSV export with the documented columns.")
     source.add_argument("--sql", help="SQL export (INSERT statements).")
     parser.add_argument("--out", default="release.zip", help="Output zip (default release.zip).")
-    parser.add_argument("--with-model", action="store_true",
-                        help="Also pack the browser model/runtime/fonts (first deploy).")
+    parser.add_argument("--no-model", action="store_true",
+                        help="Leave out the browser model/runtime/fonts (about 150 MB) for a "
+                             "routine update when the host already has them.")
     parser.add_argument("--mock", action="store_true",
                         help="Use the mock embedder (tests only; never deploy).")
     parser.add_argument("--server-dir", default=str(REPO_ROOT / "server"), help=argparse.SUPPRESS)
@@ -120,16 +126,17 @@ def main(argv: list[str] | None = None) -> int:
     with tempfile.TemporaryDirectory() as tmp:
         meta = build.build_bundle(products, tmp, config)
         entries = release_entries(
-            Path(tmp), Path(args.server_dir), Path(args.client_dir), args.with_model
+            Path(tmp), Path(args.server_dir), Path(args.client_dir), not args.no_model
         )
         write_zip(entries, out)
 
     print(f"Built {out.name}: {meta['count']} products, dim {meta['dim']}, "
           f"embedder {meta['embedder']}, {len(entries)} files"
-          + (", with browser model" if args.with_model else ""))
-    print("Deploy: unzip it inside ~/search-service/server/ on the host, then run")
-    print('  curl -sS -X POST -H "X-Reload-Token: $TOKEN" '
-          "https://<shop>/search-api/reload.php?load=1")
+          + (", without browser model" if args.no_model else ", with browser model"))
+    print("Deploy: extract it in the service directory on the host (config.php is "
+          "never in the zip).")
+    print("  First deploy: open install.php in the browser and fill in the form.")
+    print("  Updates: POST reload.php?load=1 with the X-Reload-Token header.")
     return 0
 
 

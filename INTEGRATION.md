@@ -95,7 +95,7 @@ Response `200`:
 | `count` | `product_ids.length`. |
 | `product_ids` | Ordered OpenCart `product_id`s, best first. The service returns ids only; the storefront renders the products. |
 | `cosine_scores` | Only on a hybrid response (see below): the cosine similarity of each returned product to the query, aligned by index with `product_ids`, rounded to 4 decimals, `null` for a product without a vector. A diagnostic for tuning (the test page shows it). |
-| `products` | Only with `"with_details": true`: `[{"id", "title", "url", "image", "price"}]` in the same order as `product_ids`, read from the `products` table (`title` is the stored title, `url`/`image` exactly as exported, `price` a number). An id missing from the table is skipped. |
+| `products` | Only with `"with_details": true`: `[{"id", "title", "url", "image", "price"}]` in the same order as `product_ids`, read from the `products` table (`title` is the stored title, `url`/`image` as exported, or joined to `storefront.store_base` / `image_base` when those are set in `config.php` and the value is relative, `price` a number). An id missing from the table is skipped. |
 
 Semantics the storefront should know:
 

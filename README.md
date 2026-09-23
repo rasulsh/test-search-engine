@@ -51,9 +51,10 @@ fixtures/   Shared test fixtures (normalization cases, eval set, parity strings)
 All model names, dimensions, thresholds, and credentials are read from config —
 never hardcoded.
 
-- Server: copy `server/config.example.php` to `server/config.php`, or supply the
-  environment variables it reads (see `.env.example`). On cPanel, edit the
-  defaults in `config.php` (see [one-time setup](#one-time-setup-cpanel-host)).
+- Server: on the host, `public/install.php` writes `server/config.php` from
+  `server/config.example.php` (see [one-time setup](#one-time-setup-cpanel-host)).
+  Otherwise copy the example to `config.php` and edit it, or supply the
+  environment variables it reads (see `.env.example`).
 - Pipeline: the same `SEARCH_MODEL*` variables, plus `EMBEDDER=mock|real`,
   `SEARCH_DESC_CHAR_LIMIT` (description characters in the embedded passage),
   `SEARCH_PASSAGE_CHAR_LIMIT` (cap on the whole embedded passage, default 1000),
@@ -408,7 +409,8 @@ example `index.php?route=product/product&product_id=42` and `catalog/x.jpg`. The
 page resolves relative values against the **store root, taken as the parent of
 the page's directory** (`../`), and images against `../image/`, which matches
 OpenCart's layout when the service is at `/<store>/search-api/`. If yours
-differs, edit `STORE_BASE` / `IMAGE_BASE` at the top of the page's script. Prices
+differs, set `store_base` / `image_base` in `config.php` (the installer asks
+for them): the server then returns absolute links, which the page uses as is. Prices
 are shown as stored, with no currency label. Set `PRICE_SUFFIX` to add one.
 
 The page is public wherever `server/public` is. It reads nothing the search
@@ -425,54 +427,80 @@ Replace them with yours.
 
 ### One-time setup (cPanel host)
 
-1. **Upload the service code.** Build a first release with the browser model
-   included (step 2 of [Every catalog update](#every-catalog-update); fetch the
-   assets once with `python pipeline/tools/fetch_web_model.py`):
+The first deploy is: upload the zip, extract it, open `install.php`, fill in
+the form. No config file editing, no separate model upload, no SSH needed.
+
+1. **Create the database.** In cPanel, open MySQL Databases. Create a database
+   and a user, and grant the user ALL privileges on that database. `RENAME
+   TABLE`, `DROP` and `CREATE` are needed by the reload. The installer creates
+   the tables.
+2. **Build the release** (step 2 of [Every catalog update](#every-catalog-update)).
+   It includes the browser model, runtime and font by default; fetch them once
+   on the build machine with `python pipeline/tools/fetch_web_model.py`:
    ```bash
-   python pipeline/release.py --csv export.csv --out release.zip --with-model
+   python pipeline/release.py --csv export.csv --out release.zip
    ```
-   Extract it into `~/search-service/server/`, outside `public_html`. Expose
-   only its `public/` directory on the store's domain, as a symlink:
+3. **Upload and extract** `release.zip` into `~/search-service/server/`,
+   outside `public_html` (File Manager: Upload, then Extract). Expose only its
+   `public/` directory on the store's domain, as a symlink:
    ```bash
    ln -s ~/search-service/server/public ~/public_html/search-api
    ```
    Use the symlink, not a copy: later releases update `server/public/` in
    place, and a copy would keep serving the old files. (Without SSH, the File
    Manager cannot create a symlink; then re-copy `public/` into
-   `public_html/search-api/` after every extract.) Leave `data_incoming/` for
-   the first reload in step 4.
+   `public_html/search-api/` after every extract.)
    The storefront must reach the service on the **same origin**. There is no
    CORS support. See [INTEGRATION.md, Deployment shape](./INTEGRATION.md#deployment-shape).
-2. **Create the database.** In cPanel, open MySQL Databases. Create a database
-   and a user, and grant the user ALL privileges on that database. `RENAME
-   TABLE`, `DROP` and `CREATE` are needed by the reload. Then import the schema,
-   via phpMyAdmin Import or over SSH:
-   ```bash
-   mysql -u cpuser_search -p cpuser_search < db/schema.sql
-   ```
-3. **Configure.** On shared hosting, environment variables are awkward, so use
-   the config file. It is gitignored and not web-exposed:
-   ```bash
-   cp ~/search-service/server/config.example.php ~/search-service/server/config.php
-   ```
-   In `config.php`, set the defaults after each `?:`. At minimum, set the DSN,
-   user and password, and a long random reload token
-   (`php -r 'echo bin2hex(random_bytes(32)), "\n";'`). Leave `model`, `dim`,
-   and `normalization_version` equal to what the pipeline builds with. Every
-   key is described in `.env.example`, and `SEARCH_*` environment variables
-   still override the file where the host supports them. Set
-   `SEARCH_MIN_TOKEN_SIZE` to the host's `innodb_ft_min_token_size`
-   (`SHOW VARIABLES LIKE 'innodb_ft_min_token_size'`, usually 3).
-4. **Check health, then load the first catalog:**
-   `curl -sS https://shop.example.com/search-api/health.php` should return
-   `{"status":"ok",…,"product_count":0}`. Then run the reload from step 3 of
-   [Every catalog update](#every-catalog-update)
-   (`reload.php?load=1`); `product_count` becomes the catalog size.
-5. **Host the browser model and storefront assets.** `--with-model` already
-   placed them under `public/client/`; check them as described in
+4. **Open `https://shop.example.com/search-api/install.php`** and fill in the
+   form (Persian, RTL):
+   - database host (usually `localhost`), optional port, name, user, password;
+   - the reload token: pre-filled with a fresh random value. **Copy it before
+     submitting**; later updates need it and the installer never shows it again
+     (it is stored in `config.php`);
+   - model name, dimension and normalization version: keep the defaults unless
+     the release was built with another model (a mismatch with the staged
+     bundle is rejected before anything is written);
+   - `STORE_BASE` / `IMAGE_BASE`: absolute store and image URLs (for example
+     `https://shop.example.com/` and `https://shop.example.com/image/`). With
+     them, `with_details` results carry absolute product links and images;
+     leave them empty to keep the exported values as they are;
+   - the tuning knobs (`semantic_min_score`, title / description / spec
+     weights, `phrase_bonus`, `desc_index_chars`), pre-filled with the current
+     defaults. `desc_index_chars` only records the value releases are built
+     with (`SEARCH_DESC_INDEX_CHARS` on the build machine); the server never
+     re-indexes.
+
+   On submit the installer validates the values and tests the database
+   connection, creates the schema (`db/schema.sql`), then writes
+   `server/config.php` from `config.example.php`. It never overwrites an
+   existing `config.php`, and anything that fails before that point leaves
+   nothing behind, so the form can be corrected and resubmitted. Last, it
+   loads the catalog staged in `data_incoming/` with the same code as
+   `reload.php?load=1` (staging load, checks, atomic swap) and reports the
+   product count.
+
+   If the load cannot finish within the host's time or memory limits, the page
+   says so and shows the [manual staging load](#fallback-manual-staging-load)
+   (`config.php` is already written by then; nothing was swapped).
+5. **Delete `install.php`.** Once `config.php` exists it refuses to do
+   anything (`403`, "already installed"), so a later release that re-extracts
+   it is harmless, but removing it keeps the surface small.
+   `curl -sS https://shop.example.com/search-api/health.php` should now report
+   `product_count` equal to the catalog size. Set `SEARCH_MIN_TOKEN_SIZE` in
+   `config.php` if the host's `innodb_ft_min_token_size` is not 3
+   (`SHOW VARIABLES LIKE 'innodb_ft_min_token_size'`).
+6. **Storefront.** The browser model is already under `public/client/`; check
+   it as described in
    [INTEGRATION.md, Self-hosting the model](./INTEGRATION.md#self-hosting-the-model-no-huggingface-no-cdn).
    Then install the storefront snippet through the OpenCart module
    ([INTEGRATION.md, Storefront reference](./INTEGRATION.md#storefront-reference)).
+
+**Without the installer** (or to change settings later): `config.php` is a
+copy of `config.example.php` with the defaults after each `?:` (or in each
+`$setting(...)`) edited; every key is described in `.env.example`, and
+`SEARCH_*` environment variables still override the file where the host
+supports them. Import `db/schema.sql` yourself in that case.
 
 ### Every catalog update
 
@@ -576,11 +604,15 @@ phpMyAdmin and mysqldump write.
 
 ```bash
 pip install -r pipeline/requirements.txt 'sentence-transformers>=2.2'   # once
-python pipeline/release.py --csv export.csv --out release.zip
-# -> Built release.zip: <count> products, dim 384, embedder real, <n> files
+python pipeline/release.py --csv export.csv --out release.zip --no-model
+# -> Built release.zip: <count> products, dim 384, embedder real, <n> files, without browser model
 ```
 
-On Windows: `pipeline\release.bat --csv export.csv --out release.zip`
+`--no-model` leaves out the browser model, runtime and font (about 150 MB) for
+routine catalog updates when the host already has them. Without it the release
+is self-contained (first deploy, or after the model changes).
+
+On Windows: `pipeline\release.bat --csv export.csv --out release.zip --no-model`
 (same arguments). The command builds the bundle with the **real** embedder
 (whatever `EMBEDDER` says; `--mock` exists for tests only) and packs one
 `release.zip`, laid out relative to the host's `server/` directory:
@@ -588,8 +620,9 @@ On Windows: `pipeline\release.bat --csv export.csv --out release.zip`
 | in the zip | what |
 | --- | --- |
 | `data_incoming/` | the bundle: `vectors.bin`, `vectors.idx`, `products.load.sql`, `meta.json`, `spellcheck.txt`, `synonyms.json`, `keymap.json` |
-| `bootstrap.php`, `src/`, `public/` | the server code (including `public/client/embedder.js`) |
-| `public/client/model/`, `vendor/`, `fonts/` | **only with `--with-model`**: the browser model, runtime, and font from `pipeline/tools/fetch_web_model.py` (about 150 MB; first deploy, or after the model changes) |
+| `bootstrap.php`, `src/`, `public/` | the server code (including `public/install.php` and `public/client/embedder.js`) |
+| `config.example.php`, `db/schema.sql` | the installer's config template and schema |
+| `public/client/model/`, `vendor/`, `fonts/` | **left out with `--no-model`**: the browser model, runtime, and font from `pipeline/tools/fetch_web_model.py` (about 150 MB) |
 
 `config.php` is **never** in the zip, so unzipping never overwrites the
 server's configuration. Tests, tools, and local data are not packed either.
@@ -761,6 +794,12 @@ M0–M5. Verify each item on the production host before wide rollout.
   swapped in about 2.6 s with a 33 MB peak under `memory_limit=64M` on a local
   MariaDB 10.11 dev container. That was not a shared host, and real
   descriptions are longer.
+- [ ] **Web installer on the real host (`install.php`).** Its initial load is
+  the same in-PHP load as above, inside the browser's form submit, so the same
+  limits apply, plus the browser waiting on the page. Check that the host lets
+  PHP create `server/config.php` (and its `0640` mode suits how PHP runs
+  there), that a load cut off by a limit shows the manual fallback, and that
+  `install.php` answers `403` once `config.php` exists.
 - [ ] The reload's table and directory swaps are each atomic, but not atomic
   together. A process kill between them is recovered with the rollback above.
 
@@ -801,6 +840,7 @@ M0–M5. Verify each item on the production host before wide rollout.
 - [ ] **M11** — Keyword index covers only the first `desc_index_chars` of each description (requires a rebuild); with a query vector, description-only keyword hits below the semantic floor are dropped.
 - [ ] **M12** — SKU search (exact/prefix SKU matches ranked first, SKU in the title-weighted text), `accept_status = '0'` export filter, one-command `release.py` (+ `release.bat`) producing `release.zip`, and `reload.php?load=1` loading the staging table in PHP before the atomic swap.
 - [ ] **M13** — Specs field: product attributes and PHP-serialized `feature` titles in a FULLTEXT-indexed `normalized_specs` column (`spec_weight`, ranked between title and description-only matches, also in hybrid mode), and in the embedded passage within `SEARCH_PASSAGE_CHAR_LIMIT`.
+- [ ] **M14** — Self-contained release (browser model included by default, `--no-model` for routine updates, `db/schema.sql` packed) and a web installer, `public/install.php`: validates the form, tests the DB connection, creates the schema, writes `config.php` (never overwriting one), loads the staged catalog, then refuses to run again. `store_base` / `image_base` config for absolute `with_details` links.
 
 ## Contributing
 

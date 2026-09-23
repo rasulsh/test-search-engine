@@ -10,12 +10,17 @@ use PDO;
  * Display fields for a result page. Opt-in only (`"with_details": true` on
  * POST /search): the default response stays ids-only, so storefront callers that
  * render from OpenCart are unaffected.
+ *
+ * Relative `url` / `image` values are joined to the configured storefront
+ * bases when those are set; empty bases return them as exported.
  */
 final class ProductDetails
 {
     public function __construct(
         private readonly PDO $pdo,
-        private readonly string $productsTable
+        private readonly string $productsTable,
+        private readonly string $storeBase = '',
+        private readonly string $imageBase = ''
     ) {
     }
 
@@ -42,8 +47,8 @@ final class ProductDetails
             $byId[(int) $row['product_id']] = [
                 'id'    => (int) $row['product_id'],
                 'title' => (string) $row['title'],
-                'url'   => (string) $row['url'],
-                'image' => (string) $row['image'],
+                'url'   => self::resolve((string) $row['url'], $this->storeBase),
+                'image' => self::resolve((string) $row['image'], $this->imageBase),
                 'price' => (float) $row['price'],
             ];
         }
@@ -56,5 +61,14 @@ final class ProductDetails
         }
 
         return $ordered;
+    }
+
+    private static function resolve(string $value, string $base): string
+    {
+        if ($value === '' || $base === '' || preg_match('#^([a-z][a-z0-9+.-]*:|//)#i', $value) === 1) {
+            return $value;
+        }
+
+        return rtrim($base, '/') . '/' . ltrim($value, '/');
     }
 }

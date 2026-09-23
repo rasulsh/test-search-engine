@@ -40,4 +40,33 @@ final class ProductDetailsTest extends DatabaseTestCase
     {
         self::assertSame([], $this->details->fetch([]));
     }
+
+    public function testJoinsRelativeValuesToConfiguredStorefrontBases(): void
+    {
+        $this->pdo->exec(
+            "UPDATE products SET url = 'index.php?route=product/product&product_id=1001',
+                                 image = 'catalog/x.jpg' WHERE product_id = 1001"
+        );
+        $this->pdo->exec(
+            "UPDATE products SET url = 'https://other.example/p', image = '//cdn.example/y.jpg'
+             WHERE product_id = 1002"
+        );
+        $details = new ProductDetails(
+            $this->pdo,
+            'products',
+            'https://shop.example.com/',
+            'https://shop.example.com/image'
+        );
+
+        [$relative, $absolute] = $details->fetch([1001, 1002]);
+
+        self::assertSame(
+            'https://shop.example.com/index.php?route=product/product&product_id=1001',
+            $relative['url']
+        );
+        self::assertSame('https://shop.example.com/image/catalog/x.jpg', $relative['image']);
+        // Already absolute (or protocol-relative) values are left alone.
+        self::assertSame('https://other.example/p', $absolute['url']);
+        self::assertSame('//cdn.example/y.jpg', $absolute['image']);
+    }
 }

@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Tests;
 
+use App\Normalizer;
 use PDO;
 use PHPUnit\Framework\TestCase;
 use Throwable;
@@ -75,7 +76,7 @@ final class EndpointTest extends TestCase
         file_put_contents(self::$incomingDir . '/meta.json', (string) json_encode([
             'model' => getenv('SEARCH_MODEL') ?: 'intfloat/multilingual-e5-small',
             'dim' => (int) (getenv('SEARCH_MODEL_DIM') ?: 384),
-            'normalization_version' => 2,
+            'normalization_version' => Normalizer::VERSION,
             'count' => 0,
         ]));
         file_put_contents(self::$incomingDir . '/vectors.idx', '');

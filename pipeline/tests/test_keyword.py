@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 from pathlib import Path
+
+import pytest
 
 import config
 from normalize import NORMALIZATION_VERSION
@@ -100,6 +103,43 @@ def test_build_synonyms_groups_bilingual_categories() -> None:
     assert all(len(group) > 1 for group in groups)
 
 
+def test_load_aliases_normalizes_and_drops_empty_groups(tmp_path: Path) -> None:
+    path = tmp_path / "aliases.json"
+    path.write_text(json.dumps([
+        ["GTA", "Grand Theft Auto", "جی تی ای", "gta"],
+        ["PS-5", "پلی‌استیشن ۵", "PlayStation V"],
+        ["lonely", "---"],
+        [],
+    ], ensure_ascii=False), encoding="utf-8")
+
+    assert kw.load_aliases(path) == [
+        ["gta", "grand theft auto", "جی تی ای"],
+        ["ps5", "پلیاستیشن 5", "playstation 5"],
+    ]
+
+
+def test_load_aliases_missing_file_means_none(tmp_path: Path) -> None:
+    assert kw.load_aliases(tmp_path / "absent.json") == []
+
+
+@pytest.mark.parametrize("content", [
+    '[["gta", "grand theft auto"],]',
+    '{"gta": ["grand theft auto"]}',
+    '["gta", "grand theft auto"]',
+    '[["gta", 5]]',
+])
+def test_load_aliases_rejects_malformed_files(tmp_path: Path, content: str) -> None:
+    path = tmp_path / "aliases.json"
+    path.write_text(content, encoding="utf-8")
+    with pytest.raises(ValueError, match="aliases.json"):
+        kw.load_aliases(path)
+
+
+def test_shipped_alias_file_is_valid() -> None:
+    groups = kw.load_aliases(Path(config.load()["build"]["aliases_file"]))
+    assert ["gta", "grand theft auto", "جی تی ای"] in groups
+
+
 def test_build_keymap_round_trips() -> None:
     keymap = kw.build_keymap()
 
@@ -119,3 +159,10 @@ def test_config_defaults_track_normalization_version() -> None:
     assert cfg["model"]["dim"] == 384
     assert cfg["model"]["normalization_version"] == NORMALIZATION_VERSION
     assert cfg["embedder"] == "mock"
+
+
+def test_config_default_desc_index_chars(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("SEARCH_DESC_INDEX_CHARS", raising=False)
+    assert config.load()["build"]["desc_index_chars"] == 800
+    monkeypatch.setenv("SEARCH_DESC_INDEX_CHARS", "400")
+    assert config.load()["build"]["desc_index_chars"] == 400

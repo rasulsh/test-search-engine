@@ -1,5 +1,5 @@
 {
-  "normalization_version": 2,
+  "normalization_version": 3,
   "cases": [
     {
       "name": "empty string",
@@ -150,6 +150,101 @@
       "name": "spec arabic letters and nbsp",
       "input": "رنگ: مشكي | وزن: ۱٫۵ كيلوگرم",
       "expected": "رنگ: مشکی | وزن: 1٫5 کیلوگرم"
+    },
+    {
+      "name": "roman numeral sequel",
+      "input": "GTA VI",
+      "expected": "gta 6"
+    },
+    {
+      "name": "roman numeral single v",
+      "input": "Grand Theft Auto V",
+      "expected": "grand theft auto 5"
+    },
+    {
+      "name": "roman numerals ii to x",
+      "input": "II III IV V VI VII VIII IX X",
+      "expected": "2 3 4 5 6 7 8 9 10"
+    },
+    {
+      "name": "roman numeral beside persian",
+      "input": "جی تی ای V",
+      "expected": "جی تی ای 5"
+    },
+    {
+      "name": "roman numeral with punctuation",
+      "input": "(Diablo IV): Deluxe",
+      "expected": "(diablo 4): deluxe"
+    },
+    {
+      "name": "roman letter i is never mapped",
+      "input": "I love it",
+      "expected": "i love it"
+    },
+    {
+      "name": "roman letters inside a word",
+      "input": "Xbox Vivo Mix IVory xi civic",
+      "expected": "xbox vivo mix ivory xi civic"
+    },
+    {
+      "name": "roman after model join",
+      "input": "GTA-V PS-4",
+      "expected": "gtav ps4"
+    },
+    {
+      "name": "roman beside digit in one token",
+      "input": "x2 v8 2x",
+      "expected": "x2 v8 2x"
+    },
+    {
+      "name": "dimension x after a number",
+      "input": "1920 x 1080",
+      "expected": "1920 x 1080"
+    },
+    {
+      "name": "unit v after a number",
+      "input": "12 V DC",
+      "expected": "12 v dc"
+    },
+    {
+      "name": "persian digits guard a dimension",
+      "input": "۲ x ۴",
+      "expected": "2 x 4"
+    },
+    {
+      "name": "roman after half-space",
+      "input": "Mark‌IV",
+      "expected": "markiv"
+    },
+    {
+      "name": "roman after collapsed spaces",
+      "input": "Series   X",
+      "expected": "series 10"
+    },
+    {
+      "name": "underscore is a boundary",
+      "input": "_vi_",
+      "expected": "_6_"
+    },
+    {
+      "name": "roman after zwnj space",
+      "input": "فصل ‌ II",
+      "expected": "فصل 2"
+    },
+    {
+      "name": "roman after a model token ending in a digit",
+      "input": "Sony A7 IV",
+      "expected": "sony a7 4"
+    },
+    {
+      "name": "repeated dimensions",
+      "input": "2 x 4 x 6",
+      "expected": "2 x 4 x 6"
+    },
+    {
+      "name": "roman after a spelled numeral",
+      "input": "V X",
+      "expected": "5 10"
     }
   ],
   "sku_cases": [
@@ -197,6 +292,11 @@
       "name": "hash and plus",
       "input": "#A+B 1",
       "expected": "ab1"
+    },
+    {
+      "name": "sku keeps roman letters",
+      "input": "X 12-V",
+      "expected": "x12v"
     }
   ]
 }

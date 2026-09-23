@@ -37,7 +37,7 @@ return [
         'name'                  => getenv('SEARCH_MODEL') ?: 'intfloat/multilingual-e5-small',
         'revision'              => getenv('SEARCH_MODEL_REVISION') ?: 'main',
         'dim'                   => (int) (getenv('SEARCH_MODEL_DIM') ?: 384),
-        'normalization_version' => (int) (getenv('SEARCH_NORMALIZATION_VERSION') ?: 2),
+        'normalization_version' => (int) (getenv('SEARCH_NORMALIZATION_VERSION') ?: 3),
     ],
 
     'search' => [
@@ -64,6 +64,15 @@ return [
         // ranks first, then SKU prefix matches, above all text matches. Prefix
         // matching needs at least this many characters and a digit in the query.
         'sku_prefix_min_length' => (int) $setting('SEARCH_SKU_PREFIX_MIN_LENGTH', '4'),
+        // Synonym / alias expansion (M15): a query term found whole in the
+        // bundle's synonyms.json or aliases.json is also searched with each
+        // other term of its group, in the title only. alias_max_variants caps
+        // the variants per query (the literal one included; 1 disables
+        // expansion); they share one title-index scan. Generated
+        // synonym groups larger than synonyms_max_group_size are ignored as
+        // likely catalog noise; owner aliases are never capped.
+        'alias_max_variants'      => (int) $setting('SEARCH_ALIAS_MAX_VARIANTS', '6'),
+        'synonyms_max_group_size' => (int) $setting('SEARCH_SYNONYMS_MAX_GROUP_SIZE', '4'),
         // Global cosine top-K width for Tier 2 (candidates fused with keyword).
         'semantic_top_k'    => (int) (getenv('SEARCH_SEMANTIC_TOP_K') ?: 100),
         // Relevance floor (cosine) for Tier 2 neighbours. The nearest vectors of

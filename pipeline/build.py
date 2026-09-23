@@ -6,7 +6,7 @@
 Input is a simple, documented shape (NOT the raw OpenCart export); see README for
 the columns and how to derive them from OpenCart. Output is the bundle the server
 consumes (CLAUDE.md sec. 4): vectors.bin, vectors.idx, products.load.sql,
-synonyms.json, spellcheck.txt, keymap.json, meta.json.
+synonyms.json, aliases.json, spellcheck.txt, keymap.json, meta.json.
 """
 
 from __future__ import annotations
@@ -411,6 +411,8 @@ def build_bundle(
 ) -> dict[str, Any]:
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
+    # Read first: a malformed alias file fails the build before the slow embed.
+    aliases = _keyword.load_aliases(config["build"].get("aliases_file", ""))
 
     dim = int(config["model"]["dim"])
     desc_limit = int(config["build"]["desc_char_limit"])
@@ -445,6 +447,9 @@ def build_bundle(
         json.dumps(_keyword.build_synonyms(server_rows), ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8",
     )
+    (out / "aliases.json").write_text(
+        json.dumps(aliases, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+    )
     (out / "spellcheck.txt").write_text(
         "\n".join(_keyword.spellcheck_lines(_keyword.build_spellcheck(server_rows))) + "\n",
         encoding="utf-8",
@@ -476,10 +481,20 @@ def main(argv: list[str] | None = None) -> int:
     source.add_argument("--sql", help="Path to a SQL export (INSERT statements).")
     source.add_argument("--csv", help="Path to a CSV export with the documented columns.")
     parser.add_argument("--out", required=True, help="Output bundle directory.")
+    parser.add_argument("--aliases", help="Alias file (default SEARCH_ALIASES_FILE, else "
+                                          "pipeline/aliases.json).")
     args = parser.parse_args(argv)
 
     config = pipeline_config.load()
     config["model"]["normalization_version"] = NORMALIZATION_VERSION
+    if args.aliases:
+        if not Path(args.aliases).is_file():
+            parser.error(f"alias file not found: {args.aliases}")
+        config["build"]["aliases_file"] = args.aliases
+    try:
+        _keyword.load_aliases(config["build"]["aliases_file"])
+    except ValueError as exc:
+        parser.error(str(exc))
     products = read_products(args.sql or args.csv)
     if not products:
         parser.error("no products found in the input")

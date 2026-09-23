@@ -174,7 +174,7 @@ final class InstallerTest extends TestCase
 
         self::assertSame('intfloat/multilingual-e5-small', $first['model_name']);
         self::assertSame('384', $first['model_dim']);
-        self::assertSame('2', $first['normalization_version']);
+        self::assertSame('3', $first['normalization_version']);
         self::assertSame('0.82', $first['semantic_min_score']);
         self::assertSame('10.0', $first['title_weight']);
         self::assertSame('1.0', $first['desc_weight']);

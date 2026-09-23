@@ -110,7 +110,9 @@ final class SearchController
             (float) ($search['desc_weight'] ?? 1.0),
             (float) ($search['phrase_bonus'] ?? 5.0),
             (int) ($search['sku_prefix_min_length'] ?? 4),
-            (float) ($search['spec_weight'] ?? 6.0)
+            (float) ($search['spec_weight'] ?? 6.0),
+            Synonyms::fromDirectory($config['paths']['data'], (int) ($search['synonyms_max_group_size'] ?? 4)),
+            (int) ($search['alias_max_variants'] ?? 6)
         );
         // The bundle dictionary is cached per worker (and in APCu); the table scan
         // is only a fallback for a data directory without spellcheck.txt.

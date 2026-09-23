@@ -7,8 +7,10 @@ Nothing here needs a GPU or model download.
 
 from __future__ import annotations
 
+import json
 from collections import Counter
 from collections.abc import Iterable
+from pathlib import Path
 from typing import Any
 
 from normalize import normalize
@@ -114,6 +116,34 @@ def build_synonyms(rows: Iterable[dict[str, Any]]) -> list[list[str]]:
     return sorted(
         sorted(members) for members in groups.values() if len(members) > 1
     )
+
+
+def load_aliases(path: str | Path) -> list[list[str]]:
+    """Read the shop owner's alias file (a JSON list of groups, each a list of
+    equivalent product-name forms) and return its groups normalized for the
+    bundle. A missing file means no aliases; malformed JSON or shape raises
+    ValueError so a typo fails the build instead of dropping every alias.
+    Terms that normalize to nothing and duplicates are dropped, and so is a
+    group left with fewer than two terms."""
+    path = Path(path)
+    if not path.is_file():
+        return []
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"{path}: invalid JSON: {exc}") from exc
+    if not isinstance(data, list):
+        raise ValueError(f"{path}: expected a list of groups")
+
+    groups: list[list[str]] = []
+    for number, group in enumerate(data, start=1):
+        if not isinstance(group, list) or not all(isinstance(t, str) for t in group):
+            raise ValueError(f"{path}: group {number} must be a list of strings")
+        terms = list(dict.fromkeys(" ".join(tokenize(normalize(t))) for t in group))
+        terms = [t for t in terms if t]
+        if len(terms) > 1:
+            groups.append(terms)
+    return groups
 
 
 def build_keymap() -> dict[str, dict[str, str]]:

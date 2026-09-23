@@ -103,9 +103,13 @@ Semantics the storefront should know:
   results. Products whose title matches the query come first, then products
   that match in their specs (attributes and feature titles), then products
   that match only in their description. `count` can be `0`.
-- Only the first `SEARCH_DESC_INDEX_CHARS` (default 400) characters of each
+- Only the first `SEARCH_DESC_INDEX_CHARS` (default 800) characters of each
   description are keyword-indexed; a word that appears only deeper in the
   description does not match.
+- Name forms are matched across the bundle's synonyms and the shop's aliases
+  (`gta 5` also finds "Grand Theft Auto V" and "جی تی ای ۵"), and standalone
+  Roman numerals equal digits (`GTA V` = `GTA 5`, so `query.normalized` shows
+  `gta 5`). The response shape is unchanged.
 - **Hybrid** (`q_vector` present and a bundle loaded): cosine neighbours below
   `SEARCH_SEMANTIC_MIN_SCORE` are dropped, and so are keyword hits that match
   only in the description (not the title or specs) with a cosine below it. Every keyword hit ranks above every
@@ -191,7 +195,8 @@ that helps.
 | reason | fix |
 | --- | --- |
 | `missing_meta`, `invalid_meta` | `data_incoming/meta.json` is absent or not JSON. Re-upload the bundle. |
-| `model_mismatch`, `dim_mismatch`, `normalization_version_mismatch` | The bundle was built with a different model, dim, or normalization rules than `server/config.php` (contract 3). Rebuild, or change config deliberately (see [Changing the model](#changing-the-model)). |
+| `model_mismatch`, `dim_mismatch`, `normalization_version_mismatch` | The bundle was built with a different model, dim, or normalization rules than `server/config.php` (contract 3). Rebuild, or change config deliberately (see [Changing the model](#changing-the-model)). The first M15 release needs `normalization_version` 3 in `config.php` (README, [upgrading to M15](./README.md#upgrading-to-m15)). |
+| `invalid_aliases`, `invalid_synonyms` | `data_incoming/aliases.json` or `synonyms.json` is not a JSON list of lists of strings (`details.file` names it). Fix `pipeline/aliases.json` (see README, [aliases](./README.md#aliases)) and rebuild. |
 | `missing_index`, `missing_vectors` | `vectors.idx` / `vectors.bin` not uploaded. |
 | `missing_staging_table` | `products_new` does not exist. Call with `?load=1`, or load `products.load.sql` into the database first. |
 | `missing_load_sql` | `?load=1` was sent but `data_incoming/products.load.sql` is absent. Re-extract `release.zip` (or upload the file). |

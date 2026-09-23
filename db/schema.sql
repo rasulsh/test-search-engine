@@ -37,6 +37,9 @@ CREATE TABLE IF NOT EXISTS products (
     PRIMARY KEY (product_id),
     KEY idx_model (model),
     KEY idx_normalized_sku (normalized_sku),
+    -- M15: alias variants match the title only; this covering index lets that
+    -- scan read the short titles instead of every row's long text columns.
+    KEY idx_title_scan (normalized_title, popularity),
     FULLTEXT KEY ft_normalized (normalized_title, normalized_specs, normalized_desc)
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_unicode_ci;
 

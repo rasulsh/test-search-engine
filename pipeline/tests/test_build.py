@@ -226,9 +226,11 @@ def test_build_bundle_format_and_determinism(tmp_path: Path) -> None:
     assert meta["normalization_version"] == NORMALIZATION_VERSION
     assert meta["embedder"] == "mock"
 
-    for name in ("vectors.bin", "vectors.idx", "products.load.sql",
-                 "synonyms.json", "spellcheck.txt", "keymap.json", "meta.json"):
+    for name in ("vectors.bin", "vectors.idx", "products.load.sql", "synonyms.json",
+                 "aliases.json", "spellcheck.txt", "keymap.json", "meta.json"):
         assert (tmp_path / "b1" / name).exists()
+    # No alias file configured: the bundle still carries an (empty) aliases.json.
+    assert json.loads((tmp_path / "b1" / "aliases.json").read_text()) == []
 
     raw = (tmp_path / "b1" / "vectors.bin").read_bytes()
     assert len(raw) == 6 * 384 * 4
@@ -264,6 +266,31 @@ def test_build_bundle_format_and_determinism(tmp_path: Path) -> None:
     # Deterministic: a second build yields the same vectors.
     meta2 = build.build_bundle(products, tmp_path / "b2", config)
     assert meta2["checksum"] == meta["checksum"]
+
+
+def test_bundle_ships_the_normalized_alias_file(tmp_path: Path) -> None:
+    aliases = tmp_path / "aliases.json"
+    aliases.write_text('[["GTA V", "Grand Theft Auto ۵"]]', encoding="utf-8")
+    config = _config()
+    config["build"]["aliases_file"] = str(aliases)
+
+    build.build_bundle(build.read_products(INPUT_SQL), tmp_path / "b", config)
+
+    shipped = json.loads((tmp_path / "b" / "aliases.json").read_text(encoding="utf-8"))
+    assert shipped == [["gta 5", "grand theft auto 5"]]
+
+
+def test_malformed_alias_file_fails_the_build_before_embedding(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    aliases = tmp_path / "aliases.json"
+    aliases.write_text('[["gta" "grand theft auto"]]', encoding="utf-8")
+    with pytest.raises(SystemExit) as exc:
+        build.main(["--sql", str(INPUT_SQL), "--out", str(tmp_path / "b"),
+                    "--aliases", str(aliases)])
+    assert exc.value.code == 2
+    assert "invalid JSON" in capsys.readouterr().err
+    assert not (tmp_path / "b").exists()
 
 
 LOAD_SAMPLE = REPO_ROOT / "fixtures" / "products.load.sample.sql"

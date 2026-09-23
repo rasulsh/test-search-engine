@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from pathlib import Path
 
 import numpy as np
+import pytest
 
 import build
 from normalize import NORMALIZATION_VERSION, normalize
@@ -109,6 +111,51 @@ def test_to_server_row_combines_titles_and_normalizes() -> None:
     assert row["normalized_title"] == normalize("گوشی آیفون iPhone")
     assert "ایفون" in row["normalized_title"]  # folded in normalized copy
     assert row["price"] == 1199.0
+
+
+def test_to_server_row_stores_sku_and_indexes_it_with_the_title() -> None:
+    row = build.to_server_row({"id": "5", "title_en": "Sony Headphones", "sku": "SNY-XM5 BLK"})
+
+    assert row["sku"] == "SNY-XM5 BLK"  # raw, for display
+    assert row["normalized_sku"] == "snyxm5blk"  # separators and spaces stripped
+    assert row["normalized_title"] == "sony headphones snyxm5blk"
+    # No SKU: the title text is unchanged.
+    assert build.to_server_row({"id": "6", "title_en": "Sony"})["normalized_title"] == "sony"
+    assert build.to_server_row({"id": "6", "title_en": "Sony"})["normalized_sku"] == ""
+
+
+def test_parse_sql_reads_sku_and_null_sku() -> None:
+    rows = build.read_products(INPUT_SQL)
+    assert rows[0]["sku"] == "APL-IP15P-128"
+    assert rows[3]["sku"] is None
+    assert build.to_server_row(rows[3])["sku"] == ""
+
+
+def test_staging_ddl_copies_the_live_definition_without_comments() -> None:
+    schema = build.SCHEMA_PATH.read_text(encoding="utf-8")
+    ddl = build.staging_ddl(schema, "products", "products_new")
+
+    assert ddl.startswith("DROP TABLE IF EXISTS `products_new`;\nCREATE TABLE `products_new` (")
+    assert ddl.count(";") == 2  # exactly two statements
+    assert "--" not in ddl
+    for column in build._SERVER_COLUMNS:
+        assert f"\n    {column} " in ddl
+    assert "KEY idx_normalized_sku (normalized_sku)" in ddl
+    assert "FULLTEXT KEY ft_normalized" in ddl
+    assert "search_logs" not in ddl
+    with pytest.raises(ValueError):
+        build.staging_ddl(schema, "missing_table", "missing_table_new")
+
+
+def test_products_sql_recreates_staging_before_the_rows(tmp_path: Path) -> None:
+    build.build_bundle(build.read_products(INPUT_SQL), tmp_path, _config())
+    sql = (tmp_path / "products.load.sql").read_text(encoding="utf-8")
+
+    drop = sql.index("DROP TABLE IF EXISTS `products_new`;")
+    create = sql.index("CREATE TABLE `products_new`")
+    assert sql.startswith("SET NAMES utf8mb4;")
+    assert drop < create < sql.index("REPLACE INTO `products_new`")
+    assert "'APL-IP15P-128', 'aplip15p128'" in sql
 
 
 def test_index_description_cuts_at_a_word_boundary() -> None:
@@ -217,3 +264,28 @@ def test_build_bundle_format_and_determinism(tmp_path: Path) -> None:
     # Deterministic: a second build yields the same vectors.
     meta2 = build.build_bundle(products, tmp_path / "b2", config)
     assert meta2["checksum"] == meta["checksum"]
+
+
+LOAD_SAMPLE = REPO_ROOT / "fixtures" / "products.load.sample.sql"
+LOAD_SAMPLE_HEADER = (
+    "-- GENERATED from fixtures/products.input.sql by build.py's load-file writer\n"
+    "-- (statement cap 700 bytes, so rows span several statements). The PHP\n"
+    "-- StagingLoader tests load it. Regenerate after a format or schema change:\n"
+    "--   REGENERATE_FIXTURES=1 pytest -k load_sample\n"
+)
+
+
+def _load_sample() -> str:
+    rows = [build.to_server_row(p, 400) for p in build.read_products(INPUT_SQL)]
+    schema = build.SCHEMA_PATH.read_text(encoding="utf-8")
+    ddl = build.staging_ddl(schema, "products", "products_new")
+    return LOAD_SAMPLE_HEADER + build.build_products_sql(rows, "products_new", 700, ddl)
+
+
+def test_committed_load_sample_matches_the_writer() -> None:
+    # The PHP loader is tested against this file, so it must be exactly what
+    # build.py emits today.
+    if os.environ.get("REGENERATE_FIXTURES") == "1":
+        LOAD_SAMPLE.write_text(_load_sample(), encoding="utf-8", newline="\n")
+    assert LOAD_SAMPLE.read_text(encoding="utf-8") == _load_sample()
+    assert _load_sample().count("REPLACE INTO") > 1

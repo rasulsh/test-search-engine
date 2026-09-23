@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-from normalize import NORMALIZATION_VERSION, normalize
+from normalize import NORMALIZATION_VERSION, normalize, normalize_sku
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 FIXTURE = json.loads(
@@ -44,3 +44,13 @@ def test_normalization_is_idempotent(case: dict[str, str]) -> None:
 def test_none_and_empty_normalize_to_empty() -> None:
     assert normalize(None) == ""
     assert normalize("") == ""
+
+
+@pytest.mark.parametrize(
+    "case",
+    FIXTURE["sku_cases"],
+    ids=[c["name"] for c in FIXTURE["sku_cases"]],
+)
+def test_sku_normalization_matches_expected(case: dict[str, str]) -> None:
+    assert normalize_sku(case["input"]) == case["expected"]
+    assert normalize_sku(case["expected"]) == case["expected"]

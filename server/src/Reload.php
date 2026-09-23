@@ -14,7 +14,10 @@ use Throwable;
  *
  * Preconditions (the operator's upload step): the bundle is in the data_incoming
  * directory and products.load.sql has been loaded into the "<products>_new"
- * staging table. This class then, BEFORE swapping, rejects the bundle unless
+ * staging table — by the operator (mysql / phpMyAdmin), or by this class when
+ * run with $loadStaging (M12), after the compatibility check and before the
+ * consistency check, so a failed or partial load is never swapped in. This
+ * class then, BEFORE swapping, rejects the bundle unless
  * model + dim + normalization_version match server config AND
  * meta.count == vectors.idx lines == staging rows == vectors.bin size/checksum.
  * On success it swaps the tables and the directory, keeping the previous table
@@ -52,10 +55,14 @@ final class Reload
      * @return array{ok: true, count: int, model: string, dim: int}
      * @throws ReloadException when the bundle is incompatible or inconsistent.
      */
-    public function run(): array
+    public function run(bool $loadStaging = false): array
     {
         $meta = $this->readMeta();
         $this->assertCompatible($meta);
+        if ($loadStaging) {
+            (new StagingLoader($this->pdo, $this->stagingTable))
+                ->load($this->incomingDir . '/' . StagingLoader::LOAD_FILE);
+        }
         $count = $this->assertConsistent($meta);
 
         // Everything validated — swap. Tables first (RENAME TABLE is atomic for

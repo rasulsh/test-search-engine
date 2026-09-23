@@ -24,6 +24,10 @@ namespace App;
  * Hits that matched in the specs (attributes, feature titles; M13) but not the
  * title sit between the two.
  *
+ * Partial keyword hits (M16: any-terms mode, missing a query word) rank below
+ * every hit holding all the words, in the same three bands, and above the
+ * semantic-only neighbours.
+ *
  * Business signals (in-stock, popularity) are applied AFTER fusion as light
  * multiplicative boosts, so they nudge ordering among comparably-relevant items
  * without overriding relevance. Weights are configurable and default to small.
@@ -60,6 +64,7 @@ final class Ranker
      * @param array<int, array{stock: int, popularity: int}> $signals per-id business signals
      * @param list<int> $titleMatches  keyword ids that matched in the title
      * @param list<int> $specMatches   keyword ids that matched in the specs
+     * @param list<int> $partialMatches keyword ids missing a query word
      * @return list<array{product_id: int, score: float, keyword: bool}>
      */
     public function fuse(
@@ -68,7 +73,8 @@ final class Ranker
         array $signals,
         int $limit,
         array $titleMatches = [],
-        array $specMatches = []
+        array $specMatches = [],
+        array $partialMatches = []
     ): array {
         $rrf = [];
         foreach ($keywordOrder as $i => $id) {
@@ -77,6 +83,7 @@ final class Ranker
         $isKeyword = $rrf;
         $inTitle = array_intersect_key(array_flip($titleMatches), $isKeyword);
         $inSpecs = array_intersect_key(array_flip($specMatches), $isKeyword);
+        $partial = array_flip($partialMatches);
         foreach ($semanticOrder as $i => $id) {
             $rrf[$id] = ($rrf[$id] ?? 0.0) + $this->semanticWeight / ($this->rrfK + $i + 1);
         }
@@ -104,7 +111,7 @@ final class Ranker
                     isset($inSpecs[$id]) => 2,
                     isset($isKeyword[$id]) => 1,
                     default => 0,
-                },
+                } + (isset($isKeyword[$id]) && !isset($partial[$id]) ? 3 : 0),
             ];
         }
 

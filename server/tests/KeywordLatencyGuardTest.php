@@ -31,6 +31,10 @@ use PHPUnit\Framework\Attributes\DataProvider;
  * digit, "ps 5") take the LIKE path that scans every row. Rows are inserted
  * into the indexed table, as products.load.sql does, so the FULLTEXT index is
  * built incrementally like on the host.
+ *
+ * M16: a query no product fully matches pays the strict search AND the
+ * any-terms fallback, which scores every row holding any word (here the 2600
+ * rows of either broad word): timed together on the default bundle shape.
  */
 final class KeywordLatencyGuardTest extends DatabaseTestCase
 {
@@ -104,6 +108,41 @@ final class KeywordLatencyGuardTest extends DatabaseTestCase
             (int) $budgetMs
         ));
         self::assertLessThan($budgetMs, $median, 'field-weighted keyword query exceeded the latency budget');
+    }
+
+    public function testAnyTermsFallbackStaysWithinBudget(): void
+    {
+        $config = require self::repoRoot() . '/server/config.example.php';
+        $budgetMs = (float) $config['search']['latency_budget_ms'];
+        $this->seedCatalog(self::DESC_INDEX_CHARS, true);
+        $keyword = new Keyword($this->pdo, 'products', 3, 20, null, 10.0, 1.0, 5.0, 4, 6.0);
+        $query = 'دسته بازی ناموجود';
+
+        self::assertSame([], $keyword->search($query));
+        $results = $keyword->search($query, null, false); // warm the buffer pool
+        self::assertCount(20, $results);
+        self::assertSame(Keyword::MATCH_PARTIAL, $results[0]['match_type']);
+        self::assertTrue($results[0]['title_match']);
+
+        $times = [];
+        for ($i = 0; $i < self::RUNS; $i++) {
+            $start = hrtime(true);
+            $keyword->search($query);
+            $keyword->search($query, null, false);
+            $times[] = (hrtime(true) - $start) / 1e6;
+        }
+        sort($times);
+        $median = $times[intdiv(self::RUNS, 2)];
+
+        fwrite(STDERR, sprintf(
+            "\n[keyword guard] %d products, capped + specs, zero-hit strict + any-terms fallback: "
+            . "median %.1f ms (max %.1f, budget %d ms)\n",
+            self::PRODUCTS,
+            $median,
+            max($times),
+            (int) $budgetMs
+        ));
+        self::assertLessThan($budgetMs, $median, 'strict + any-terms fallback exceeded the latency budget');
     }
 
     private function seedCatalog(int $descIndexChars, bool $withSpecs): void

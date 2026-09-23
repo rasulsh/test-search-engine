@@ -279,6 +279,28 @@ never silently turns aliases off. Not solved by this: queries that describe a
 need rather than name a product ("مانیتور مناسب کنسول"); aliases only fix
 name / alias / form matching.
 
+<a id="all-terms"></a>**All words (M16).** A multi-word query matches only
+products that hold **every** word somewhere in title, specs and description
+combined: `کیبورد قرمز` returns keyboards whose title, colour attribute or
+description says red, not black keyboards and not red mice. Alias variants
+apply the rule per variant (the union of the variants' hits; a variant still
+matches in the title only). The surviving products rank by the field
+weights below: title band, then spec band (a spec match with no title
+match), then description-only, then score. The phrase bonus puts a product
+named `کیبورد قرمز` first. When **no** product holds every word, even after
+the keyboard-layout / spelling recovery, the products holding the most words
+are served instead (most words first, then the same bands), so the shopper
+still sees something. While the keyword hits hold every word, a query vector
+only reorders them: semantic-only neighbours are **not** appended below. On
+`multilingual-e5-small`, "کیبورد قرمز" puts black keyboards (0.83–0.84) and a
+red mouse (0.83) above the 0.82 floor (measured on hand-written sample
+passages, not the real catalog), so without that the one-word matches came
+back through the semantic tier. Single-word queries, SKU hits and the
+partial fallback keep the additive neighbours. `SEARCH_REQUIRE_ALL_TERMS=0`
+always serves partial matches (products holding every word still rank first,
+also in the hybrid merge) with the additive neighbours. Server-only: no
+bundle rebuild or schema change.
+
 **Relevance floor.** The nearest vectors of a query with no relevant product
 are still unrelated items (on the real catalog, "ball bearing" returned case
 fans). Neighbours with cosine below `SEARCH_SEMANTIC_MIN_SCORE` (default 0.82)
@@ -946,6 +968,7 @@ M0–M5. Verify each item on the production host before wide rollout.
 - [ ] **M15** — Name / alias / form matching: standalone Roman numerals → digits (normalization version 3), query-side expansion from `synonyms.json` and an owner-maintained `aliases.json` (whole terms, title-only variants), `desc_index_chars` default 800.
 - [ ] **M14.1** — `release.py` downloads the browser assets itself when `client/` lacks them (cached; `--no-model` skips), so one command builds a complete release. `desc_index_chars` leaves the installer and server config and becomes `release.py --desc-index-chars`.
 - [ ] **M15.1** — `normalization_version` in `config.php` (and the installer prefill) defaults to the code's `Normalizer::VERSION`, and the pipeline always stamps its own `NORMALIZATION_VERSION`, so a rules bump reloads with no config edit.
+- [ ] **M16** — Multi-word queries require every word across title, specs and description (per alias variant), ranked title band, spec band (no title match), description-only, then score; best-partial fallback when nothing holds every word; semantic neighbours not appended to all-words hits (`SEARCH_REQUIRE_ALL_TERMS`, default on).
 
 ## Contributing
 

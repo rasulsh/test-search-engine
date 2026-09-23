@@ -21,7 +21,7 @@ import release
 REPO_ROOT = Path(__file__).resolve().parents[2]
 INPUT_SQL = REPO_ROOT / "fixtures" / "products.input.sql"
 BUNDLE_FILES = ("vectors.bin", "vectors.idx", "products.load.sql", "synonyms.json",
-                "spellcheck.txt", "keymap.json", "meta.json")
+                "aliases.json", "spellcheck.txt", "keymap.json", "meta.json")
 
 
 def _tarball(members: dict[str, bytes]) -> bytes:
@@ -225,6 +225,29 @@ def test_release_bundle_is_the_built_bundle(tmp_path: Path, dev_tree: tuple[Path
         load_sql = archive.read("data_incoming/products.load.sql").decode("utf-8")
     assert meta["count"] == 6 and meta["embedder"] == "mock"
     assert "CREATE TABLE `products_new`" in load_sql  # self-contained staging load
+
+
+def test_release_ships_the_alias_file(tmp_path: Path, dev_tree: tuple[Path, Path]) -> None:
+    aliases = tmp_path / "my_aliases.json"
+    aliases.write_text('[["GTA", "Grand Theft Auto"]]', encoding="utf-8")
+    _release(tmp_path, dev_tree, "--aliases", str(aliases))
+    with zipfile.ZipFile(tmp_path / "out" / "release.zip") as archive:
+        shipped = json.loads(archive.read("data_incoming/aliases.json"))
+    assert shipped == [["gta", "grand theft auto"]]
+
+
+def test_release_rejects_a_missing_or_malformed_alias_file(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    broken = tmp_path / "aliases.json"
+    broken.write_text('[["gta", "grand theft auto"],]', encoding="utf-8")
+    for path in (tmp_path / "absent.json", broken):
+        with pytest.raises(SystemExit) as exc:
+            release.main(["--sql", str(INPUT_SQL), "--out", str(tmp_path / "r.zip"),
+                          "--no-model", "--aliases", str(path)])
+        assert exc.value.code == 2
+    assert "invalid JSON" in capsys.readouterr().err
+    assert not (tmp_path / "r.zip").exists()
 
 
 def test_release_defaults_to_the_real_embedder(monkeypatch: pytest.MonkeyPatch) -> None:

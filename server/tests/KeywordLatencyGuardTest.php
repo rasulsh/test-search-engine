@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Tests;
 
 use App\Keyword;
+use App\Synonyms;
 use PHPUnit\Framework\Attributes\DataProvider;
 
 /**
@@ -24,7 +25,10 @@ use PHPUnit\Framework\Attributes\DataProvider;
  * pipeline's default desc_index_chars (M11), and capped plus ~20 attribute
  * pairs per product in normalized_specs (M13, the default bundle shape) with
  * another 10% of the catalog mentioning the query only there, so the spec
- * REGEXPs run on every matching row without a title hit. Rows are inserted
+ * REGEXPs run on every matching row without a title hit. Two more shapes add
+ * synonym / alias expansion (M15) at the configured alias_max_variants: every
+ * variant is one more keyword search, and variants holding a short token (a
+ * digit, "ps 5") take the LIKE path that scans every row. Rows are inserted
  * into the indexed table, as products.load.sql does, so the FULLTEXT index is
  * built incrementally like on the host.
  */
@@ -34,32 +38,44 @@ final class KeywordLatencyGuardTest extends DatabaseTestCase
     private const DESC_WORDS = 300;
     private const RUNS = 5;
     /** Mirrors the default of desc_index_chars in pipeline/config.py. */
-    private const DESC_INDEX_CHARS = 400;
+    private const DESC_INDEX_CHARS = 800;
     private const SPEC_PAIRS = 20;
 
-    /** @return array<string, array{int, bool}> */
+    /** @return array<string, array{int, bool, ?list<string>}> */
     public static function shapes(): array
     {
         return [
-            'whole description'          => [0, false],
-            'capped description'         => [self::DESC_INDEX_CHARS, false],
-            'capped description + specs' => [self::DESC_INDEX_CHARS, true],
+            'whole description'          => [0, false, null],
+            'capped description'         => [self::DESC_INDEX_CHARS, false, null],
+            'capped description + specs' => [self::DESC_INDEX_CHARS, true, null],
+            'capped + specs + fulltext aliases' => [
+                self::DESC_INDEX_CHARS, true, ['دسته بازی', 'گیم پد', 'کنترلر بازی', 'جوی استیک', 'gamepad', 'joypad'],
+            ],
+            'capped + specs + LIKE aliases' => [
+                self::DESC_INDEX_CHARS, true, ['دسته بازی', 'دسته 5', 'ps 5', 'بازی 4', 'gamepad 5', 'joystick 5'],
+            ],
         ];
     }
 
+    /** @param ?list<string> $aliases one alias group holding the query */
     #[DataProvider('shapes')]
-    public function testBroadQueryStaysWithinBudget(int $descIndexChars, bool $withSpecs): void
+    public function testBroadQueryStaysWithinBudget(int $descIndexChars, bool $withSpecs, ?array $aliases): void
     {
         $config = require self::repoRoot() . '/server/config.example.php';
         $budgetMs = (float) $config['search']['latency_budget_ms'];
+        $maxVariants = (int) $config['search']['alias_max_variants'];
         $this->seedCatalog($descIndexChars, $withSpecs);
 
-        $keyword = new Keyword($this->pdo, 'products', 3, 20);
+        $synonyms = $aliases === null ? null : new Synonyms([$aliases]);
+        $keyword = new Keyword($this->pdo, 'products', 3, 20, null, 10.0, 1.0, 5.0, 4, 6.0, $synonyms, $maxVariants);
         $query = 'دسته بازی';
+        if ($synonyms !== null) {
+            self::assertCount($maxVariants, $synonyms->variants(['دسته', 'بازی'], $maxVariants));
+        }
 
         $results = $keyword->search($query); // warm the buffer pool
         self::assertCount(20, $results);
-        if ($withSpecs) {
+        if ($withSpecs && $aliases === null) {
             // 800 title rows, then the 2000 spec-only rows lead the description band.
             self::assertTrue($keyword->search($query, 1000)[999]['spec_match']);
         }
@@ -76,12 +92,13 @@ final class KeywordLatencyGuardTest extends DatabaseTestCase
         $median = $times[intdiv(self::RUNS, 2)];
 
         fwrite(STDERR, sprintf(
-            "\n[keyword guard] %d products, ~%d-word descriptions, index cap %s%s, broad query: "
+            "\n[keyword guard] %d products, ~%d-word descriptions, index cap %s%s%s, broad query: "
             . "median %.1f ms (max %.1f, budget %d ms)\n",
             self::PRODUCTS,
             self::DESC_WORDS,
             $descIndexChars > 0 ? $descIndexChars . ' chars' : 'none',
             $withSpecs ? ', ' . self::SPEC_PAIRS . ' spec pairs' : '',
+            $aliases !== null ? ', ' . $maxVariants . ' alias variants (' . $aliases[1] . ', ...)' : '',
             $median,
             max($times),
             (int) $budgetMs

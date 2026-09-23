@@ -14,13 +14,44 @@ namespace App;
  * Rules, in order: remove zero-width chars (incl. ZWNJ), remove Arabic diacritics
  * and tatweel, unify Arabic letters to Persian, fold Persian/Arabic-Indic digits,
  * lowercase (Latin), canonicalize model names (drop -, _, ., / between ASCII
- * alphanumerics), then collapse whitespace and trim.
+ * alphanumerics), collapse whitespace and trim, then map standalone Roman
+ * numerals ii..x to digits (whole tokens only, never right after a number
+ * token and a space, where "x" / "v" are a dimension or a unit: "2 x 4",
+ * "12 v"; "a7 iv" still maps; "i" is never mapped).
  */
 final class Normalizer
 {
-    public const VERSION = 2;
+    public const VERSION = 3;
+
+    private const ROMAN = [
+        'ii' => '2', 'iii' => '3', 'iv' => '4', 'v' => '5', 'vi' => '6',
+        'vii' => '7', 'viii' => '8', 'ix' => '9', 'x' => '10',
+    ];
 
     public static function normalize(?string $text): string
+    {
+        return (string) preg_replace_callback(
+            // A preceding number token is matched (group 1) and left unchanged;
+            // mirrors normalize.py, whose lookbehind cannot be variable-width.
+            '/(?<![\p{L}\p{N}])([0-9]+ )?(viii|vii|iii|ix|iv|vi|ii|v|x)(?![\p{L}\p{N}])/u',
+            static fn (array $m): string => $m[1] !== '' ? $m[0] : self::ROMAN[$m[2]],
+            self::canonical($text)
+        );
+    }
+
+    /**
+     * Canonical SKU: normalized text (without the Roman-numeral rule: "X 12" is
+     * a code, not "10 12") with every non-letter/non-digit removed, so
+     * "AB-12 34", "ab.1234" and "AB1234" are one code. Stricter than the
+     * model-name rule, which only drops separators between ASCII characters.
+     */
+    public static function normalizeSku(?string $sku): string
+    {
+        return (string) preg_replace('/[^\p{L}\p{N}]+/u', '', self::canonical($sku));
+    }
+
+    /** Every rule but the Roman numerals, which a code never holds. */
+    private static function canonical(?string $text): string
     {
         if ($text === null || $text === '') {
             return '';
@@ -33,16 +64,6 @@ final class Normalizer
         $text = (string) preg_replace('/ +/', ' ', $text);
 
         return trim($text);
-    }
-
-    /**
-     * Canonical SKU: normalized text with every non-letter/non-digit removed,
-     * so "AB-12 34", "ab.1234" and "AB1234" are one code. Stricter than the
-     * model-name rule, which only drops separators between ASCII characters.
-     */
-    public static function normalizeSku(?string $sku): string
-    {
-        return (string) preg_replace('/[^\p{L}\p{N}]+/u', '', self::normalize($sku));
     }
 
     /**

@@ -1,7 +1,7 @@
 """One-command release: catalog export in -> a single deployable release.zip.
 
     python pipeline/release.py --csv export.csv --out release.zip [--no-model]
-        [--desc-index-chars N]
+        [--desc-index-chars N] [--aliases aliases.json]
 
 Builds the bundle with the real embedder and packs, relative to the host's
 `server/` directory, everything the site needs:
@@ -124,8 +124,10 @@ def main(argv: list[str] | None = None) -> int:
                              "routine update when the host already has them.")
     parser.add_argument("--desc-index-chars", type=int, metavar="N",
                         help="Leading description characters keyword-indexed (default "
-                             "SEARCH_DESC_INDEX_CHARS or 400; 0 = whole description). "
+                             "SEARCH_DESC_INDEX_CHARS or 800; 0 = whole description). "
                              "Build-time only: the server never re-indexes.")
+    parser.add_argument("--aliases", help="Alias file shipped in the bundle (default "
+                                          "SEARCH_ALIASES_FILE, else pipeline/aliases.json).")
     parser.add_argument("--mock", action="store_true",
                         help="Use the mock embedder (tests only; never deploy).")
     parser.add_argument("--server-dir", default=str(REPO_ROOT / "server"), help=argparse.SUPPRESS)
@@ -140,6 +142,14 @@ def main(argv: list[str] | None = None) -> int:
         if args.desc_index_chars < 0:
             parser.error("--desc-index-chars must be 0 or more")
         config["build"]["desc_index_chars"] = args.desc_index_chars
+    if args.aliases:
+        if not Path(args.aliases).is_file():
+            parser.error(f"alias file not found: {args.aliases}")
+        config["build"]["aliases_file"] = args.aliases
+    try:
+        build._keyword.load_aliases(config["build"]["aliases_file"])
+    except ValueError as exc:
+        parser.error(str(exc))
 
     products = build.read_products(args.csv or args.sql)
     if not products:

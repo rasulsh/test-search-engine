@@ -13,13 +13,17 @@ Rules (applied in this order):
   5. Lowercase (affects Latin only).
   6. Canonicalize model names: drop -, _, ., / between ASCII alphanumerics.
   7. Collapse whitespace to single ASCII spaces and trim.
+  8. Standalone Roman numerals ii..x become digits ("gta vi" -> "gta 6"): only a
+     whole token (no letter or digit on either side), and not right after a
+     number token and a space, where "x" / "v" are a dimension or a unit
+     ("2 x 4", "12 v"; "a7 iv" still maps). "i" is never mapped (the word).
 """
 
 from __future__ import annotations
 
 import re
 
-NORMALIZATION_VERSION = 2
+NORMALIZATION_VERSION = 3
 
 # 1. Zero-width characters, including ZWNJ (U+200C, the Persian half-space).
 _ZERO_WIDTH = ["​", "‌", "‍", "﻿"]
@@ -70,9 +74,28 @@ for _ch in _WHITESPACE:
 
 _MODEL_SEPARATORS = re.compile(r"(?<=[0-9a-z])[-_./]+(?=[0-9a-z])")
 
+# 8. [^\W_] is a letter or digit (str.isalnum), the same class as the server's
+#    [\p{L}\p{N}]; longest numerals first in the alternation. A preceding
+#    number token is matched (group 1) rather than looked behind for, as a
+#    lookbehind cannot be variable-width; such a match is left unchanged.
+_ROMAN = {"ii": "2", "iii": "3", "iv": "4", "v": "5", "vi": "6",
+          "vii": "7", "viii": "8", "ix": "9", "x": "10"}
+_ROMAN_NUMERAL = re.compile(
+    r"(?<![^\W_])([0-9]+ )?(viii|vii|iii|ix|iv|vi|ii|v|x)(?![^\W_])"
+)
+
+
+def _roman(match: re.Match[str]) -> str:
+    return match.group(0) if match.group(1) else _ROMAN[match.group(2)]
+
 
 def normalize(text: str | None) -> str:
     """Return the canonical normalized form of ``text``."""
+    return _ROMAN_NUMERAL.sub(_roman, _canonical(text))
+
+
+def _canonical(text: str | None) -> str:
+    """Rules 1-7: everything but the Roman numerals, which a code never holds."""
     if not text:
         return ""
 
@@ -85,7 +108,8 @@ def normalize(text: str | None) -> str:
 
 
 def normalize_sku(sku: str | None) -> str:
-    """Canonical SKU: normalized text with every non-letter/non-digit removed,
-    so "AB-12 34", "ab.1234" and "AB1234" are one code. Mirrors
+    """Canonical SKU: normalized text (without the Roman-numeral rule: "X 12"
+    is a code, not "10 12") with every non-letter/non-digit removed, so
+    "AB-12 34", "ab.1234" and "AB1234" are one code. Mirrors
     Normalizer::normalizeSku (letters/digits as in the shared tokenizer)."""
-    return "".join(ch for ch in normalize(sku) if ch.isalnum())
+    return "".join(ch for ch in _canonical(sku) if ch.isalnum())

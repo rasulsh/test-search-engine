@@ -19,7 +19,8 @@ use Throwable;
  * consistency check, so a failed or partial load is never swapped in. This
  * class then, BEFORE swapping, rejects the bundle unless
  * model + dim + normalization_version match server config AND
- * meta.count == vectors.idx lines == staging rows == vectors.bin size/checksum.
+ * meta.count == vectors.idx lines == staging rows == vectors.bin size/checksum,
+ * and a present synonyms.json / aliases.json parses (M15).
  * On success it swaps the tables and the directory, keeping the previous table
  * and directory for one-step rollback.
  */
@@ -59,6 +60,7 @@ final class Reload
     {
         $meta = $this->readMeta();
         $this->assertCompatible($meta);
+        $this->assertGroupFiles();
         if ($loadStaging) {
             (new StagingLoader($this->pdo, $this->stagingTable))
                 ->load($this->incomingDir . '/' . StagingLoader::LOAD_FILE);
@@ -76,6 +78,9 @@ final class Reload
             $this->rollbackTables();
             throw new ReloadException('directory_swap_failed', ['error' => $e->getMessage()]);
         }
+
+        // Searches in this worker re-read synonyms.json / aliases.json at once.
+        Synonyms::clearCache();
 
         // The swap is committed; warming the speller is best-effort. Other
         // workers pick up the new file on their own (the cache key is the file's
@@ -130,6 +135,29 @@ final class Reload
                 'actual' => $meta['normalization_version'] ?? null,
             ]);
         }
+    }
+
+    /**
+     * synonyms.json and aliases.json are optional (older bundles have no
+     * aliases.json), but a present one must parse: the shop owner edits
+     * aliases.json by hand, and a typo there should fail the reload loudly
+     * rather than silently switch the aliases off.
+     */
+    private function assertGroupFiles(): void
+    {
+        if (!$this->groupsFileParses(Synonyms::SYNONYMS_FILE)) {
+            throw new ReloadException('invalid_synonyms', ['file' => Synonyms::SYNONYMS_FILE]);
+        }
+        if (!$this->groupsFileParses(Synonyms::ALIASES_FILE)) {
+            throw new ReloadException('invalid_aliases', ['file' => Synonyms::ALIASES_FILE]);
+        }
+    }
+
+    private function groupsFileParses(string $file): bool
+    {
+        $path = $this->incomingDir . '/' . $file;
+
+        return !is_file($path) || Synonyms::parseGroups((string) file_get_contents($path)) !== null;
     }
 
     /**

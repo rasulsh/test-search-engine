@@ -124,7 +124,8 @@ Breaking any of these produces silently wrong results. Enforce each with a test.
   in `vectors.bin`.
 - `products.load.sql` — INSERT/REPLACE rows for the `products` table (normalized
   title/desc + brand, category, model, price, stock, url, image, popularity).
-- `synonyms.json`, `spellcheck.txt`, `keymap.json`.
+- `synonyms.json`, `aliases.json` (owner-maintained, M15), `spellcheck.txt`,
+  `keymap.json`.
 - `meta.json` — see contract 3.
 
 The server reads `vectors.bin` as packed floats (`unpack`), not JSON. Cache the

@@ -8,6 +8,8 @@ use App\Keyword;
 use App\Reload;
 use App\ReloadException;
 use App\Speller;
+use App\Synonyms;
+use PHPUnit\Framework\Attributes\DataProvider;
 
 final class ReloadTest extends DatabaseTestCase
 {
@@ -167,6 +169,67 @@ final class ReloadTest extends DatabaseTestCase
         (new Reload($this->pdo, $this->config($dataDir, $incomingDir)))->run();
 
         self::assertSame('sent', Speller::fromDictionary($path, false)?->suggest('sont'));
+    }
+
+    public function testReloadServesTheNewAliasFile(): void
+    {
+        $this->createStaging(2);
+        $dataDir = $this->newTempDir('_data');
+        file_put_contents($dataDir . '/' . Synonyms::ALIASES_FILE, '[["gta", "grand theft auto"]]');
+        $this->tempDirs[] = $dataDir . '_old';
+        // Warm the previous bundle's aliases, as a serving worker would have.
+        self::assertSame(
+            [['gta'], ['grand', 'theft', 'auto']],
+            Synonyms::fromDirectory($dataDir, 4)->variants(['gta'], 6)
+        );
+
+        // The owner added a Persian form; the rebuilt bundle ships it.
+        $incomingDir = $this->makeIncoming(2);
+        file_put_contents(
+            $incomingDir . '/' . Synonyms::ALIASES_FILE,
+            '[["gta", "grand theft auto", "جی تی ای"], ["ps5", "پلی استیشن 5"]]'
+        );
+        (new Reload($this->pdo, $this->config($dataDir, $incomingDir)))->run();
+
+        $synonyms = Synonyms::fromDirectory($dataDir, 4);
+        self::assertSame(
+            [['gta'], ['grand', 'theft', 'auto'], ['جی', 'تی', 'ای']],
+            $synonyms->variants(['gta'], 6)
+        );
+        self::assertSame([['ps5'], ['پلی', 'استیشن', '5']], $synonyms->variants(['ps5'], 6));
+    }
+
+    /** @return iterable<string, array{string, string, string}> */
+    public static function malformedGroupFiles(): iterable
+    {
+        yield 'alias JSON syntax error' => [
+            Synonyms::ALIASES_FILE, '[["gta", "grand theft auto"],]', 'invalid_aliases',
+        ];
+        yield 'alias group not a list' => [Synonyms::ALIASES_FILE, '{"gta": "grand theft auto"}', 'invalid_aliases'];
+        yield 'synonym term not a string' => [Synonyms::SYNONYMS_FILE, '[["laptop", 5]]', 'invalid_synonyms'];
+    }
+
+    #[DataProvider('malformedGroupFiles')]
+    public function testMalformedAliasOrSynonymFileRejectedWithoutSwap(string $file, string $json, string $reason): void
+    {
+        $this->insertProduct('products', 1);
+        $this->insertProduct('products', 2);
+        $this->createStaging(3);
+        $dataDir = $this->newTempDir('_data');
+        $incomingDir = $this->makeIncoming(3);
+        file_put_contents($incomingDir . '/' . $file, $json);
+
+        try {
+            (new Reload($this->pdo, $this->config($dataDir, $incomingDir)))->run();
+            self::fail('expected ReloadException');
+        } catch (ReloadException $e) {
+            self::assertSame($reason, $e->reason());
+            self::assertSame(['file' => $file], $e->details());
+        }
+
+        self::assertSame(2, $this->rowCount('products'));
+        self::assertSame(3, $this->rowCount('products_new'));
+        self::assertDirectoryExists($incomingDir);
     }
 
     public function testFirstLoadWithoutExistingProducts(): void

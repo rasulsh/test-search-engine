@@ -50,6 +50,18 @@ use PDOException;
  * matches, above every text match. Prefix matching needs at least
  * sku_prefix_min_length characters and a digit, so an ordinary word ("sony")
  * never pulls products whose code happens to start with it to the top.
+ *
+ * Synonyms and aliases (M15): with a {@see Synonyms} map, the query is also
+ * searched as each variant with a whole-term synonym or alias swapped in ("gta
+ * 5" also as "grand theft auto 5"), at most $maxVariants queries in all, the
+ * literal one included. A variant is a product-name form, so it is matched in
+ * the title only (every token a word prefix in normalized_title, scored as a
+ * full title match): that keeps a synonym from pulling in products that merely
+ * mention it in their description, and lets all variants share one scan of a
+ * covering title index — the three-field LIKE fallback a short-token variant
+ * ("جی تی ای") would otherwise take costs several times the latency budget on
+ * a full catalog. Hits are merged keeping each product's best field band and
+ * score; ties keep the literal query's order first.
  */
 final class Keyword
 {
@@ -64,10 +76,17 @@ final class Keyword
     private float $phraseBonus;
     private int $skuPrefixMinLength;
     private float $specWeight;
+    private ?Synonyms $synonyms;
+    private int $maxVariants;
+    /** False once the live table turned out to predate the idx_title_scan index (M15). */
+    private bool $titleIndex = true;
     /** False once the live table turned out to predate the normalized_specs column. */
     private bool $specs = true;
 
     public const MATCH_SKU = 'sku';
+    public const MATCH_ALIAS = 'alias';
+    /** Covering index for the title-only variant scan (db/schema.sql). */
+    private const TITLE_INDEX = 'idx_title_scan';
     /** SKU hits outrank any text score (title band tops out near title_weight + phrase_bonus). */
     private const SKU_EXACT_SCORE = 2000000.0;
     private const SKU_PREFIX_SCORE = 1000000.0;
@@ -91,7 +110,9 @@ final class Keyword
         float $descWeight = 1.0,
         float $phraseBonus = 5.0,
         int $skuPrefixMinLength = 4,
-        float $specWeight = 6.0
+        float $specWeight = 6.0,
+        ?Synonyms $synonyms = null,
+        int $maxVariants = 6
     ) {
         $this->pdo = $pdo;
         $this->table = Identifier::quote($productsTable);
@@ -105,6 +126,8 @@ final class Keyword
         $this->phraseBonus = max(0.0, $phraseBonus);
         $this->skuPrefixMinLength = max(1, $skuPrefixMinLength);
         $this->specWeight = max(0.0, $specWeight);
+        $this->synonyms = $synonyms;
+        $this->maxVariants = max(1, $maxVariants);
     }
 
     /**
@@ -119,7 +142,11 @@ final class Keyword
         }
 
         $skuHits = $this->skuSearch(Normalizer::normalizeSku($query), $limit);
-        $textHits = $this->textSearch($tokens, $limit);
+        $variants = $this->titleIndex ? $this->synonyms?->variants($tokens, $this->maxVariants) : null;
+        $variants ??= [$tokens];
+        $textHits = count($variants) === 1
+            ? $this->textSearch($tokens, $limit)
+            : $this->variantSearch($variants, $limit);
         if ($skuHits === []) {
             return $textHits;
         }
@@ -132,6 +159,35 @@ final class Keyword
         }
 
         return array_slice($skuHits, 0, $limit);
+    }
+
+    /**
+     * The literal query as usual, the other variants in one title-only scan,
+     * merged: a product keeps its best (title band, spec band, score); ties
+     * keep first-seen order, which lists the literal query's hits first.
+     *
+     * @param non-empty-list<list<string>> $variants
+     * @return list<array{product_id: int, score: float, match_type: string, title_match: bool, spec_match: bool}>
+     */
+    private function variantSearch(array $variants, int $limit): array
+    {
+        $rank = static fn (array $hit): array => [$hit['title_match'], $hit['spec_match'], $hit['score']];
+        $best = [];
+        $hits = array_merge(
+            $this->textSearch($variants[0], $limit),
+            $this->titleSearch(array_slice($variants, 1), $limit)
+        );
+        foreach ($hits as $hit) {
+            $id = $hit['product_id'];
+            if (!isset($best[$id])) {
+                $best[$id] = [count($best), $hit];
+            } elseif ($rank($hit) > $rank($best[$id][1])) {
+                $best[$id][1] = $hit;
+            }
+        }
+        usort($best, static fn (array $a, array $b): int => [$rank($b[1]), $a[0]] <=> [$rank($a[1]), $b[0]]);
+
+        return array_slice(array_column($best, 1), 0, $limit);
     }
 
     /**
@@ -328,6 +384,68 @@ final class Keyword
         $stmt->execute(array_merge($params, $whereParams));
 
         return $this->hydrate($stmt->fetchAll(PDO::FETCH_ASSOC), $matchType);
+    }
+
+    /**
+     * Rows whose title holds every token of at least one variant as a word
+     * prefix (the FULLTEXT "word*" semantics), scored like a full title match
+     * in {@see scoredSearch}: the phrase bonus when some multi-token variant
+     * appears adjacent and in order. All variants share one scan of the
+     * covering title index; the LIKE prefilter lets the cheap substring test
+     * reject most rows before the REGEXP runs. Without that index the scan
+     * reads every row's long text (seconds per query on a full catalog), so a
+     * live table that predates it (before the first M15 reload) gets none.
+     *
+     * @param list<list<string>> $variants
+     * @return list<array{product_id: int, score: float, match_type: string, title_match: bool, spec_match: bool}>
+     */
+    private function titleSearch(array $variants, int $limit): array
+    {
+        $phrases = [];
+        $phraseParams = [];
+        $matches = [];
+        $matchParams = [];
+        foreach ($variants as $tokens) {
+            $all = [];
+            foreach ($tokens as $token) {
+                $all[] = 'normalized_title LIKE ? AND normalized_title REGEXP ?';
+                array_push($matchParams, '%' . $this->escapeLike($token) . '%', self::WORD_START . $token);
+            }
+            $matches[] = '(' . implode(' AND ', $all) . ')';
+            if (count($tokens) > 1) {
+                $phrases[] = 'normalized_title REGEXP ?';
+                $phraseParams[] = self::WORD_START . implode(self::BOUNDARY . '+', $tokens);
+            }
+        }
+        $phrase = $phrases === [] ? '0' : '(' . implode(' OR ', $phrases) . ')';
+
+        // Materialized first (the inner LIMIT, as in scoredSearch): sorted
+        // directly, MariaDB abandons the covering title-index scan and takes
+        // ~50x longer on a 20k catalog.
+        $sql = 'SELECT product_id, 1 AS title_hits, 0 AS spec_hits, '
+             . sprintf('%.6F + %.6F', $this->titleWeight, $this->phraseBonus) . " * {$phrase} AS score
+                FROM (
+                    SELECT product_id, popularity, normalized_title
+                    FROM {$this->table} FORCE INDEX (" . self::TITLE_INDEX . ')
+                    WHERE ' . implode(' OR ', $matches) . '
+                    LIMIT ' . PHP_INT_MAX . '
+                ) matched
+                ORDER BY score DESC, popularity DESC, product_id ASC
+                LIMIT ' . (int) $limit;
+        try {
+            $stmt = $this->pdo->prepare($sql);
+            $stmt->execute(array_merge($phraseParams, $matchParams));
+        } catch (PDOException $e) {
+            // 1176: key does not exist — the live table predates M15.
+            if (($e->errorInfo[1] ?? null) !== 1176) {
+                throw $e;
+            }
+            $this->titleIndex = false;
+
+            return [];
+        }
+
+        return $this->hydrate($stmt->fetchAll(PDO::FETCH_ASSOC), self::MATCH_ALIAS);
     }
 
     /** Escape LIKE wildcards (defensive; tokenization already strips them). */

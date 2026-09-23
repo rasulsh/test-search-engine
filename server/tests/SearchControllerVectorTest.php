@@ -98,7 +98,9 @@ final class SearchControllerVectorTest extends DatabaseTestCase
             $vectors,
             $ranker,
             $signalsProvider,
-            100
+            100,
+            20,
+            0.82
         );
     }
 
@@ -168,6 +170,100 @@ final class SearchControllerVectorTest extends DatabaseTestCase
 
         self::assertNotContains(9999, $result['product_ids']);
         self::assertContains(1007, $result['product_ids']);
+    }
+
+    public function testNoKeywordHitAndNoNeighbourAboveTheFloorReturnsEmpty(): void
+    {
+        // A "ball bearing" query: no keyword match anywhere, and the nearest
+        // vector (0.6) is below the 0.82 floor. Nothing is padded in.
+        $bundle = $this->makeBundle([
+            1009 => [0.6, 0.8, 0.0, 0.0],
+            1013 => [0.0, 0.0, 1.0, 0.0],
+        ]);
+
+        $result = $this->controller($bundle)->search([
+            'q'        => 'بلبرینگ',
+            'q_vector' => [1.0, 0.0, 0.0, 0.0],
+        ]);
+
+        self::assertSame(0, $result['count']);
+        self::assertSame([], $result['product_ids']);
+        self::assertSame([], $result['cosine_scores']);
+        self::assertNull($result['did_you_mean']);
+    }
+
+    public function testNeighboursBelowTheFloorAreDroppedButAboveAreKept(): void
+    {
+        $bundle = $this->makeBundle([
+            1011 => [0.9, 0.43589, 0.0, 0.0], // cosine 0.9: kept
+            1013 => [0.6, 0.8, 0.0, 0.0],     // cosine 0.6: dropped
+        ]);
+
+        $result = $this->controller($bundle)->search([
+            'q'        => 'بلبرینگ',
+            'q_vector' => [1.0, 0.0, 0.0, 0.0],
+        ]);
+
+        self::assertSame([1011], $result['product_ids']);
+        self::assertEqualsWithDelta(0.9, $result['cosine_scores'][0], 1e-4);
+    }
+
+    public function testKeywordHitsOutrankAHighlyBoostedSemanticNeighbour(): void
+    {
+        // "sony" keyword hits: 1009, 1011. 1001 (the catalog's most popular,
+        // in stock) is the exact cosine match but not a keyword hit. Plain RRF
+        // ranked it above 1011; it must come after both keyword hits.
+        $bundle = $this->makeBundle([
+            1001 => [1.0, 0.0, 0.0, 0.0],
+            1009 => [0.6, 0.8, 0.0, 0.0],
+            1013 => [0.0, 0.0, 1.0, 0.0],
+        ]);
+
+        $result = $this->controller($bundle)->search([
+            'q'        => 'sony',
+            'q_vector' => [1.0, 0.0, 0.0, 0.0],
+        ]);
+
+        self::assertSame([1009, 1011, 1001], $result['product_ids']);
+        // Cosine per result, aligned with product_ids; 1011 has no vector. A
+        // keyword hit below the floor still reports its cosine.
+        self::assertCount(3, $result['cosine_scores']);
+        self::assertEqualsWithDelta(0.6, $result['cosine_scores'][0], 1e-4);
+        self::assertNull($result['cosine_scores'][1]);
+        self::assertEqualsWithDelta(1.0, $result['cosine_scores'][2], 1e-4);
+    }
+
+    public function testKeywordOnlyResponseHasNoCosineScores(): void
+    {
+        $result = $this->controller(null)->search(['q' => 'sony', 'q_vector' => [1.0, 0.0, 0.0, 0.0]]);
+
+        self::assertArrayNotHasKey('cosine_scores', $result);
+    }
+
+    public function testFromConfigAcceptsAConfigWithoutTheM9Keys(): void
+    {
+        // A server/config.php copied before M9 lacks the new search keys; the
+        // documented defaults (floor 0.82) apply instead of an error.
+        $bundle = $this->makeBundle([
+            1011 => [0.9, 0.43589, 0.0, 0.0],
+            1013 => [0.6, 0.8, 0.0, 0.0],
+        ]);
+        $config = [
+            'db'     => ['products_table' => 'products', 'search_logs_table' => 'search_logs'],
+            'model'  => ['dim' => self::DIM],
+            'search' => [
+                'default_limit' => 20, 'min_token_size' => 3, 'semantic_top_k' => 100,
+                'rrf_k' => 60, 'stock_boost' => 0.1, 'popularity_boost' => 0.1,
+            ],
+            'paths'  => ['data' => $bundle],
+        ];
+
+        $result = SearchController::fromConfig($this->pdo, $config)->search([
+            'q'        => 'بلبرینگ',
+            'q_vector' => [1.0, 0.0, 0.0, 0.0],
+        ]);
+
+        self::assertSame([1011], $result['product_ids']);
     }
 
     public function testVectorRequestIsLoggedWithHadVector(): void

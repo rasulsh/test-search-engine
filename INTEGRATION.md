@@ -80,6 +80,7 @@ Response `200`:
 {
   "query": { "raw": "لپ تاپ سبک", "normalized": "لپ تاپ سبک" },
   "did_you_mean": null,
+  "did_you_mean_applied": false,
   "count": 18,
   "product_ids": [43, 46, 47, 44, 45]
 }
@@ -89,20 +90,24 @@ Response `200`:
 | --- | --- |
 | `query.raw` | `q` echoed back. |
 | `query.normalized` | `q` after Persian normalization (the canonical rules, contract 1). |
-| `did_you_mean` | `null`, or a string when the literal query matched nothing and results came from a keyboard-layout fix (`ئشزذخخن` returns `macbook`) or a spelling fix (`macbok` returns `macbook`). The returned ids are for the suggestion. Show it as "Showing results for …". It derives from shopper input, so render it as text, never as HTML. |
+| `did_you_mean` | `null`, or a keyboard-layout fix (`ئشزذخخن` → `macbook`) or spelling fix (`macbok` → `macbook`). Only tried when the literal query has fewer than `SEARCH_SUGGEST_MIN_RESULTS` (3) keyword hits, and only returned when the suggestion itself has **more** keyword hits than the literal query, so it never points to an empty result. It derives from shopper input, so render it as text, never as HTML. |
+| `did_you_mean_applied` | `true` when the literal query matched nothing and the returned ids are for the suggestion: show "Showing results for …". `false` when the literal query had a few hits: the ids are for what the shopper typed, and the suggestion is only offered: show "Did you mean …?" linking to a search for it. |
 | `count` | `product_ids.length`. |
 | `product_ids` | Ordered OpenCart `product_id`s, best first. The service returns ids only; the storefront renders the products. |
+| `cosine_scores` | Only on a hybrid response (see below): the cosine similarity of each returned product to the query, aligned by index with `product_ids`, rounded to 4 decimals, `null` for a product without a vector. A diagnostic for tuning (the test page shows it). |
 | `products` | Only with `"with_details": true`: `[{"id", "title", "url", "image", "price"}]` in the same order as `product_ids`, read from the `products` table (`title` is the stored title, `url`/`image` exactly as exported, `price` a number). An id missing from the table is skipped. |
 
 Semantics the storefront should know:
 
 - **Keyword-only** (no usable `q_vector`, or no bundle loaded): FULLTEXT
   results. `count` can be `0`.
-- **Hybrid** (`q_vector` present and a bundle loaded): keyword and cosine
-  rankings are merged by Reciprocal Rank Fusion, then boosted for in-stock and
-  popular products. The cosine side always contributes its nearest products, so
-  a hybrid response is rarely empty. It usually returns `limit` ids even for a
-  nonsense query. Only a keyword-only response can come back empty.
+- **Hybrid** (`q_vector` present and a bundle loaded): cosine neighbours below
+  `SEARCH_SEMANTIC_MIN_SCORE` are dropped. Every keyword hit ranks above every
+  semantic-only product; the semantic side reorders keyword hits among
+  themselves and adds relevant products below them (weighted Reciprocal Rank
+  Fusion, then in-stock and popularity boosts). A query with no keyword hit and
+  no neighbour above the floor returns `count: 0`, so either response can come
+  back empty. Show a "no results" state.
 - Every request writes one row to `search_logs`. Logging is best-effort: a
   rejected log row (such as `q` longer than 512 characters) does not fail the
   search.
@@ -202,7 +207,9 @@ What the storefront does per search:
 2. On submit: if the model is ready, embed the query (with a time budget) and
    send `{q, q_vector, customer_id}`. Otherwise, or if embedding fails or is
    too slow, send `{q, customer_id}` only. Keyword search still works.
-3. Render `product_ids` in order and show `did_you_mean` when present.
+3. Render `product_ids` in order. When `did_you_mean` is present, show
+   "Showing results for …" if `did_you_mean_applied`, otherwise "Did you
+   mean …?".
 4. If the search service itself fails (network error or non-`200`), redirect
    to OpenCart's native search, so the store's search box never breaks.
 
@@ -293,7 +300,8 @@ product links use OpenCart's standard `product/product` route.
   function render(result) {
     const suggestion = document.getElementById('search-suggestion');
     suggestion.hidden = !result.did_you_mean;
-    suggestion.textContent = result.did_you_mean ? `Showing results for: ${result.did_you_mean}` : '';
+    const label = result.did_you_mean_applied ? 'Showing results for' : 'Did you mean';
+    suggestion.textContent = result.did_you_mean ? `${label}: ${result.did_you_mean}` : '';
 
     const list = document.getElementById('search-results');
     list.replaceChildren(...result.product_ids.map((id) => {

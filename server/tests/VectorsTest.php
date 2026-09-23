@@ -87,6 +87,40 @@ final class VectorsTest extends TestCase
         self::assertSame(40, $result[1]['product_id']); // 0.8 component
     }
 
+    public function testMinScoreDropsNeighboursBelowTheFloor(): void
+    {
+        $vectors = $this->vectors($this->makeBundle($this->sampleRows()));
+
+        // Against [1, 0, 0]: 10 scores 1.0, 40 scores 0.6, 20/30 score 0.
+        $result = $vectors->topK([1.0, 0.0, 0.0], 100, 0.82);
+
+        self::assertSame([10], array_column($result, 'product_id'));
+        // The floor is inclusive.
+        self::assertSame([10, 40], array_column($vectors->topK([1.0, 0.0, 0.0], 100, 0.6 - 1e-6), 'product_id'));
+    }
+
+    public function testMinScoreYieldsEmptyWhenNothingQualifies(): void
+    {
+        $vectors = $this->vectors($this->makeBundle($this->sampleRows()));
+
+        // [0, -1, 0] is anti-aligned or orthogonal to every row: nearest is 0.
+        self::assertSame([], $vectors->topK([0.0, -1.0, 0.0], 100, 0.82));
+        // Without a floor the same query still returns the "nearest" rows.
+        self::assertCount(4, $vectors->topK([0.0, -1.0, 0.0], 100));
+    }
+
+    public function testScoresForReturnsCosineOfRequestedIdsOnly(): void
+    {
+        $vectors = $this->vectors($this->makeBundle($this->sampleRows()));
+
+        $scores = $vectors->scoresFor([1.0, 0.0, 0.0], [40, 999, 20]);
+
+        self::assertSame([40, 20], array_keys($scores)); // 999 has no vector
+        self::assertEqualsWithDelta(0.6, $scores[40], 1e-6);
+        self::assertEqualsWithDelta(0.0, $scores[20], 1e-6);
+        self::assertSame([], $vectors->scoresFor([1.0, 0.0], [40])); // wrong dim
+    }
+
     public function testIsLoadedAndCount(): void
     {
         $vectors = $this->vectors($this->makeBundle($this->sampleRows()));

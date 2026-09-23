@@ -13,8 +13,10 @@ from typing import Any
 
 from normalize import normalize
 
-# Text fields that contribute to the keyword dictionaries.
-_TEXT_FIELDS = ("title", "description", "brand", "category", "model")
+# High-signal fields that feed the "did you mean" dictionary. Descriptions are
+# excluded: on the real catalog they contribute rare incidental words that won
+# corrections over the product names shoppers actually type.
+SPELLCHECK_FIELDS = ("title", "brand", "category", "model")
 
 # Persian (standard) keyboard layout: the Persian letter produced by each US-QWERTY
 # key. Used to recover queries typed with the wrong keyboard layout.
@@ -49,16 +51,19 @@ def build_spellcheck(
     min_length: int = 2,
     min_count: int = 1,
 ) -> list[tuple[str, int]]:
-    """Return (token, frequency) pairs from the catalog, most frequent first.
+    """Return (token, product frequency) pairs, most frequent first.
 
-    Tokens are normalized, so the dictionary matches normalized query tokens.
+    Frequency is the number of products whose high-signal fields contain the
+    token (once per product), which is what the server's minimum-frequency gate
+    compares against. Tokens are normalized, so the dictionary matches
+    normalized query tokens.
     """
     counts: Counter[str] = Counter()
     for row in rows:
-        for field in _TEXT_FIELDS:
-            for token in tokenize(normalize(str(row.get(field, "")))):
-                if len(token) >= min_length:
-                    counts[token] += 1
+        tokens: set[str] = set()
+        for field in SPELLCHECK_FIELDS:
+            tokens.update(tokenize(normalize(str(row.get(field) or ""))))
+        counts.update(token for token in tokens if len(token) >= min_length)
 
     return sorted(
         ((tok, n) for tok, n in counts.items() if n >= min_count),

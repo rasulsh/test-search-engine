@@ -171,6 +171,14 @@ def test_build_bundle_format_and_determinism(tmp_path: Path) -> None:
     assert idx_lines == ["2001", "2002", "2003", "2004"]
     assert len(idx_lines) == meta["count"]
 
+    # The suggestion dictionary comes from titles/brand/category/model only.
+    spell = dict(
+        line.split("\t") for line in
+        (tmp_path / "b1" / "spellcheck.txt").read_text(encoding="utf-8").splitlines()
+    )
+    assert "vivobook" in spell and "sony" in spell
+    assert "flagship" not in spell and "webos" not in spell  # description-only words
+
     synonyms = json.loads((tmp_path / "b1" / "synonyms.json").read_text())
     assert isinstance(synonyms, list)
 

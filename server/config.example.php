@@ -14,6 +14,11 @@
 
 declare(strict_types=1);
 
+// getenv() ?: default would turn an explicit "0" into the default, so tuning
+// knobs that may legitimately be 0 read through this instead.
+$setting = static fn (string $name, string $default): string =>
+    (($value = getenv($name)) === false || $value === '') ? $default : $value;
+
 return [
     'db' => [
         'dsn'      => getenv('SEARCH_DB_DSN') ?: 'mysql:host=localhost;dbname=search;charset=utf8mb4',
@@ -41,12 +46,29 @@ return [
         'min_token_size'    => (int) (getenv('SEARCH_MIN_TOKEN_SIZE') ?: 3),
         // Global cosine top-K width for Tier 2 (candidates fused with keyword).
         'semantic_top_k'    => (int) (getenv('SEARCH_SEMANTIC_TOP_K') ?: 100),
+        // Relevance floor (cosine) for Tier 2 neighbours. The nearest vectors of
+        // a query with no relevant product are still unrelated items; below this
+        // they are dropped, and a query with neither keyword hits nor neighbours
+        // above it returns nothing. Tune against a real eval set.
+        'semantic_min_score' => (float) $setting('SEARCH_SEMANTIC_MIN_SCORE', '0.82'),
         // Reciprocal Rank Fusion constant. Keyword and cosine scores are on
-        // different scales, so they are merged by rank, not added raw.
-        'rrf_k'             => (int) (getenv('SEARCH_RRF_K') ?: 60),
+        // different scales, so they are merged by rank, not added raw. Keyword
+        // hits always rank above semantic-only neighbours; the weights set how
+        // much each list reorders items within those bands.
+        'rrf_k'             => (int) $setting('SEARCH_RRF_K', '60'),
+        'keyword_weight'    => (float) $setting('SEARCH_KEYWORD_WEIGHT', '1.0'),
+        'semantic_weight'   => (float) $setting('SEARCH_SEMANTIC_WEIGHT', '1.0'),
         // Light business boosts applied AFTER fusion (kept small on purpose).
-        'stock_boost'       => (float) (getenv('SEARCH_STOCK_BOOST') ?: 0.1),
-        'popularity_boost'  => (float) (getenv('SEARCH_POPULARITY_BOOST') ?: 0.1),
+        'stock_boost'       => (float) $setting('SEARCH_STOCK_BOOST', '0.1'),
+        'popularity_boost'  => (float) $setting('SEARCH_POPULARITY_BOOST', '0.1'),
+        // "Did you mean": tried only when the literal query has fewer than
+        // suggest_min_results keyword hits, and offered only if the suggestion
+        // returns more. Candidates must occur in at least suggest_min_frequency
+        // products and lie within suggest_max_distance edits (tokens of 4
+        // characters or fewer allow 1).
+        'suggest_min_results'   => (int) $setting('SEARCH_SUGGEST_MIN_RESULTS', '3'),
+        'suggest_min_frequency' => (int) $setting('SEARCH_SUGGEST_MIN_FREQUENCY', '2'),
+        'suggest_max_distance'  => (int) $setting('SEARCH_SUGGEST_MAX_DISTANCE', '2'),
         'latency_budget_ms' => (int) (getenv('SEARCH_LATENCY_BUDGET_MS') ?: 200),
     ],
 

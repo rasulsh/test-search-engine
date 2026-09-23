@@ -33,13 +33,13 @@ final class RankerTest extends TestCase
     public function testStockBoostBreaksAnRrfTie(): void
     {
         $ranker = new Ranker(60, 0.2, 0.0);
-        // Both ids sit at rank 1 of one list -> identical RRF score.
+        // Mirrored ranks in the two lists -> identical RRF score.
         $signals = [
             1 => ['stock' => 0, 'popularity' => 0],
             2 => ['stock' => 3, 'popularity' => 0],
         ];
 
-        $out = $ranker->fuse([1], [2], $signals, 10);
+        $out = $ranker->fuse([1, 2], [2, 1], $signals, 10);
 
         self::assertSame([2, 1], self::ids($out)); // in-stock nudged ahead
     }
@@ -52,7 +52,7 @@ final class RankerTest extends TestCase
             2 => ['stock' => 1, 'popularity' => 100],
         ];
 
-        $out = $ranker->fuse([1], [2], $signals, 10);
+        $out = $ranker->fuse([1, 2], [2, 1], $signals, 10);
 
         self::assertSame([2, 1], self::ids($out)); // more popular nudged ahead
     }
@@ -71,6 +71,42 @@ final class RankerTest extends TestCase
         $out = $ranker->fuse([1], array_merge([1], $semantic), $signals, 5);
 
         self::assertSame(1, self::ids($out)[0]);
+    }
+
+    public function testKeywordHitOutranksAFarSemanticNeighbour(): void
+    {
+        // 50 is the #1 semantic neighbour and maximally boosted; 7 is the last of
+        // three keyword hits with no semantic support and no signals. Plain RRF
+        // would put 50 first; keyword hits must lead.
+        $ranker = new Ranker(60, 0.1, 0.1);
+        $signals = [50 => ['stock' => 9, 'popularity' => 1000]];
+
+        $out = $ranker->fuse([5, 6, 7], [50, 51], $signals, 10);
+
+        self::assertSame([5, 6, 7, 50, 51], self::ids($out));
+        self::assertSame([true, true, true, false, false], array_column($out, 'keyword'));
+    }
+
+    public function testSemanticReordersKeywordHitsWithinTheirBand(): void
+    {
+        // 3 is the weakest keyword hit but the top semantic one: it rises within
+        // the keyword band; the semantic-only 9 stays below all keyword hits.
+        $ranker = new Ranker(60, 0.0, 0.0);
+
+        $out = $ranker->fuse([1, 2, 3], [3, 9], [], 10);
+
+        self::assertSame([3, 1, 2, 9], self::ids($out));
+    }
+
+    public function testWeightsControlHowMuchEachListReorders(): void
+    {
+        // Keyword order [1, 2], semantic order [2, 1]: equal weights tie (broken
+        // by id); the heavier list wins.
+        $keywordHeavy = new Ranker(60, 0.0, 0.0, 2.0, 1.0);
+        $semanticHeavy = new Ranker(60, 0.0, 0.0, 1.0, 2.0);
+
+        self::assertSame([1, 2], self::ids($keywordHeavy->fuse([1, 2], [2, 1], [], 10)));
+        self::assertSame([2, 1], self::ids($semanticHeavy->fuse([1, 2], [2, 1], [], 10)));
     }
 
     public function testKeywordOnlyFusion(): void

@@ -1,7 +1,7 @@
 """One-command release: catalog export in -> a single deployable release.zip.
 
     python pipeline/release.py --csv export.csv --out release.zip [--no-model]
-        [--desc-index-chars N] [--aliases aliases.json]
+        [--desc-index-chars N] [--aliases aliases.json] [--vps-out DIR]
 
 Builds the bundle with the real embedder and packs, relative to the host's
 `server/` directory, everything the site needs:
@@ -14,6 +14,9 @@ Builds the bundle with the real embedder and packs, relative to the host's
 
 The browser assets are fetched into client/ on first use (the same pinned,
 checksum-verified download as tools/fetch_web_model.py) and reused afterwards.
+
+--vps-out DIR also writes the bge-m3 product vectors for the VPS vector service
+(vps/README.md) to DIR; they are not part of release.zip (a different host).
 
 config.php is never packed, so extracting over the server keeps its config.
 First deploy: extract, then open install.php. Updates: extract, then POST
@@ -128,6 +131,8 @@ def main(argv: list[str] | None = None) -> int:
                              "Build-time only: the server never re-indexes.")
     parser.add_argument("--aliases", help="Alias file shipped in the bundle (default "
                                           "SEARCH_ALIASES_FILE, else pipeline/aliases.json).")
+    parser.add_argument("--vps-out", metavar="DIR",
+                        help="Also write the VPS product vectors (vps/README.md) to DIR.")
     parser.add_argument("--mock", action="store_true",
                         help="Use the mock embedder (tests only; never deploy).")
     parser.add_argument("--server-dir", default=str(REPO_ROOT / "server"), help=argparse.SUPPRESS)
@@ -176,6 +181,10 @@ def main(argv: list[str] | None = None) -> int:
             Path(tmp), Path(args.server_dir), client_dir, not args.no_model
         )
         write_zip(entries, out)
+    if args.vps_out:
+        vps_meta = build.build_vps_vectors(products, args.vps_out, config)
+        print(f"Built VPS vectors in {args.vps_out}: {vps_meta['count']} products, "
+              f"{vps_meta['model']}, dim {vps_meta['dim']}, embedder {vps_meta['embedder']}")
 
     print(f"Built {out.name}: {meta['count']} products, dim {meta['dim']}, "
           f"embedder {meta['embedder']}, {len(entries)} files"

@@ -23,6 +23,20 @@ def load() -> dict[str, Any]:
                 os.getenv("SEARCH_NORMALIZATION_VERSION", str(NORMALIZATION_VERSION))
             ),
         },
+        # Model of the VPS vector service (vps/, build.py --vps-out). Contract 2:
+        # vps/search_vectors/config.py embeds queries with the same model,
+        # revision, pooling and prefixes; the VPS rejects vectors whose meta.json
+        # disagrees. bge-m3 dense retrieval takes no query/passage instruction.
+        "vps_model": {
+            "name": os.getenv("SEARCH_VPS_MODEL", "BAAI/bge-m3"),
+            "revision": os.getenv(
+                "SEARCH_VPS_MODEL_REVISION", "5617a9f61b028005a4858fdac845db406aefb181"
+            ),
+            "dim": int(os.getenv("SEARCH_VPS_MODEL_DIM", "1024")),
+            "pooling": os.getenv("SEARCH_VPS_POOLING", "cls"),
+            "query_prefix": os.getenv("SEARCH_VPS_QUERY_PREFIX", ""),
+            "passage_prefix": os.getenv("SEARCH_VPS_PASSAGE_PREFIX", ""),
+        },
         # "mock" needs no GPU/model download; "real" loads the model.
         "embedder": os.getenv("EMBEDDER", "mock"),
         "keyword": {

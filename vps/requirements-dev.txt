@@ -1,0 +1,3 @@
+# CI / development: the service's tests use the mock embedder (no model download).
+-r requirements.txt
+httpx>=0.27

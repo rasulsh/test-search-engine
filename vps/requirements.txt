@@ -1,0 +1,6 @@
+# VPS vector service runtime (Python 3.11+). CPU only: no torch.
+fastapi>=0.110,<1
+uvicorn>=0.29
+numpy>=1.24
+onnxruntime>=1.17
+tokenizers>=0.15

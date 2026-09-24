@@ -32,6 +32,7 @@ venv/
 
 # Index bundles produced offline
 /bundle/
+/vps_vectors/
 *.bin
 *.idx
 

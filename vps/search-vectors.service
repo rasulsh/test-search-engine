@@ -1,0 +1,24 @@
+[Unit]
+Description=Product search vector service (bge-m3 query embedding + cosine top-K)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=searchvec
+Group=searchvec
+EnvironmentFile=/etc/search-vectors.env
+WorkingDirectory=/opt/search-vectors/app
+ExecStart=/opt/search-vectors/venv/bin/python -m search_vectors
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/search-vectors
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+
+[Install]
+WantedBy=multi-user.target

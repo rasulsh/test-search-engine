@@ -2,6 +2,7 @@
 
     python pipeline/build.py --sql export.sql --out ./bundle
     python pipeline/build.py --csv export.csv --out ./bundle
+    python pipeline/build.py --csv export.csv --vps-out ./vps_vectors
 
 Input is a simple, documented shape (NOT the raw OpenCart export); see README for
 the columns and how to derive them from OpenCart. Output is the bundle the server
@@ -475,15 +476,66 @@ def build_bundle(
     return meta
 
 
+def build_vps_vectors(
+    products: list[dict[str, Any]], out_dir: str | Path, config: dict[str, Any]
+) -> dict[str, Any]:
+    """Product vectors for the VPS vector service (vps/README.md): vectors.bin,
+    vectors.idx and meta.json in the bundle's format, embedded with
+    config['vps_model']. meta.json carries the pooling and query prefix so the
+    VPS can refuse vectors its query model would not match (contract 2)."""
+    model = config["vps_model"]
+    dim = int(model["dim"])
+    passages = [
+        compose_passage(
+            p,
+            int(config["build"]["desc_char_limit"]),
+            int(config["build"].get("passage_char_limit", 0)),
+        )
+        for p in products
+    ]
+    embedder = create_embedder(config, model)
+    vectors = embed_passages(embedder, passages, model["passage_prefix"]).astype("<f4")
+    if vectors.shape != (len(products), dim):
+        raise ValueError(f"vectors shape {vectors.shape} != ({len(products)}, {dim})")
+
+    out = Path(out_dir)
+    out.mkdir(parents=True, exist_ok=True)
+    vector_bytes = vectors.tobytes()
+    (out / "vectors.bin").write_bytes(vector_bytes)
+    (out / "vectors.idx").write_text(
+        "".join(f"{int(p['id'])}\n" for p in products), encoding="utf-8"
+    )
+    meta = {
+        "model": model["name"],
+        "revision": model["revision"],
+        "dim": dim,
+        "pooling": model["pooling"],
+        "query_prefix": model["query_prefix"],
+        "passage_prefix": model["passage_prefix"],
+        "count": len(products),
+        "built_at": datetime.now(UTC).isoformat(),
+        "checksum": hashlib.sha256(vector_bytes).hexdigest(),
+        "embedder": config["embedder"],
+    }
+    (out / "meta.json").write_text(
+        json.dumps(meta, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+    )
+    return meta
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Build the search index bundle.")
     source = parser.add_mutually_exclusive_group(required=True)
     source.add_argument("--sql", help="Path to a SQL export (INSERT statements).")
     source.add_argument("--csv", help="Path to a CSV export with the documented columns.")
-    parser.add_argument("--out", required=True, help="Output bundle directory.")
+    parser.add_argument("--out", help="Output bundle directory (cPanel).")
+    parser.add_argument("--vps-out", help="Output directory for the VPS product vectors "
+                                          "(vps/README.md).")
     parser.add_argument("--aliases", help="Alias file (default SEARCH_ALIASES_FILE, else "
                                           "pipeline/aliases.json).")
     args = parser.parse_args(argv)
+    if not (args.out or args.vps_out):
+        parser.error("give --out, --vps-out, or both")
 
     config = pipeline_config.load()
     config["model"]["normalization_version"] = NORMALIZATION_VERSION
@@ -500,8 +552,14 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("no products found in the input")
 
     warn_malformed_features(products)
-    meta = build_bundle(products, args.out, config)
-    print(f"Built bundle: {meta['count']} products, dim {meta['dim']}, embedder {meta['embedder']}")
+    if args.out:
+        meta = build_bundle(products, args.out, config)
+        print(f"Built bundle: {meta['count']} products, dim {meta['dim']}, "
+              f"embedder {meta['embedder']}")
+    if args.vps_out:
+        meta = build_vps_vectors(products, args.vps_out, config)
+        print(f"Built VPS vectors: {meta['count']} products, {meta['model']}, "
+              f"dim {meta['dim']}, embedder {meta['embedder']}")
     return 0
 
 

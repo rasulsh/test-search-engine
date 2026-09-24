@@ -25,12 +25,20 @@ produces a static index *bundle*. **Query embedding happens off-server, in the
 browser (WASM).** The server only serves requests: keyword search plus cosine
 math over the precomputed vectors.
 
+> **Semantic pivot in progress (M17+).** A separate VPS service
+> ([`vps/README.md`](./vps/README.md)) embeds queries with bge-m3 and returns
+> the top-K product ids by cosine; `pipeline/build.py --vps-out` builds its
+> product vectors. It is deployed and tested on its own for now: cPanel does
+> not call it yet, and the in-browser model described below is still the live
+> semantic path until the follow-up PRs land.
+
 ## Repository layout
 
 ```
 db/         SQL schema (products + FULLTEXT, search_logs)
 pipeline/   Offline build pipeline (Python 3.11+, GPU or mock)
 server/     cPanel runtime (PHP 8.1+, no framework)
+vps/        VPS vector service (bge-m3 query embedding + cosine top-K; see vps/README.md)
 client/     Browser query embedder (transformers.js / ONNX); model/ is gitignored
 fixtures/   Shared test fixtures (normalization cases, eval set, parity strings)
 ```
@@ -968,6 +976,7 @@ M0–M5. Verify each item on the production host before wide rollout.
 - [ ] **M15** — Name / alias / form matching: standalone Roman numerals → digits (normalization version 3), query-side expansion from `synonyms.json` and an owner-maintained `aliases.json` (whole terms, title-only variants), `desc_index_chars` default 800.
 - [ ] **M14.1** — `release.py` downloads the browser assets itself when `client/` lacks them (cached; `--no-model` skips), so one command builds a complete release. `desc_index_chars` leaves the installer and server config and becomes `release.py --desc-index-chars`.
 - [ ] **M15.1** — `normalization_version` in `config.php` (and the installer prefill) defaults to the code's `Normalizer::VERSION`, and the pipeline always stamps its own `NORMALIZATION_VERSION`, so a rules bump reloads with no config edit.
+- [ ] **M17** — VPS vector service (`vps/`): bge-m3 (ONNX, CPU) query embedding, `POST /search-vectors` global cosine top-K with a score floor, token auth, validated atomic `POST /reload`, `GET /health`, `setup.sh` + systemd; `build.py` / `release.py --vps-out` produce its bge-m3 product vectors. Not wired into cPanel yet.
 - [ ] **M16** — Multi-word queries require every word across title, specs and description (per alias variant), ranked title band, spec band (no title match), description-only, then score; best-partial fallback when nothing holds every word; semantic neighbours not appended to all-words hits (`SEARCH_REQUIRE_ALL_TERMS`, default on).
 
 ## Contributing

@@ -5,7 +5,7 @@
 [tool.ruff]
 target-version = "py311"
 line-length = 100
-src = ["pipeline"]
+src = ["pipeline", "vps"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]
@@ -19,6 +19,6 @@ select = ["E", "F", "I", "UP", "B"]
 "pipeline/tools/fetch_web_model.py" = ["E402"]
 
 [tool.pytest.ini_options]
-testpaths = ["pipeline/tests"]
+testpaths = ["pipeline/tests", "vps/tests"]
 python_files = ["test_*.py"]
-pythonpath = ["pipeline"]
+pythonpath = ["pipeline", "vps"]

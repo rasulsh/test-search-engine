@@ -1,16 +1,20 @@
 # Storefront integration
 
 How an OpenCart 2.0.3.1 storefront talks to the search service. This covers the
-HTTP contract, a reference storefront snippet, and how to self-host the browser
-embedding model. OpenCart core is not modified. The actual OpenCart module
-lives in a separate repository and follows this document.
+HTTP contract, how the service reaches the VPS vector service for semantic
+results, and a reference storefront snippet. OpenCart core is not modified. The
+actual OpenCart module lives in a separate repository and follows this document.
+
+Since M18 the browser runs **no model**: the storefront sends only the query
+text. The cPanel service asks the VPS (`vps/`, bge-m3) for semantic neighbours
+server-to-server and answers keyword-only whenever the VPS is not available.
 
 - [Deployment shape](#deployment-shape)
 - [HTTP contract](#http-contract): [`POST /search`](#post-search),
   [`GET /health`](#get-health), [`POST /reload`](#post-reload),
   [error codes](#error-codes)
+- [Semantic tier: cPanel to VPS](#semantic-tier-cpanel-to-vps)
 - [Storefront reference](#storefront-reference)
-- [Self-hosting the model (no HuggingFace, no CDN)](#self-hosting-the-model-no-huggingface-no-cdn)
 - [Changing the model](#changing-the-model)
 
 ---
@@ -22,10 +26,9 @@ lives in a separate repository and follows this document.
     config.php  data/  data_incoming/  src/  ...
 ~/public_html/                       <- the OpenCart storefront
     search-api/   -> symlink or copy of ~/search-service/server/public
-    search-client/                   <- static browser assets (see below)
-        embedder.js
-        vendor/transformers.min.js, vendor/ort-wasm*.wasm
-        model/intfloat/multilingual-e5-small/...
+
+VPS (vps/README.md)                  <- bge-m3 query model + product vectors
+    POST /search-vectors             <- called by search.php only, never by browsers
 ```
 
 - **Same origin as the store.** The service sends no CORS headers and does not
@@ -40,8 +43,12 @@ lives in a separate repository and follows this document.
   URL rewriting. The front controller (`index.php`) routes the pretty paths
   (`/search`, `/health`, `/reload`) only when the service is at the web root of
   its host, not under a subdirectory.
-- **HTTPS.** The browser model cache (Cache API) only works in a secure
-  context. Over plain HTTP, every visit would re-download the model.
+- **The VPS is private.** Only the cPanel server calls it (token + firewall,
+  see `vps/README.md`, "Keeping the model private"). Browsers never see its
+  address or token.
+- **Nothing to self-host in the browser.** No model, WebAssembly runtime or
+  font is downloaded by shoppers. A `search-client/` folder left from before
+  M18 is unused and can be deleted.
 
 The endpoint paths below are written as `/search`, `/health`, `/reload`. On a
 subdirectory deploy, read them as `/search-api/search.php`, and so on.
@@ -60,7 +67,6 @@ Request headers: `Content-Type: application/json`.
 ```json
 {
   "q": "لپ تاپ سبک",
-  "q_vector": [0.0123, -0.0456, "... 384 floats ..."],
   "customer_id": "42",
   "limit": 20
 }
@@ -68,8 +74,7 @@ Request headers: `Content-Type: application/json`.
 
 | field | type | required | behaviour |
 | --- | --- | --- | --- |
-| `q` | string | yes | Raw query text as the shopper typed it. A missing or non-string `q` is treated as `""`, which has no keyword results. Don't send an empty query: with a `q_vector`, it would still return the nearest products. |
-| `q_vector` | number[] | no | L2-normalized query embedding from `client/embedder.js` (length = configured dim, 384 by default). Absent, non-numeric, or wrong-length vectors are **ignored** and the request is answered keyword-only. Never an error. |
+| `q` | string | yes | Raw query text as the shopper typed it. It is also what the service sends to the VPS for the semantic tier. A missing, non-string or blank `q` is treated as `""` and returns no results (the VPS is not asked). |
 | `customer_id` | string | no | Stored in `search_logs` only. **Must be a JSON string.** A number is silently logged as `NULL`, so send `String(id)`. Longer than 64 characters: the search is answered but its log row is dropped. |
 | `limit` | int | no | Maximum number of ids to return. Values below 1, or non-numeric values, are treated as 1. The default is `SEARCH_DEFAULT_LIMIT` (20). There is no server-side maximum, so the storefront should keep it at 50 or less. |
 | `with_details` | bool | no | Only the JSON value `true` enables it (a string `"true"` or `1` is ignored). Adds a `products` array with display fields. Omit it and the response is exactly as below. Used by the search test page; the storefront renders from OpenCart and does not need it. |
@@ -94,13 +99,16 @@ Response `200`:
 | `did_you_mean_applied` | `true` when the literal query matched nothing and the returned ids are for the suggestion: show "Showing results for …". `false` when the literal query had a few hits: the ids are for what the shopper typed, and the suggestion is only offered: show "Did you mean …?" linking to a search for it. |
 | `count` | `product_ids.length`. |
 | `product_ids` | Ordered OpenCart `product_id`s, best first. The service returns ids only; the storefront renders the products. |
-| `cosine_scores` | Only on a hybrid response (see below): the cosine similarity of each returned product to the query, aligned by index with `product_ids`, rounded to 4 decimals, `null` for a product without a vector. A diagnostic for tuning (the test page shows it). |
+| `cosine_scores` | Only on a hybrid response, that is when the VPS answered (see below): the cosine similarity of each returned product to the query, as computed on the VPS, aligned by index with `product_ids`, rounded to 4 decimals, `null` for a product the VPS did not return (below the floor or outside its top-K). A diagnostic for tuning (the test page shows it). Its absence means the response is keyword-only. |
 | `products` | Only with `"with_details": true`: `[{"id", "title", "url", "image", "price"}]` in the same order as `product_ids`, read from the `products` table (`title` is the stored title, `url`/`image` as exported, or joined to `storefront.store_base` / `image_base` when those are set in `config.php` and the value is relative, `price` a number). An id missing from the table is skipped. |
 
 Semantics the storefront should know:
 
-- **Keyword-only** (no usable `q_vector`, or no bundle loaded): FULLTEXT
-  results. Products whose title matches the query come first, then products
+- A `q_vector` field sent by a pre-M18 storefront is ignored; the answer is
+  the same as without it.
+- **Keyword-only** (no VPS configured, or the VPS is unreachable, slower than
+  `SEARCH_VPS_TIMEOUT_MS`, or answers with an error): FULLTEXT
+  results, still `200`. Products whose title matches the query come first, then products
   that match in their specs (attributes and feature titles), then products
   that match only in their description. `count` can be `0`.
 - A multi-word query returns only products holding **every** word (in title,
@@ -115,9 +123,11 @@ Semantics the storefront should know:
   (`gta 5` also finds "Grand Theft Auto V" and "جی تی ای ۵"), and standalone
   Roman numerals equal digits (`GTA V` = `GTA 5`, so `query.normalized` shows
   `gta 5`). The response shape is unchanged.
-- **Hybrid** (`q_vector` present and a bundle loaded): cosine neighbours below
+- **Hybrid** (the VPS answered): cosine neighbours below
   `SEARCH_SEMANTIC_MIN_SCORE` are dropped, and so are keyword hits that match
-  only in the description (not the title or specs) with a cosine below it. Every keyword hit ranks above every
+  only in the description (not the title or specs) with a cosine below it
+  (one the VPS did not return counts as below it, unless the VPS returned a
+  full top-K list, in which case it is kept). Every keyword hit ranks above every
   semantic-only product (title matches, then spec matches, then description-only matches); the semantic side reorders keyword hits among
   themselves and adds relevant products below them (weighted Reciprocal Rank
   Fusion, then in-stock and popularity boosts). When the keyword hits of a
@@ -125,9 +135,10 @@ Semantics the storefront should know:
   added below. A query with no keyword hit and
   no neighbour above the floor returns `count: 0`, so either response can come
   back empty. Show a "no results" state.
-- Every request writes one row to `search_logs`. Logging is best-effort: a
-  rejected log row (such as `q` longer than 512 characters) does not fail the
-  search.
+- Every request writes one row to `search_logs`; `had_vector` is `1` when
+  the VPS answered (a hybrid response) and `0` otherwise. Logging is
+  best-effort: a rejected log row (such as `q` longer than 512 characters)
+  does not fail the search.
 
 Errors: `400 invalid_json` (the body is not valid JSON, or is a bare string or number), `405
 method_not_allowed` (not a `POST`), `500 internal_error` (such as a database
@@ -230,28 +241,69 @@ through an `error` code.
 
 ---
 
+## Semantic tier: cPanel to VPS
+
+`search.php` calls the VPS vector service (`vps/README.md`) server-to-server
+with PHP's curl, once per search, after the keyword search:
+
+```
+POST {SEARCH_VPS_URL}/search-vectors
+Authorization: Bearer {SEARCH_VPS_TOKEN}
+Content-Type: application/json
+
+{"q": "<raw query>", "limit": SEARCH_SEMANTIC_TOP_K, "min_score": SEARCH_SEMANTIC_MIN_SCORE}
+-> 200 {"results": [{"product_id": 2002, "score": 0.71}, ...], "model": "BAAI/bge-m3", "took_ms": 31.4}
+```
+
+| setting (`config.php` `vps`, or env) | default | meaning |
+| --- | --- | --- |
+| `SEARCH_VPS_URL` | empty | Base URL of the VPS service (`https://vps.example.com:8600`). Empty = keyword-only search, nothing is called. |
+| `SEARCH_VPS_TOKEN` | empty | The VPS's `VPS_TOKEN`. A secret: keep it in the environment or `config.php` (install.php asks for it). |
+| `SEARCH_VPS_TIMEOUT_MS` | `300` | Budget for the whole call, connect included. A slower VPS means a keyword-only answer for that search. |
+| `SEARCH_SEMANTIC_MIN_SCORE` | `0.4` | The cosine floor, sent as `min_score` and re-applied on cPanel. See below. |
+| `SEARCH_SEMANTIC_TOP_K` | `100` | How many neighbours are asked for. |
+
+- **Fallback.** Unreachable, timed out, any non-`200` (`401` wrong token,
+  `503` no vectors loaded, …) or a malformed body: the search is answered
+  keyword-only with `200` and never fails because of the VPS. Each such
+  search writes one line to the PHP error log,
+  `search: semantic tier unavailable (<reason>); served keyword-only results`
+  (`<reason>` is `timeout`, `unreachable: …`, `http_<status>` or
+  `malformed_response`), and its `search_logs` row has `had_vector = 0`.
+- **Latency.** Keyword search plus the VPS round trip; a dead VPS costs at
+  most `SEARCH_VPS_TIMEOUT_MS`. Keep the timeout well under the 200 ms budget
+  plus network time on the real hosts (measure there).
+- **The floor.** bge-m3 cosines sit far lower than e5's: the old 0.82 would
+  drop nearly every bge-m3 neighbour. 0.4 is a starting point and **needs
+  tuning on the real catalog** (eval harness, search logs). No floor separates
+  short queries well (on the fixture, right one-word hits scored 0.42–0.49 and
+  wrong ones up to 0.43): one-word precision comes from the keyword tier (all
+  terms, aliases, synonyms) fused by RRF, and the floor mainly keeps far
+  neighbours out.
+- The VPS's own `VPS_SEMANTIC_MIN_SCORE` applies only to callers that send no
+  `min_score`; cPanel always sends its floor.
+- The product ids the VPS returns are checked against the live `products`
+  table; ids it does not hold (vectors newer than the catalog) are dropped.
+
+---
+
 ## Storefront reference
 
 What the storefront does per search:
 
-1. On first focus of the search box, start loading the embedder in the
-   background. Never block a search on the model download.
-2. On submit: if the model is ready, embed the query (with a time budget) and
-   send `{q, q_vector, customer_id}`. Otherwise, or if embedding fails or is
-   too slow, send `{q, customer_id}` only. Keyword search still works.
-3. Render `product_ids` in order. When `did_you_mean` is present, show
+1. On submit, send `{q, customer_id}` (and optionally `limit`). The browser
+   runs no model: the service adds semantic results itself when its VPS is
+   available.
+2. Render `product_ids` in order. When `did_you_mean` is present, show
    "Showing results for …" if `did_you_mean_applied`, otherwise "Did you
    mean …?".
-4. If the search service itself fails (network error or non-`200`), redirect
+3. If the search service itself fails (network error or non-`200`), redirect
    to OpenCart's native search, so the store's search box never breaks.
 
 | situation | what is sent | result |
 | --- | --- | --- |
-| Model loaded, embeds within `EMBED_TIMEOUT_MS` | `q` + `q_vector` | hybrid |
-| Model still downloading (first visit) | `q` | keyword-only |
-| Model failed to load (404, blocked, no WASM, old browser) | `q` | keyword-only |
-| Embedding slower than `EMBED_TIMEOUT_MS` | `q` | keyword-only |
-| `navigator.connection.saveData` is on | `q` (model never loaded) | keyword-only |
+| VPS configured and answering within `SEARCH_VPS_TIMEOUT_MS` | `q` | hybrid |
+| No VPS configured, or VPS down, slow, or erroring | `q` | keyword-only (still `200`) |
 | Search service down or non-`200` | redirect | OpenCart native search |
 
 The snippet expects a form with a text input and two output elements. The
@@ -269,54 +321,15 @@ product links use OpenCart's standard `product/product` route.
 <ol id="search-results"></ol>
 
 <script type="module">
-  import * as transformers from '/search-client/vendor/transformers.min.js';
-  import { QueryEmbedder } from '/search-client/embedder.js';
-
   const SEARCH_URL = '/search-api/search.php';
-  const EMBED_TIMEOUT_MS = 1500;  // budget for one query embedding once the model is loaded
   const LIMIT = 20;
   const MAX_QUERY_CHARS = 200;
 
-  // Everything is served from this domain: no request goes to huggingface.co or a CDN.
-  transformers.env.allowRemoteModels = false;
-  transformers.env.localModelPath = '/search-client/model/';
-  // Absolute URL: the inference worker below cannot resolve a relative path.
-  transformers.env.backends.onnx.wasm.wasmPaths = new URL('/search-client/vendor/', location.href).href;
-  // Run inference in a Web Worker: keeps the page responsive and lets
-  // EMBED_TIMEOUT_MS fire (on the main thread, WASM inference blocks the timer).
-  transformers.env.backends.onnx.wasm.proxy = true;
-
-  const embedder = new QueryEmbedder({ transformers });
-  let modelReady = false;
-  let modelLoading = null;
-
-  function warmUp() {
-    if (modelLoading || navigator.connection?.saveData) {
-      return;
-    }
-    modelLoading = embedder.init().then(
-      () => { modelReady = true; },
-      (err) => { console.warn('search: embedder unavailable, using keyword-only search', err); },
-    );
-  }
-
-  async function queryVector(q) {
-    if (!modelReady) {
-      warmUp();
-      return null;  // never block a search on the model download
-    }
-    const timeout = new Promise((resolve) => setTimeout(resolve, EMBED_TIMEOUT_MS, null));
-    return Promise.race([embedder.embed(q), timeout]).catch(() => null);
-  }
-
   async function searchProducts(q, customerId) {
+    // Only the query: the service adds semantic results server-side (VPS).
     const body = { q, limit: LIMIT };
     if (customerId) {
       body.customer_id = String(customerId);
-    }
-    const vector = await queryVector(q);
-    if (vector) {
-      body.q_vector = vector;
     }
     const res = await fetch(SEARCH_URL, {
       method: 'POST',
@@ -348,7 +361,6 @@ product links use OpenCart's standard `product/product` route.
 
   const form = document.getElementById('search-form');
   const input = document.getElementById('search-input');
-  input.addEventListener('focus', warmUp, { once: true });
   form.addEventListener('submit', async (event) => {
     event.preventDefault();
     const q = input.value.trim().slice(0, MAX_QUERY_CHARS);
@@ -367,119 +379,27 @@ product links use OpenCart's standard `product/product` route.
 
 Notes:
 
-- `embedder.js` is used unchanged. The storefront injects its own configured
-  transformers.js module (`new QueryEmbedder({ transformers })`), so the
-  embedder's fallback `import('@xenova/transformers')` never runs in the
-  browser, and no bundler or import map is needed.
-- The model loads on first focus, not on page load, so visitors who never search
-  download nothing. After the first download the browser keeps the files in its
-  Cache API storage, and later visits load from disk.
-- `EMBED_TIMEOUT_MS` is a starting point. Tune it from real devices (see the
-  Go-Live checklist in the README).
+- No model, runtime or font is loaded in the browser, and nothing is
+  requested from any third-party host: the only request is the `POST` to
+  `search.php` on the store's own domain.
+- A storefront still built for M4–M17 (sending `q_vector`) keeps working:
+  the field is ignored. Replace its snippet with this one **before** deleting
+  the `search-client/` folder: the old snippet imports `embedder.js` from
+  there, and without it the whole script (and the search box) stops.
 
 ---
 
-## Self-hosting the model (no HuggingFace, no CDN)
-
-By default, transformers.js downloads model files from `huggingface.co` and its
-WebAssembly runtime from `cdn.jsdelivr.net`. Either may be blocked or throttled
-for shoppers in Iran. The storefront snippet above therefore sets
-`allowRemoteModels = false`, `localModelPath` and `wasmPaths`, and every file
-comes from the store's own domain. Only the developer machine ever talks to
-HuggingFace or npm.
-
-### Which files
-
-`client/embedder.js` asks transformers.js v2 for the model id
-`intfloat/multilingual-e5-small`. With default options, transformers.js loads
-the **quantized** ONNX file `onnx/model_quantized.onnx`. The
-`intfloat/multilingual-e5-small` repository does **not** publish that file, so
-loading it by id fails with `Could not locate file: …/onnx/model_quantized.onnx`.
-Use the transformers.js conversion of the same weights from
-[`Xenova/multilingual-e5-small`](https://huggingface.co/Xenova/multilingual-e5-small),
-placed under the `intfloat/…` id path that `embedder.js` requests:
-
-```
-client/model/intfloat/multilingual-e5-small/     (gitignored)
-    config.json
-    tokenizer.json                (~17 MB)
-    tokenizer_config.json
-    special_tokens_map.json
-    onnx/model_quantized.onnx     (~118 MB, int8)
-```
-
-On the developer machine:
-
-```bash
-REV=761b726dd34fb83930e26aab4e9ac3899aa1fa78   # pinned Xenova/multilingual-e5-small commit
-DST=client/model/intfloat/multilingual-e5-small
-mkdir -p "$DST/onnx"
-for f in config.json tokenizer.json tokenizer_config.json special_tokens_map.json onnx/model_quantized.onnx; do
-  curl -fL -o "$DST/$f" "https://huggingface.co/Xenova/multilingual-e5-small/resolve/$REV/$f"
-done
-```
-
-The transformers.js runtime (pin the 2.x version `embedder.js` is used with):
-
-```bash
-npm --prefix client install @xenova/transformers@2.17.2   # also used by the parity check
-# copy client/node_modules/@xenova/transformers/dist/{transformers.min.js,ort-wasm*.wasm}
-# to public_html/search-client/vendor/
-```
-
-`python pipeline/tools/fetch_web_model.py` does all of the above in one step. It
-downloads the same pinned files (model at the commit above, transformers.js
-2.17.2, plus the Vazirmatn font for the test page), verifies each file's
-checksum, and writes them to `client/model/`, `client/vendor/` and
-`client/fonts/`. See the README, "Search test page".
-
-The browser model is int8-quantized, while the offline pipeline embeds products
-with the full-precision model. **Run the parity check before trusting Tier 2.**
-It embeds `fixtures/parity_strings.json` with both implementations, using
-exactly the files in `client/model/`:
-
-```bash
-EMBEDDER=real python pipeline/tools/model_parity.py    # expect PASS, cosine >= 0.99
-```
-
-During M5 verification this passed with a per-string cosine of 0.9956–0.9985
-(quantized browser model against the full-precision pipeline).
-
-### Uploading and serving
-
-Upload `client/embedder.js`, `client/model/`, and the vendor files to
-`public_html/search-client/` in binary mode, matching the layout under
-[Deployment shape](#deployment-shape). Then, on the web server:
-
-- `.wasm` must be served as `application/wasm`. LiteSpeed does this by default;
-  otherwise add `AddType application/wasm .wasm`.
-- Give `search-client/` long cache lifetimes (for example
-  `Header set Cache-Control "public, max-age=31536000, immutable"` in its
-  `.htaccess`). The files only change when the model changes, and then the
-  directory is replaced.
-- Enable compression for `.json`. `tokenizer.json` compresses from about 17 MB
-  to a few MB. `.onnx` does not compress usefully.
-
-### Verifying no third-party requests
-
-Open the store in a browser with DevTools, then Network, with "Preserve log"
-on. Focus the search box and run a search. Every request must go to the
-store's own domain. There must be none to `huggingface.co` or
-`cdn.jsdelivr.net`, and the `/search-api/search.php` request payload must
-contain `q_vector` once the model has loaded.
-
 ## Changing the model
 
-The model is a three-way contract (contract 2 in `CLAUDE.md`). To change it,
-change all of these together, then rebuild and redeploy:
+The semantic model lives on the VPS. Contract 2 (`CLAUDE.md`) is now between
+`pipeline/embed.py` (product vectors, `SEARCH_VPS_MODEL*` / `SEARCH_VPS_POOLING`
+/ prefixes in `pipeline/config.py`) and the VPS query embedder (`VPS_MODEL*`
+/ `VPS_POOLING` / `VPS_QUERY_PREFIX` in `/etc/search-vectors.env`); the VPS's
+`/reload` rejects vectors whose `meta.json` disagrees. Follow
+`vps/README.md` ("Model parity", "Updating the product vectors"), then re-tune
+`SEARCH_SEMANTIC_MIN_SCORE` for the new model's score range. Nothing changes
+on cPanel or in the storefront.
 
-1. `SEARCH_MODEL`, `SEARCH_MODEL_REVISION`, `SEARCH_MODEL_DIM` for the
-   pipeline and in `server/config.php`.
-2. The `MODEL_ID` / `MODEL_REVISION` / `EMBEDDING_DIM` / `QUERY_PREFIX`
-   constants in `client/embedder.js`. CI asserts that they match the pipeline
-   and server defaults.
-3. The self-hosted files under `client/model/<new id>/` and on the store.
-4. Rebuild the bundle with `build.py`, then deploy it and call `/reload`. A
-   bundle built with the old model is rejected (`model_mismatch` /
-   `dim_mismatch`).
-5. Rerun `pipeline/tools/model_parity.py`.
+`SEARCH_MODEL` / `SEARCH_MODEL_DIM` in `server/config.php` only describe the
+bundle's `meta.json` for `/reload` (contract 3); `/search` does not read the
+bundle's vectors.

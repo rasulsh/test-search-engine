@@ -10,7 +10,6 @@ use App\ProductLoader;
 use App\Ranker;
 use App\SearchController;
 use App\Speller;
-use App\Vectors;
 
 /**
  * M12: a query naming a product's SKU returns that product first, above
@@ -25,9 +24,6 @@ final class KeywordSkuTest extends DatabaseTestCase
     private const SONY_CODE = 4;    // sku SONY-X9 (letters-only prefix must not match "sony")
     private const SONY_TITLE = 5;
 
-    /** @var list<string> */
-    private array $tempDirs = [];
-
     protected function setUp(): void
     {
         parent::setUp();
@@ -38,14 +34,6 @@ final class KeywordSkuTest extends DatabaseTestCase
             $this->row(self::SONY_CODE, 'Remote control', 'SONY-X9', 700),
             $this->row(self::SONY_TITLE, 'Sony headphones', '', 10),
         ]);
-    }
-
-    protected function tearDown(): void
-    {
-        foreach ($this->tempDirs as $dir) {
-            array_map('unlink', glob($dir . '/*') ?: []);
-            rmdir($dir);
-        }
     }
 
     /** @return array<string, mixed> */
@@ -140,23 +128,14 @@ final class KeywordSkuTest extends DatabaseTestCase
 
     public function testExactSkuStaysFirstInTheHybridMerge(): void
     {
-        // The query vector points exactly at the title twin (and a semantic-only
-        // product); semantic evidence must not lift it above the SKU hit.
-        $dir = sys_get_temp_dir() . '/sku_' . uniqid('', true);
-        mkdir($dir);
-        $this->tempDirs[] = $dir;
+        // The VPS's query vector points exactly at the title twin (and a
+        // semantic-only product); semantic evidence must not lift it above the SKU hit.
         $vectors = [
             self::TARGET => [0.0, 1.0, 0.0, 0.0],
             self::TITLE_TWIN => [1.0, 0.0, 0.0, 0.0],
             self::PREFIX => [0.0, 0.0, 1.0, 0.0],
             self::SONY_TITLE => [0.99, 0.141, 0.0, 0.0],
         ];
-        $bin = '';
-        foreach ($vectors as $vector) {
-            $bin .= pack('g*', ...$vector);
-        }
-        file_put_contents($dir . '/vectors.bin', $bin);
-        file_put_contents($dir . '/vectors.idx', implode("\n", array_keys($vectors)) . "\n");
 
         $pdo = $this->pdo;
         $signals = static function (array $ids) use ($pdo): array {
@@ -176,7 +155,7 @@ final class KeywordSkuTest extends DatabaseTestCase
             static fn (): Speller => Speller::fromProducts($pdo, 'products'),
             null,
             10,
-            new Vectors($dir, 4, false),
+            FakeVps::client(['products' => $vectors, 'queries' => ['AB-1234' => [1.0, 0.0, 0.0, 0.0]]]),
             new Ranker(60, 0.1, 0.1),
             $signals,
             100,
@@ -184,13 +163,14 @@ final class KeywordSkuTest extends DatabaseTestCase
             0.5
         );
 
-        $response = $controller->search(['q' => 'AB-1234', 'q_vector' => [1.0, 0.0, 0.0, 0.0]]);
+        $response = $controller->search(['q' => 'AB-1234']);
 
         self::assertArrayHasKey('cosine_scores', $response); // hybrid path taken
         self::assertSame([self::TARGET, self::PREFIX], array_slice($response['product_ids'], 0, 2));
         self::assertContains(self::SONY_TITLE, $response['product_ids']); // semantic-only, below
         self::assertCount(count($response['product_ids']), $response['cosine_scores']);
-        self::assertSame(0.0, $response['cosine_scores'][0]);
+        // Below the floor, so the VPS did not return it: no score to show.
+        self::assertNull($response['cosine_scores'][0]);
     }
 
     public function testLongestTitlePlusSkuFitsTheIndexedTitle(): void

@@ -8,17 +8,11 @@
 <!--
   Search test page. Fully self-contained and same-origin: every URL below is
   RELATIVE to this page, so it works under any subdirectory, and nothing is loaded
-  from a CDN or HuggingFace. Browser assets (./client/) come from
-  pipeline/tools/fetch_web_model.py; see README, "Search test page".
+  from a CDN. No model runs in the browser (M18): the page sends only the query
+  text; cPanel asks the VPS for semantic neighbours and returns each result's
+  cosine score. See README, "Search test page".
 -->
 <style>
-  @font-face {
-    font-family: 'Vazirmatn';
-    src: url('./client/fonts/Vazirmatn-Variable.woff2') format('woff2');
-    font-weight: 100 900;
-    font-display: swap;
-  }
-
   :root {
     --bg: #ffffff;
     --surface: #ffffff;
@@ -62,7 +56,7 @@
     min-height: 100vh;
     background: var(--bg);
     color: var(--text);
-    font-family: 'Vazirmatn', Tahoma, 'Segoe UI', sans-serif;
+    font-family: Vazirmatn, Tahoma, 'Segoe UI', sans-serif;
     font-size: 15px;
     line-height: 1.6;
   }
@@ -138,93 +132,6 @@
   }
 
   .search-button:disabled { opacity: 0.6; cursor: progress; }
-
-  .controls {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    justify-content: center;
-    gap: 10px 16px;
-    margin-top: 16px;
-    color: var(--muted);
-    font-size: 14px;
-  }
-
-  .toggle {
-    display: inline-flex;
-    align-items: center;
-    gap: 10px;
-    padding: 4px 6px 4px 12px;
-    border: 1px solid var(--border);
-    border-radius: 20px;
-    background: var(--surface);
-    color: var(--text);
-    cursor: pointer;
-    user-select: none;
-  }
-
-  .toggle input { position: absolute; opacity: 0; pointer-events: none; }
-
-  .switch {
-    position: relative;
-    width: 36px;
-    height: 20px;
-    border-radius: 10px;
-    background: var(--border);
-    transition: background 0.2s;
-    flex: none;
-  }
-
-  .switch::after {
-    content: '';
-    position: absolute;
-    top: 2px;
-    right: 2px;
-    width: 16px;
-    height: 16px;
-    border-radius: 50%;
-    background: #fff;
-    transition: transform 0.2s;
-  }
-
-  .toggle input:checked + .switch { background: var(--accent); }
-  .toggle input:checked + .switch::after { transform: translateX(-16px); }
-  .toggle input:focus-visible + .switch { outline: 2px solid var(--accent); outline-offset: 2px; }
-
-  .model-status {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-  }
-
-  .dot {
-    width: 8px;
-    height: 8px;
-    border-radius: 50%;
-    background: var(--border);
-    flex: none;
-  }
-
-  .model-status[data-state="loading"] .dot { background: #f9ab00; }
-  .model-status[data-state="ready"] .dot { background: #1e8e3e; }
-  .model-status[data-state="failed"] .dot { background: #d93025; }
-
-  .progress {
-    width: 100%;
-    max-width: 640px;
-    height: 3px;
-    margin-top: 10px;
-    border-radius: 2px;
-    background: var(--surface-2);
-    overflow: hidden;
-  }
-
-  .progress > div {
-    height: 100%;
-    width: 0;
-    background: var(--accent);
-    transition: width 0.2s;
-  }
 
   .notice {
     max-width: 640px;
@@ -397,19 +304,6 @@
              placeholder="نام محصول، برند یا مدل را بنویسید…" aria-label="عبارت جستجو">
       <button id="submit" class="search-button" type="submit">جستجو</button>
     </form>
-
-    <div class="controls">
-      <label class="toggle" title="روشن: جستجوی ترکیبی (کلیدواژه + معنایی). خاموش: فقط کلیدواژه.">
-        <span>جستجوی معنایی (AI): <b id="semantic-label">روشن</b></span>
-        <input id="semantic" type="checkbox" checked>
-        <span class="switch" aria-hidden="true"></span>
-      </label>
-      <span id="model-status" class="model-status" data-state="idle" aria-live="polite">
-        <span class="dot"></span><span id="model-status-text">مدل هنوز بارگذاری نشده</span>
-      </span>
-    </div>
-
-    <div id="progress" class="progress" hidden><div></div></div>
   </header>
 
   <div id="notice" class="notice" role="status" hidden></div>
@@ -427,7 +321,6 @@
 <script type="module">
   // ---- Configuration (all paths are relative to this page) --------------------
   const SEARCH_URL = './search.php';
-  const CLIENT_BASE = new URL('./client/', location.href);
   // The service is deployed in a subdirectory of the store (e.g. /search-api/),
   // so relative product URLs and OpenCart image paths resolve from the parent.
   // Set store_base / image_base in config.php (install.php asks for them) and
@@ -436,30 +329,13 @@
   const IMAGE_BASE = new URL('image/', STORE_BASE);
   const LIMIT = 24;
   const MAX_QUERY_CHARS = 200;
-  // First search waits this long for the model download before going keyword-only
-  // (the download continues in the background for the next search).
-  const MODEL_WAIT_MS = 30000;
-  const EMBED_TIMEOUT_MS = 5000;
   const PRICE_SUFFIX = '';
-  const STORAGE_KEY = 'search-test:semantic';
 
   // UI strings (Persian by request); code, identifiers and console output stay English.
   const TEXT = {
-    on: 'روشن',
-    off: 'خاموش',
-    modelIdle: 'مدل هنوز بارگذاری نشده',
-    modelLoading: 'در حال بارگذاری مدل…',
-    modelLoadingPct: (pct) => `در حال بارگذاری مدل… ${fmt(pct)}٪`,
-    modelReady: 'مدل آماده است',
-    modelFailed: 'مدل در دسترس نیست',
-    noticeModelFailed: 'مدل معنایی بارگذاری نشد؛ نتایج فقط بر اساس کلیدواژه است.',
-    noticeModelSlow: 'مدل معنایی هنوز در حال بارگذاری است؛ این جستجو فقط با کلیدواژه انجام شد.',
-    noticeEmbedFailed: 'ساخت بردار عبارت جستجو ناموفق بود؛ نتایج فقط بر اساس کلیدواژه است.',
     serviceError: 'ارتباط با سرویس جستجو برقرار نشد. کمی بعد دوباره امتحان کنید.',
-    searching: 'در حال جستجو…',
     results: (n) => `${fmt(n)} نتیجه`,
     roundTrip: (ms) => `زمان پاسخ: ${fmt(ms)} میلی‌ثانیه`,
-    embedTime: (ms) => `ساخت بردار: ${fmt(ms)} میلی‌ثانیه`,
     modeHybrid: 'ترکیبی (کلیدواژه + معنایی)',
     modeKeyword: 'فقط کلیدواژه',
     didYouMean: 'منظورتان این بود: ',
@@ -481,98 +357,6 @@
   const form = $('search-form');
   const input = $('q');
   const submitButton = $('submit');
-  const semanticToggle = $('semantic');
-
-  // ---- Embedder (loaded once, lazily; any failure means keyword-only) ---------
-  let embedder = null;
-  let modelState = 'idle'; // idle | loading | ready | failed
-  let modelPromise = null;
-  const downloads = new Map();
-
-  function setModelStatus(state, text) {
-    modelState = state;
-    $('model-status').dataset.state = state;
-    $('model-status-text').textContent = text;
-    $('progress').hidden = state !== 'loading';
-  }
-
-  function onProgress(event) {
-    if (event.status !== 'progress' || !event.total) {
-      return;
-    }
-    downloads.set(event.file, { loaded: event.loaded, total: event.total });
-    let loaded = 0;
-    let total = 0;
-    for (const d of downloads.values()) {
-      loaded += d.loaded;
-      total += d.total;
-    }
-    const pct = Math.min(100, Math.round((loaded / total) * 100));
-    $('progress').firstElementChild.style.width = `${pct}%`;
-    if (modelState === 'loading') {
-      $('model-status-text').textContent = TEXT.modelLoadingPct(pct);
-    }
-  }
-
-  function loadModel() {
-    if (modelPromise) {
-      return modelPromise;
-    }
-    setModelStatus('loading', TEXT.modelLoading);
-    modelPromise = (async () => {
-      const transformers = await import(new URL('vendor/transformers.min.js', CLIENT_BASE).href);
-      const { QueryEmbedder } = await import(new URL('embedder.js', CLIENT_BASE).href);
-      // Self-hosted only: never fall back to huggingface.co or a CDN.
-      transformers.env.allowRemoteModels = false;
-      transformers.env.allowLocalModels = true;
-      transformers.env.localModelPath = new URL('model/', CLIENT_BASE).href;
-      // Absolute URL: the inference worker cannot resolve a relative path.
-      transformers.env.backends.onnx.wasm.wasmPaths = new URL('vendor/', CLIENT_BASE).href;
-      // Inference in a Web Worker keeps the page responsive and lets timeouts fire.
-      transformers.env.backends.onnx.wasm.proxy = true;
-      const instance = new QueryEmbedder({ transformers, progressCallback: onProgress });
-      await instance.init();
-      embedder = instance;
-      setModelStatus('ready', TEXT.modelReady);
-    })().catch((err) => {
-      console.warn('search-test: embedder unavailable, using keyword-only search', err);
-      setModelStatus('failed', TEXT.modelFailed);
-      modelPromise = null; // the next semantic search or toggle retries
-      throw err;
-    });
-    return modelPromise;
-  }
-
-  function withTimeout(promise, ms) {
-    let timer;
-    const timeout = new Promise((resolve) => {
-      timer = setTimeout(resolve, ms, { timedOut: true });
-    });
-    return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
-  }
-
-  // Resolves to {vector, ms} or {notice}; never rejects.
-  async function queryVector(q) {
-    try {
-      const loaded = await withTimeout(loadModel(), MODEL_WAIT_MS);
-      if (loaded?.timedOut) {
-        return { notice: TEXT.noticeModelSlow };
-      }
-    } catch {
-      return { notice: TEXT.noticeModelFailed };
-    }
-    const start = performance.now();
-    try {
-      const result = await withTimeout(embedder.embed(q), EMBED_TIMEOUT_MS);
-      if (!Array.isArray(result)) {
-        return { notice: TEXT.noticeEmbedFailed };
-      }
-      return { vector: result, ms: Math.round(performance.now() - start) };
-    } catch (err) {
-      console.warn('search-test: query embedding failed', err);
-      return { notice: TEXT.noticeEmbedFailed };
-    }
-  }
 
   // ---- Search ------------------------------------------------------------------
   let searchSeq = 0;
@@ -585,24 +369,9 @@
     const seq = ++searchSeq;
     submitButton.disabled = true;
     showNotice(null);
-    const semantic = semanticToggle.checked;
-    if (semantic && modelState !== 'ready') {
-      showNotice(TEXT.searching);
-    }
 
+    // Only the query: the server adds the semantic tier (via the VPS) when it can.
     const body = { q, limit: LIMIT, with_details: true };
-    let notice = null;
-    let embedMs = null;
-    if (semantic) {
-      const embedded = await queryVector(q);
-      if (embedded.vector) {
-        body.q_vector = embedded.vector;
-        embedMs = embedded.ms;
-      } else {
-        notice = embedded.notice;
-      }
-    }
-
     const start = performance.now();
     let data = null;
     try {
@@ -628,8 +397,7 @@
       showNotice(TEXT.serviceError, true);
       return;
     }
-    showNotice(notice);
-    render(q, data, { hybrid: 'q_vector' in body, roundTripMs, embedMs });
+    render(q, data, { roundTripMs });
     const url = new URL(location.href);
     url.searchParams.set('q', q);
     history.replaceState(null, '', url);
@@ -713,14 +481,15 @@
     return item;
   }
 
-  function render(q, data, { hybrid, roundTripMs, embedMs }) {
+  function render(q, data, { roundTripMs }) {
     document.body.classList.add('has-results');
+    // cosine_scores is present only when the VPS answered (hybrid results).
+    const hybrid = Array.isArray(data.cosine_scores);
 
     const summary = $('summary');
     summary.replaceChildren(
       el('span', null, TEXT.results(data.count ?? 0)),
       el('span', null, TEXT.roundTrip(roundTripMs)),
-      ...(embedMs !== null ? [el('span', null, TEXT.embedTime(embedMs))] : []),
       el('span', `badge${hybrid ? ' hybrid' : ''}`, hybrid ? TEXT.modeHybrid : TEXT.modeKeyword),
     );
     summary.hidden = false;
@@ -758,29 +527,6 @@
   }
 
   // ---- Wiring --------------------------------------------------------------------
-  function applyToggle() {
-    const on = semanticToggle.checked;
-    $('semantic-label').textContent = on ? TEXT.on : TEXT.off;
-    try {
-      localStorage.setItem(STORAGE_KEY, on ? '1' : '0');
-    } catch {
-      // storage unavailable (private mode): the toggle still works for this visit
-    }
-    if (on && modelState !== 'ready') {
-      loadModel().catch(() => {});
-    }
-  }
-
-  try {
-    if (localStorage.getItem(STORAGE_KEY) === '0') {
-      semanticToggle.checked = false;
-    }
-  } catch {
-    // ignore: default is on
-  }
-  semanticToggle.addEventListener('change', applyToggle);
-  applyToggle();
-
   form.addEventListener('submit', (event) => {
     event.preventDefault();
     runSearch(input.value);

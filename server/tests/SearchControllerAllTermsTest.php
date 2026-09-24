@@ -10,19 +10,18 @@ use App\ProductLoader;
 use App\Ranker;
 use App\SearchController;
 use App\Speller;
-use App\Vectors;
 
 /**
  * M16 in the /search flow: all-words keyword hits are not padded with
  * one-word semantic neighbours, a query nothing fully matches falls back to
  * the best partial matches (after the typo / layout recovery), and
  * single-word, SKU and require_all_terms-off requests keep the additive
- * semantic tier. The neighbour vectors sit above the 0.82 floor, as the black
- * keyboards and red mice do for "red keyboard" on multilingual-e5-small.
+ * semantic tier. The (fake) VPS neighbours sit above the test's 0.82 floor,
+ * as black keyboards and red mice sit close to "red keyboard" in real
+ * embeddings.
  */
 final class SearchControllerAllTermsTest extends DatabaseTestCase
 {
-    private const DIM = 4;
     private const QUERY_VECTOR = [1.0, 0.0, 0.0, 0.0];
 
     private const RED_KEYBOARD = 1;
@@ -33,7 +32,8 @@ final class SearchControllerAllTermsTest extends DatabaseTestCase
     private const RED_HEADSET = 6;
     private const SKU_KEYBOARD = 7;
 
-    private string $bundle;
+    /** @var array<string, mixed> */
+    private array $vps;
 
     protected function setUp(): void
     {
@@ -55,52 +55,36 @@ final class SearchControllerAllTermsTest extends DatabaseTestCase
                 'description' => '', 'stock' => 1, 'popularity' => 1],
         ]);
 
-        $this->bundle = sys_get_temp_dir() . '/alltermsvec_' . uniqid('', true);
-        mkdir($this->bundle, 0777, true);
-        $rows = [
-            self::RED_KEYBOARD       => [1.0, 0.0, 0.0, 0.0],
-            self::TITLE_RED_KEYBOARD => [0.95, 0.31225, 0.0, 0.0],
-            self::BLACK_KEYBOARD     => [0.9, 0.43589, 0.0, 0.0],   // cosine 0.90
-            self::RED_MOUSE          => [0.88, 0.0, 0.47497, 0.0],  // cosine 0.88
-            self::RED_HEADSET        => [0.0, 0.0, 0.0, 1.0],       // unrelated
+        $this->vps = [
+            'queries'  => ['*' => self::QUERY_VECTOR],
+            'products' => [
+                self::RED_KEYBOARD       => [1.0, 0.0, 0.0, 0.0],
+                self::TITLE_RED_KEYBOARD => [0.95, 0.31225, 0.0, 0.0],
+                self::BLACK_KEYBOARD     => [0.9, 0.43589, 0.0, 0.0],   // cosine 0.90
+                self::RED_MOUSE          => [0.88, 0.0, 0.47497, 0.0],  // cosine 0.88
+                self::RED_HEADSET        => [0.0, 0.0, 0.0, 1.0],       // unrelated
+            ],
         ];
-        $bin = '';
-        $idx = '';
-        foreach ($rows as $id => $vector) {
-            $bin .= pack('g*', ...$vector);
-            $idx .= $id . "\n";
-        }
-        file_put_contents($this->bundle . '/vectors.bin', $bin);
-        file_put_contents($this->bundle . '/vectors.idx', $idx);
-    }
-
-    protected function tearDown(): void
-    {
-        array_map('unlink', glob($this->bundle . '/*') ?: []);
-        @rmdir($this->bundle);
     }
 
     /** @param array<string, mixed> $search overrides of the search config */
-    private function controller(array $search = []): SearchController
+    private function controller(array $search = [], bool $semantic = false): SearchController
     {
         return SearchController::fromConfig($this->pdo, [
             'db'     => ['products_table' => 'products', 'search_logs_table' => 'search_logs'],
-            'model'  => ['dim' => self::DIM],
             'search' => $search + [
                 'default_limit' => 20, 'min_token_size' => 3, 'semantic_top_k' => 100,
                 'rrf_k' => 60, 'stock_boost' => 0.1, 'popularity_boost' => 0.1,
                 'semantic_min_score' => 0.82,
             ],
-            'paths'  => ['data' => $this->bundle],
-        ]);
+            'paths'  => ['data' => sys_get_temp_dir() . '/no-bundle-' . uniqid()],
+        ], $semantic ? FakeVps::client($this->vps) : null);
     }
 
     /** @return list<int> */
-    private function ids(string $query, bool $withVector = true, array $search = []): array
+    private function ids(string $query, bool $semantic = true, array $search = []): array
     {
-        $request = ['q' => $query] + ($withVector ? ['q_vector' => self::QUERY_VECTOR] : []);
-
-        return $this->controller($search)->search($request)['product_ids'];
+        return $this->controller($search, $semantic)->search(['q' => $query])['product_ids'];
     }
 
     public function testRedKeyboardExcludesBlackKeyboardAndRedNonKeyboard(): void
@@ -132,9 +116,9 @@ final class SearchControllerAllTermsTest extends DatabaseTestCase
         self::assertFalse($keywordOnly['did_you_mean_applied']);
 
         // The fallback holds no all-words hit: neighbours stay additive below.
-        $withVector = $this->ids('کیبورد آبی');
-        self::assertSame(self::RED_MOUSE, end($withVector));
-        self::assertCount(6, $withVector);
+        $withSemantic = $this->ids('کیبورد آبی');
+        self::assertSame(self::RED_MOUSE, end($withSemantic));
+        self::assertCount(6, $withSemantic);
     }
 
     public function testNoWordMatchesAtAllStaysEmpty(): void
@@ -158,7 +142,11 @@ final class SearchControllerAllTermsTest extends DatabaseTestCase
     {
         // "قرمز" keyword hits exclude the black keyboard; it is a neighbour.
         self::assertNotContains(self::BLACK_KEYBOARD, $this->ids('قرمز', false));
-        self::assertSame(self::BLACK_KEYBOARD, $this->ids('قرمز')[5]);
+        $ids = $this->ids('قرمز');
+        self::assertSame(self::BLACK_KEYBOARD, end($ids));
+        // Its description-only hit (the office keyboard) is not among the VPS's
+        // neighbours above the floor, so the M11 gate drops it.
+        self::assertNotContains(self::DESC_RED_KEYBOARD, $ids);
     }
 
     public function testSkuQueryKeepsSemanticNeighbours(): void

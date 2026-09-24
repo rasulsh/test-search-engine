@@ -1,5 +1,5 @@
 {
-  "note": "Labeled queries for the eval harness (server/tools/eval.php). expected_ids is the TRUE relevant set (bilingual) for each query, so recall exposes cross-language gaps that Tier 2 closes. Seed set against fixtures/products.sample.sql; grow it from real search logs. Add an optional per-query \"q_vector\" (dim floats) to measure the hybrid tier offline with the real model.",
+  "note": "Labeled queries for the eval harness (server/tools/eval.php). expected_ids is the TRUE relevant set (bilingual) for each query, so recall exposes cross-language gaps that Tier 2 closes. Seed set against fixtures/products.sample.sql; grow it from real search logs. Set SEARCH_VPS_URL / SEARCH_VPS_TOKEN to measure the hybrid tier through the VPS.",
   "queries": [
     { "q": "sony headphones", "expected_ids": [1009, 1010] },
     { "q": "samsung galaxy",  "expected_ids": [1003, 1004] },

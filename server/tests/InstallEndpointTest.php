@@ -162,13 +162,14 @@ final class InstallEndpointTest extends DatabaseTestCase
         self::assertStringContainsString('<html lang="fa" dir="rtl">', $body);
         self::assertMatchesRegularExpression('/name="reload_token" value="[0-9a-f]{64}"/', $body);
         self::assertStringContainsString('name="model_name" value="intfloat/multilingual-e5-small"', $body);
-        self::assertStringContainsString('name="semantic_min_score" value="0.82"', $body);
+        self::assertStringContainsString('name="semantic_min_score" value="0.4"', $body);
+        self::assertStringContainsString('name="vps_timeout_ms" value="300"', $body);
         // Build-time only (release.py --desc-index-chars): not a server setting.
         self::assertStringNotContainsString('desc_index_chars', $body);
         self::assertStringContainsString('type="password" id="db_password" name="db_password" value=""', $body);
         foreach (
             ['db_host', 'db_name', 'db_user', 'store_base', 'image_base', 'title_weight', 'desc_weight',
-            'spec_weight', 'phrase_bonus', 'model_dim', 'normalization_version'] as $field
+            'spec_weight', 'phrase_bonus', 'model_dim', 'normalization_version', 'vps_url', 'vps_token'] as $field
         ) {
             self::assertStringContainsString('name="' . $field . '"', $body);
         }

@@ -31,8 +31,10 @@ return [
         'search_logs_table' => getenv('SEARCH_SEARCH_LOGS_TABLE') ?: 'search_logs',
     ],
 
-    // Embedding model — must match the pipeline and the browser embedder.
-    // Bundle compatibility is checked against these on POST /reload.
+    // Model the offline bundle's meta.json is stamped with (pipeline/config.py
+    // `model`); bundle compatibility is checked against these on POST /reload.
+    // Since M18 /search does not read the bundle's vectors: the semantic tier's
+    // model (bge-m3) runs on the VPS, configured there (vps/README.md).
     'model' => [
         'name'                  => getenv('SEARCH_MODEL') ?: 'intfloat/multilingual-e5-small',
         'revision'              => getenv('SEARCH_MODEL_REVISION') ?: 'main',
@@ -88,14 +90,24 @@ return [
             $setting('SEARCH_REQUIRE_ALL_TERMS', '1'),
             FILTER_VALIDATE_BOOLEAN
         ),
-        // Global cosine top-K width for Tier 2 (candidates fused with keyword).
+        // Global cosine top-K width for Tier 2: the `limit` asked of the VPS
+        // (candidates fused with keyword). Keep it at or below the VPS's
+        // VPS_MAX_LIMIT (500): a full list tells /search that more neighbours
+        // may clear the floor further down.
         'semantic_top_k'    => (int) (getenv('SEARCH_SEMANTIC_TOP_K') ?: 100),
-        // Relevance floor (cosine) for Tier 2 neighbours. The nearest vectors of
-        // a query with no relevant product are still unrelated items; below this
-        // they are dropped, and a query with neither keyword hits nor neighbours
-        // above it returns nothing. Tune against a real eval set.
-        'semantic_min_score' => (float) $setting('SEARCH_SEMANTIC_MIN_SCORE', '0.82'),
-        // With a query vector, keyword hits that matched only in the description
+        // Relevance floor (cosine) for Tier 2 neighbours, sent to the VPS as
+        // min_score and re-applied here. The nearest vectors of a query with no
+        // relevant product are still unrelated items; below this they are
+        // dropped, and a query with neither keyword hits nor neighbours above it
+        // returns nothing. 0.4 is a starting point for bge-m3, whose scores sit
+        // far lower than e5's (the old 0.82 was e5's and would drop nearly every
+        // bge-m3 neighbour). It NEEDS TUNING on the real catalog: on the fixture,
+        // right one-word hits scored 0.42-0.49 and wrong ones up to 0.43, so no
+        // floor separates short queries; the keyword tier (all terms, aliases)
+        // fused by RRF carries one-word precision, and the floor mainly keeps
+        // far neighbours out.
+        'semantic_min_score' => (float) $setting('SEARCH_SEMANTIC_MIN_SCORE', '0.4'),
+        // With semantic results, keyword hits that matched only in the description
         // (not the title) must also reach semantic_min_score, or they are
         // dropped: spec text mentioning the query ("ball bearing" in a case
         // fan) is not a product for it. Title matches are always kept;
@@ -132,6 +144,19 @@ return [
     'storefront' => [
         'store_base' => $setting('SEARCH_STORE_BASE', ''),
         'image_base' => $setting('SEARCH_IMAGE_BASE', ''),
+    ],
+
+    // VPS vector service (M18, vps/README.md): the query text is POSTed to
+    // {url}/search-vectors server-to-server and the returned neighbours feed
+    // Tier 2. Empty url = keyword-only. Unreachable, slow (timeout_ms bounds
+    // connect + response) or failing VPS = keyword-only results for that
+    // request, logged via error_log; the request never fails because of it.
+    // The token is the VPS's VPS_TOKEN (a secret: keep it in the environment
+    // or in config.php, never in the repository).
+    'vps' => [
+        'url'        => $setting('SEARCH_VPS_URL', ''),
+        'token'      => $setting('SEARCH_VPS_TOKEN', ''),
+        'timeout_ms' => (int) $setting('SEARCH_VPS_TIMEOUT_MS', '300'),
     ],
 
     // Active bundle plus staging directory used for the atomic reload swap.

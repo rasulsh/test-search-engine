@@ -7,8 +7,10 @@ engines.
 
 > Authoritative design, contracts, and the milestone plan live in
 > [`CLAUDE.md`](./CLAUDE.md). The storefront-side HTTP contract, the reference
-> storefront snippet, and model self-hosting are in
-> [`INTEGRATION.md`](./INTEGRATION.md). This README is the operator runbook.
+> storefront snippet, and the cPanel-to-VPS call are in
+> [`INTEGRATION.md`](./INTEGRATION.md). The VPS vector service has its own
+> runbook, [`vps/README.md`](./vps/README.md). This README is the operator
+> runbook for the rest.
 
 ## Architecture
 
@@ -17,20 +19,18 @@ Two tiers, degrading gracefully:
 - **Tier 1 — keyword (always on, server-side).** MySQL FULLTEXT + Persian
   normalization + typo/keyboard-layout tolerance + "did you mean". Works with
   zero ML and never breaks.
-- **Tier 2 — semantic (additive).** Cosine similarity over precomputed,
-  L2-normalized product vectors. If Tier 2 is unavailable, Tier 1 still answers.
+- **Tier 2 — semantic (additive, M18).** cPanel sends the query text
+  server-to-server to a small VPS service ([`vps/README.md`](./vps/README.md))
+  that embeds it with bge-m3 and returns the top-K `{product_id, score}` by
+  cosine over precomputed product vectors; cPanel merges them with the keyword
+  hits. If the VPS is not configured, down, slow or failing, Tier 1 still
+  answers (and the degradation is logged).
 
 Heavy work (product embedding) runs **offline** on a developer GPU machine and
-produces a static index *bundle*. **Query embedding happens off-server, in the
-browser (WASM).** The server only serves requests: keyword search plus cosine
-math over the precomputed vectors.
-
-> **Semantic pivot in progress (M17+).** A separate VPS service
-> ([`vps/README.md`](./vps/README.md)) embeds queries with bge-m3 and returns
-> the top-K product ids by cosine; `pipeline/build.py --vps-out` builds its
-> product vectors. It is deployed and tested on its own for now: cPanel does
-> not call it yet, and the in-browser model described below is still the live
-> semantic path until the follow-up PRs land.
+produces a static index *bundle* for cPanel plus the product vectors for the
+VPS (`build.py --vps-out`). **Query embedding happens on the VPS** — never in
+the browser and never on cPanel. The cPanel server only serves requests:
+keyword search, one bounded HTTP call to the VPS, and the merge.
 
 ## Repository layout
 
@@ -39,7 +39,6 @@ db/         SQL schema (products + FULLTEXT, search_logs)
 pipeline/   Offline build pipeline (Python 3.11+, GPU or mock)
 server/     cPanel runtime (PHP 8.1+, no framework)
 vps/        VPS vector service (bge-m3 query embedding + cosine top-K; see vps/README.md)
-client/     Browser query embedder (transformers.js / ONNX); model/ is gitignored
 fixtures/   Shared test fixtures (normalization cases, eval set, parity strings)
 ```
 
@@ -49,9 +48,10 @@ fixtures/   Shared test fixtures (normalization cases, eval set, parity strings)
   runtime dependencies** — Composer is dev-only.
 - **Pipeline (offline):** Python 3.11+. Real embedding needs a GPU; tests use a
   deterministic mock embedder, so CI needs no GPU or model download.
-- **Client (browser):** the query embedder runs transformers.js (Xenova/ONNX) in
-  the storefront. Node + `@xenova/transformers` are needed only for the offline
-  parity check; CI verifies the client via static config-parity assertions.
+- **VPS (semantic tier):** Python 3.11+ on a 2–4 GB VPS, see
+  [`vps/README.md`](./vps/README.md). cPanel reaches it with PHP's curl
+  extension (standard on cPanel); without curl, search stays keyword-only.
+- **Browser:** nothing — no model, runtime or font is loaded by shoppers.
 - **Dev tooling:** Composer (PHPUnit, PHP_CodeSniffer), Python (pytest, ruff).
 
 ## Configuration
@@ -71,9 +71,14 @@ never hardcoded.
   owner's [alias file](#aliases), default `pipeline/aliases.json`) and
   `SEARCH_LOAD_MAX_STATEMENT_BYTES` (maximum size of one statement in
   `products.load.sql`). See `pipeline/config.py`.
-- The embedding model, revision, and dimension are parameterized and shared
-  across server, pipeline, and client (parity contracts, see `CLAUDE.md` §3,
-  and [changing the model](./INTEGRATION.md#changing-the-model)).
+- VPS (semantic tier): `SEARCH_VPS_URL`, `SEARCH_VPS_TOKEN`,
+  `SEARCH_VPS_TIMEOUT_MS` (`vps` section of `config.php`; install.php asks for
+  them). Empty URL = keyword-only. See
+  [INTEGRATION.md](./INTEGRATION.md#semantic-tier-cpanel-to-vps).
+- The embedding models, revisions, and dimensions are parameterized and shared
+  between the pipeline and the VPS (bge-m3) or the cPanel bundle check (e5)
+  (parity contracts, see `CLAUDE.md` §3, and
+  [changing the model](./INTEGRATION.md#changing-the-model)).
 
 Never commit secrets, `server/data/`, bundles, or model files.
 
@@ -114,7 +119,7 @@ vendor/bin/phpunit
 
 | endpoint | purpose |
 | --- | --- |
-| `POST /search` | `{q, q_vector?, customer_id?, limit?, with_details?}`, returns ordered `product_ids` + `did_you_mean` / `did_you_mean_applied` (plus `cosine_scores` on hybrid responses, and `products` display fields only with `"with_details": true`). Keyword tier always; hybrid when a valid `q_vector` is sent and a bundle is loaded. |
+| `POST /search` | `{q, customer_id?, limit?, with_details?}`, returns ordered `product_ids` + `did_you_mean` / `did_you_mean_applied` (plus `cosine_scores` on hybrid responses, and `products` display fields only with `"with_details": true`). Keyword tier always; hybrid when the configured VPS answers in time. |
 | `GET /health` | Database reachability + live product count, for monitoring. |
 | `POST /reload` | Token-protected (`X-Reload-Token`). Validates the staged bundle and swaps it in atomically. With `?load=1` it first loads `data_incoming/products.load.sql` into the staging table itself. |
 
@@ -160,18 +165,21 @@ default, so each fits a shared host's `max_allowed_packet`),
 normalized), `spellcheck.txt`, `keymap.json`, and `meta.json`
 (`{model, revision, dim, normalization_version, count, built_at, checksum, embedder}`).
 
-**Embedding contract (model parity, contract 2).** The default model
-`intfloat/multilingual-e5-small` requires **asymmetric prefixes**: `build.py`
-embeds each product passage with `"passage: "`, so the **M4 browser client MUST
-embed the query with `"query: "`** — vectors from mismatched prefixes are not
-comparable. The passage is a bounded composed field, in priority order
+**Embedding contract (model parity, contract 2).** The semantic tier's model
+is bge-m3 on the VPS: `build.py --vps-out` embeds products with
+`SEARCH_VPS_MODEL*` / `SEARCH_VPS_POOLING` / prefixes, and the VPS embeds
+queries with the same model, revision, pooling and prefix (`vps/README.md`,
+"Model parity"); its `/reload` refuses vectors whose `meta.json` differs. The
+cPanel bundle's own `vectors.bin` (e5, `"passage: "` prefix) is still built
+and validated on `/reload` (contract 3) but is no longer read by `/search`
+(M18). The passage is a bounded composed field, in priority order
 `title_fa title_en brand category model`, the feature titles, the attribute
 values, then the truncated `desc` (at most `SEARCH_DESC_CHAR_LIMIT`), all within
 `SEARCH_PASSAGE_CHAR_LIMIT` characters (default 1000): the description gives
 way first, then the tail of the specs. With the real e5 tokenizer a
 1000-character passage measured at most 349 tokens on realistic text and 417
 on a digit-heavy worst case, under the model's 512. It is embedded from
-**raw** text (not the keyword-normalized text), so the client can embed the raw
+**raw** text (not the keyword-normalized text), so the VPS can embed the raw
 query without re-implementing the normalizer.
 
 ## Semantic tier (Tier 2)
@@ -179,23 +187,21 @@ query without re-implementing the normalizer.
 Tier 2 adds cross-language recall on top of keyword search. It is purely
 additive: keyword-only requests are unchanged.
 
-**Query embedding — in the browser (`client/embedder.js`).** A transformers.js
-(Xenova/ONNX) wrapper loads the **same** model as the pipeline and, per the e5
-asymmetric contract, prepends **`"query: "`** to the query, mean-pools, and
-L2-normalizes — mirroring `pipeline/embed.py` (`"passage: "` for products). The
-resulting vector is sent as `q_vector`. The model id, revision, dim, and prefix
-are asserted against the pipeline and server config in CI
-(`pipeline/tests/test_client_parity.py`); real numerical parity between the JS and
-Python embedders is checked offline (see below).
-
-**Cosine top-K (`server/src/Vectors.php`).** Product and query vectors are both
-L2-normalized, so cosine is a dot product. The server does a global brute-force
-scan over `vectors.bin` (`O(count·dim)`), which is what delivers cross-language
-recall. The dot products are cheap; the cost is reading and unpacking the ~30 MB
-file, so the parsed matrix is cached for the PHP worker's lifetime and, when APCu
-is present, the raw bytes are cached to skip the disk read on a cold worker. It
-degrades to a plain disk read when APCu is absent. A wrong-dimension query or an
-inconsistent/missing bundle simply falls back to keyword-only.
+**Query embedding and cosine top-K — on the VPS (M18).** `search.php` POSTs
+`{q, limit: SEARCH_SEMANTIC_TOP_K, min_score: SEARCH_SEMANTIC_MIN_SCORE}` to
+`SEARCH_VPS_URL` + `/search-vectors` with the bearer token
+(`server/src/VpsClient.php`, curl). The VPS embeds the raw query with bge-m3
+and scans every product vector (global brute force, which is what delivers
+cross-language recall; ~8 ms for 20k × 1024 there) and returns the neighbours
+at or above the floor, best first. cPanel re-applies the floor, drops ids the
+`products` table does not hold, and fuses the rest with the keyword hits
+(`server/src/Ranker.php`). The whole call is bounded by
+`SEARCH_VPS_TIMEOUT_MS` (default 300, connect included). Unreachable, timed
+out, non-`200` or malformed: the request is answered keyword-only, logs
+`search: semantic tier unavailable (<reason>); served keyword-only results` to
+the PHP error log, and writes `had_vector = 0` in `search_logs`. Nothing about
+the VPS is visible to browsers. Contract details: INTEGRATION.md, "Semantic
+tier: cPanel to VPS".
 
 **"Did you mean" (`server/src/Speller.php`).** The speller runs only when a
 query has fewer than `SEARCH_SUGGEST_MIN_RESULTS` keyword hits, and a
@@ -298,12 +304,12 @@ match), then description-only, then score. The phrase bonus puts a product
 named `کیبورد قرمز` first. When **no** product holds every word, even after
 the keyboard-layout / spelling recovery, the products holding the most words
 are served instead (most words first, then the same bands), so the shopper
-still sees something. While the keyword hits hold every word, a query vector
-only reorders them: semantic-only neighbours are **not** appended below. On
-`multilingual-e5-small`, "کیبورد قرمز" puts black keyboards (0.83–0.84) and a
-red mouse (0.83) above the 0.82 floor (measured on hand-written sample
-passages, not the real catalog), so without that the one-word matches came
-back through the semantic tier. Single-word queries, SKU hits and the
+still sees something. While the keyword hits hold every word, the semantic
+tier only reorders them: semantic-only neighbours are **not** appended below.
+Embeddings put black keyboards and red mice close to "کیبورد قرمز" (on
+`multilingual-e5-small`, 0.83–0.84 against a 0.82 floor on hand-written sample
+passages; bge-m3's scale is lower but the proximity is the same), so without
+that the one-word matches came back through the semantic tier. Single-word queries, SKU hits and the
 partial fallback keep the additive neighbours. `SEARCH_REQUIRE_ALL_TERMS=0`
 always serves partial matches (products holding every word still rank first,
 also in the hybrid merge) with the additive neighbours. Server-only: no
@@ -311,11 +317,23 @@ bundle rebuild or schema change.
 
 **Relevance floor.** The nearest vectors of a query with no relevant product
 are still unrelated items (on the real catalog, "ball bearing" returned case
-fans). Neighbours with cosine below `SEARCH_SEMANTIC_MIN_SCORE` (default 0.82)
-are dropped, and a query with no keyword hit and nothing above the floor
-returns an empty result instead of `limit` far neighbours. Hybrid responses
-carry `cosine_scores` so the test page can show each result's similarity while
-tuning.
+fans). Neighbours with cosine below `SEARCH_SEMANTIC_MIN_SCORE` are dropped,
+and a query with no keyword hit and nothing above the floor returns an empty
+result instead of `limit` far neighbours. The default is **0.4, on bge-m3's
+scale** (M18): e5's old 0.82 would drop nearly every bge-m3 neighbour, and a
+`config.php` written before M18 still says 0.82, so change it there when
+turning the VPS on. 0.4 is a starting point that **needs tuning on the real
+catalog** (eval harness + search logs): on the 6-product fixture, right
+one-word hits scored 0.42–0.49 and wrong ones up to 0.43, so no floor
+separates short queries. One-word precision comes from the keyword tier (all
+terms, aliases, synonyms) fused by RRF, which always ranks keyword hits above
+semantic-only neighbours; the floor mainly keeps far neighbours out. With the
+description-only gate below, a description-only keyword hit the VPS did not
+return is dropped when the VPS list is shorter than `SEARCH_SEMANTIC_TOP_K`
+(everything else is below the floor) and kept when the list is full (it may
+still clear the floor further down). Hybrid responses carry `cosine_scores`
+(`null` for a product the VPS did not return) so the test page can show each
+result's similarity while tuning.
 
 **Keyword field weighting (`server/src/Keyword.php`).** Title and description
 are scored separately so a product named by the query beats one whose long
@@ -346,8 +364,8 @@ product ids. Each query token not in the title but in the specs earns
 `SEARCH_SPEC_WEIGHT` (default 6; title 10, description 1): `score =
 (title_weight × title hits + spec_weight × spec hits + desc_weight × other
 hits) / tokens`. Every spec match ranks above every description-only match and
-below every title match, whatever the weights, also in the hybrid merge; with a
-query vector, spec matches are exempt from the description-only gate below.
+below every title match, whatever the weights, also in the hybrid merge; with
+semantic results, spec matches are exempt from the description-only gate below.
 The weight is a starting point and needs tuning on the real catalog. Needs a
 rebuild + reload (new column and FULLTEXT index); until then the live table has
 no specs and search runs on title and description as before.
@@ -360,14 +378,14 @@ full description is still stored in `description` for display. Deep spec text
 ("ball bearing" in a case fan's specs) therefore no longer matches, and the
 FULLTEXT index over long HTML-derived descriptions shrinks. This is a
 **build-time** setting: rebuild the bundle and reload for it to take effect.
-At query time, when a query vector is present, a keyword hit that matched only
+At query time, when the VPS answered, a keyword hit that matched only
 in the description (no title match) must also reach
 `SEARCH_SEMANTIC_MIN_SCORE`, or it is dropped; title and spec matches are never
-dropped, a hit with no vector is kept, and keyword-only requests are
-unchanged. Disable with `SEARCH_DESC_ONLY_NEEDS_SEMANTIC=0`. M15 raised the
+dropped, a hit the VPS did not return is judged as described under "Relevance
+floor", and keyword-only requests are unchanged. Disable with `SEARCH_DESC_ONLY_NEEDS_SEMANTIC=0`. M15 raised the
 default from 400 to 800: attributes and feature titles are now indexed in full
 as specs, and the gate keeps description-only hits out of hybrid results
-unless they are semantically close. Keyword-only requests (no query vector)
+unless they are semantically close. Keyword-only requests (no VPS answer)
 see more description-only matches at the bottom of the list.
 
 **Hybrid merge (`server/src/Ranker.php`).** Keyword (FULLTEXT) and cosine scores
@@ -388,9 +406,10 @@ a labeled eval set from real queries (`server/tools/eval.php`, which uses the
 same wiring and config as `/search`).
 
 **Reader tolerance.** A semantic hit whose `product_id` is missing from the
-`products` table (e.g. a transient partial reload) is dropped rather than
-surfaced, and products without a vector remain keyword-only — so a partial update
-degrades instead of breaking.
+`products` table (e.g. VPS vectors reloaded before the cPanel catalog) is
+dropped rather than surfaced, and products the VPS has no vector for remain
+keyword-only — so updating one host before the other degrades instead of
+breaking. Update the cPanel catalog and the VPS vectors from the same export.
 
 ### Eval harness
 
@@ -405,95 +424,36 @@ php server/tools/eval.php --k=5 [--queries=<path>] [--min-recall=<float>]
 The seed labels are the true **bilingual** relevant sets, so the keyword tier
 alone recovers the in-language half (recall ≈ 0.5 on the seed); closing the
 cross-language gap is Tier 2's job and needs the real model. Grow the set from
-real logs; add a per-query `q_vector` to measure the hybrid tier offline.
+real logs. With `SEARCH_VPS_URL` / `SEARCH_VPS_TOKEN` set, every query also goes
+through the VPS exactly as `/search` does, so the report measures the hybrid
+tier; the header says how many queries the VPS answered.
 
 ### Offline model-parity check
 
-Numerical parity between `client/embedder.js` and `pipeline/embed.py` needs the
-real model + a JS runtime, so it runs offline (not in CI):
-
-```bash
-npm --prefix client install @xenova/transformers@2.17.2   # once; node_modules is gitignored
-EMBEDDER=real python pipeline/tools/model_parity.py       # PASS when every cosine >= 0.99
-```
-
-It embeds `fixtures/parity_strings.json` with both implementations (each with the
-`"query: "` prefix) and asserts each pair's cosine is at least 0.99. When the
-self-hosted model is present under `client/model/` (see
-[INTEGRATION.md](./INTEGRATION.md#self-hosting-the-model-no-huggingface-no-cdn)),
-the JS side uses exactly those files with remote loading disabled, so the check
-covers what shoppers' browsers run: an int8-quantized ONNX model against the
-full-precision pipeline model. On the M5 run it measured 0.9956–0.9985.
+Model parity now lives on the VPS side: the VPS's ONNX query embedder against
+`pipeline/embed.py`'s bge-m3 product vectors, measured with
+`vps/tests/test_real_model.py` (see [`vps/README.md`](./vps/README.md),
+"Model parity"). The browser check (`model_parity.py`) is gone with the
+browser model.
 
 ## Search test page
 
 `server/public/test.html` is a standalone Persian (RTL) search page for trying
 the live service: type a query, see result cards (image, title, price), the
-result count, a clickable "did you mean", and the round-trip time. A **Semantic
-(AI)** switch compares the two tiers on the same query. Off sends `q` only
-(keyword). On also embeds the query in the browser (`"query: "` prefix) and sends
-`q_vector` (hybrid). In hybrid mode each card shows its cosine similarity to
-the query (small, muted), which is how to pick `SEARCH_SEMANTIC_MIN_SCORE`. An
-empty result shows a "no results" message. Clicking a card opens the product in
-a new tab.
+result count, a clickable "did you mean", and the round-trip time. It sends only
+`{q, limit, with_details}` — **no model runs in the browser** (M18). A badge
+says whether the answer was hybrid (the VPS answered) or keyword-only (no VPS
+configured, or it was down or slow); in hybrid mode each card shows the cosine
+similarity the VPS computed (small, muted), which is how to pick
+`SEARCH_SEMANTIC_MIN_SCORE`. An empty result shows a "no results" message.
+Clicking a card opens the product in a new tab.
 
-It makes **no third-party requests**. The page, runtime, WASM, model and font are
-all served from the service's own directory, and every path is relative, so the
-page works under any subdirectory. If the model is missing, fails, or is still
-downloading after 30 s, the search runs keyword-only and a short notice says so.
-If the service itself fails, an error notice is shown.
-
-### 1. Fetch the browser assets (developer machine)
-
-```bash
-python pipeline/tools/fetch_web_model.py        # stdlib only; writes into client/
-```
-
-Every download is pinned (npm version or HuggingFace commit) and checked against
-a hard-coded checksum. The script also checks that the model's `config.json`
-names the configured `SEARCH_MODEL` and dim, so the browser uses the same model
-as `embed.py` (contract 2). Re-running skips files that are already present.
-`pipeline/release.py` runs the same fetch itself when the assets are missing,
-so building a release never needs this step first.
-After fetching, `client/` looks like this (everything except `embedder.js` and
-`tools/` is gitignored):
-
-```
-client/
-    embedder.js
-    vendor/transformers.min.js
-    vendor/ort-wasm.wasm  ort-wasm-simd.wasm  ort-wasm-threaded.wasm  ort-wasm-simd-threaded.wasm
-    model/intfloat/multilingual-e5-small/config.json  tokenizer.json  tokenizer_config.json
-    model/intfloat/multilingual-e5-small/special_tokens_map.json
-    model/intfloat/multilingual-e5-small/onnx/model_quantized.onnx     (~118 MB)
-    fonts/Vazirmatn-Variable.woff2  fonts/OFL.txt
-```
-
-Then run the parity check
-([Offline model-parity check](#offline-model-parity-check)). It uses exactly
-these files.
-
-### 2. Upload (cPanel)
-
-The page expects a `client/` folder **next to it**, that is, inside the web-exposed
-directory that holds `search.php`:
-
-```
-public_html/search-api/          <- server/public (search.php, health.php, test.html, ...)
-    test.html
-    client/                      <- upload the whole client/ folder from step 1 here
-        embedder.js  vendor/  model/  fonts/
-```
-
-- Upload in **binary** mode (`.onnx`, `.wasm`, `.woff2`).
-- **`.wasm` must be served as `application/wasm`.** LiteSpeed does this by
-  default. Check with
-  `curl -sI https://shop.example.com/search-api/client/vendor/ort-wasm-simd.wasm`,
-  and if needed add `AddType application/wasm .wasm` to the folder's `.htaccess`.
-- `client/tools/` does not need to be uploaded.
-- Open `https://shop.example.com/search-api/test.html`. The first visit
-  downloads about 135 MB (the model, ~118 MB, and `tokenizer.json`, ~17 MB). The
-  browser caches them for later visits. HTTPS is needed for that cache.
+It makes **no third-party requests**: the page and its search request are
+served from the service's own directory, and every path is relative, so the
+page works under any subdirectory. If the service itself fails, an error notice
+is shown. Open `https://shop.example.com/search-api/test.html`; nothing else
+needs uploading. A `client/` folder left next to it from before M18 (model,
+runtime, font) is unused and can be deleted.
 
 ### Store links and prices
 
@@ -527,13 +487,15 @@ the form. No config file editing, no separate model upload, no SSH needed.
    and a user, and grant the user ALL privileges on that database. `RENAME
    TABLE`, `DROP` and `CREATE` are needed by the reload. The installer creates
    the tables.
-2. **Build the release** (step 2 of [Every catalog update](#every-catalog-update)).
-   It includes the browser model, runtime and font by default. The first run
-   downloads them into `client/` on its own (about 150 MB; later runs reuse
-   them), so this one command is all the first deploy needs:
+2. **Build the release** (step 2 of [Every catalog update](#every-catalog-update)),
+   with the VPS vectors from the same export. This one command is all the
+   first deploy needs:
    ```bash
-   python pipeline/release.py --csv export.csv --out release.zip
+   python pipeline/release.py --csv export.csv --out release.zip --vps-out ./vps_vectors
    ```
+   Set up the VPS and load `./vps_vectors` there as described in
+   [`vps/README.md`](./vps/README.md) (it can also come later: until then,
+   search is keyword-only).
 3. **Upload and extract** `release.zip` into `~/search-service/server/`,
    outside `public_html` (File Manager: Upload, then Extract). Expose only its
    `public/` directory on the store's domain, as a symlink:
@@ -560,6 +522,9 @@ the form. No config file editing, no separate model upload, no SSH needed.
      `https://shop.example.com/` and `https://shop.example.com/image/`). With
      them, `with_details` results carry absolute product links and images;
      leave them empty to keep the exported values as they are;
+   - the VPS URL and token (the VPS's `VPS_TOKEN`) and its timeout in ms
+     (default 300): leave the URL empty for keyword-only search until the
+     VPS is up;
    - the tuning knobs (`semantic_min_score`, title / description / spec
      weights, `phrase_bonus`), pre-filled with the current defaults. The
      description index cap is not asked for: it is fixed when the release is
@@ -584,11 +549,9 @@ the form. No config file editing, no separate model upload, no SSH needed.
    `product_count` equal to the catalog size. Set `SEARCH_MIN_TOKEN_SIZE` in
    `config.php` if the host's `innodb_ft_min_token_size` is not 3
    (`SHOW VARIABLES LIKE 'innodb_ft_min_token_size'`).
-6. **Storefront.** The browser model is already under `public/client/`; check
-   it as described in
-   [INTEGRATION.md, Self-hosting the model](./INTEGRATION.md#self-hosting-the-model-no-huggingface-no-cdn).
-   Then install the storefront snippet through the OpenCart module
+6. **Storefront.** Install the storefront snippet through the OpenCart module
    ([INTEGRATION.md, Storefront reference](./INTEGRATION.md#storefront-reference)).
+   It sends only the query; nothing model-related is uploaded to the store.
 
 **Without the installer** (or to change settings later): `config.php` is a
 copy of `config.example.php` with the defaults after each `?:` (or in each
@@ -698,17 +661,16 @@ phpMyAdmin and mysqldump write.
 
 ```bash
 pip install -r pipeline/requirements.txt 'sentence-transformers>=2.2'   # once
-python pipeline/release.py --csv export.csv --out release.zip --no-model
-# -> Built release.zip: <count> products, dim 384, embedder real, <n> files, without browser model
+python pipeline/release.py --csv export.csv --out release.zip --vps-out ./vps_vectors
+# -> Built VPS vectors in ./vps_vectors: <count> products, BAAI/bge-m3, dim 1024, embedder real
+# -> Built release.zip: <count> products, dim 384, embedder real, <n> files
 ```
 
-`--no-model` leaves out the browser model, runtime and font (about 150 MB) for
-routine catalog updates when the host already has them. Without it the release
-is self-contained (first deploy, or after the model changes): if `client/` does
-not have the assets yet, `release.py` downloads them first, with the same
-pinned, checksum-verified fetch as `pipeline/tools/fetch_web_model.py`, and
-reuses them on later runs. A failed download stops the release before the
-embedding run, and no zip is written.
+The release carries no browser model (M18); `--no-model` is still accepted and
+does nothing. `--vps-out DIR` writes the VPS's bge-m3 product vectors from the
+same export; upload and reload them on the VPS ([`vps/README.md`](./vps/README.md),
+"Updating the product vectors") together with the cPanel deploy below, so both
+hosts serve the same catalog.
 
 `--desc-index-chars N` sets how many leading description characters are
 keyword-indexed (default `SEARCH_DESC_INDEX_CHARS`, else 800; 0 = the whole
@@ -716,7 +678,7 @@ description). It only affects the build; to change it, build and deploy a new
 release. `--aliases FILE` ships another [alias file](#aliases) instead of
 `pipeline/aliases.json`.
 
-On Windows: `pipeline\release.bat --csv export.csv --out release.zip --no-model`
+On Windows: `pipeline\release.bat --csv export.csv --out release.zip --vps-out vps_vectors`
 (same arguments). The command builds the bundle with the **real** embedder
 (whatever `EMBEDDER` says; `--mock` exists for tests only) and packs one
 `release.zip`, laid out relative to the host's `server/` directory:
@@ -724,15 +686,33 @@ On Windows: `pipeline\release.bat --csv export.csv --out release.zip --no-model`
 | in the zip | what |
 | --- | --- |
 | `data_incoming/` | the bundle: `vectors.bin`, `vectors.idx`, `products.load.sql`, `meta.json`, `spellcheck.txt`, `synonyms.json`, `aliases.json`, `keymap.json` |
-| `bootstrap.php`, `src/`, `public/` | the server code (including `public/install.php` and `public/client/embedder.js`) |
+| `bootstrap.php`, `src/`, `public/` | the server code (including `public/install.php` and `public/test.html`) |
 | `config.example.php`, `db/schema.sql` | the installer's config template and schema |
-| `public/client/model/`, `vendor/`, `fonts/` | **left out with `--no-model`**: the browser model, runtime, and font (about 150 MB), fetched into `client/` on first use |
 
 `config.php` is **never** in the zip, so unzipping never overwrites the
 server's configuration. Tests, tools, and local data are not packed either.
 `SEARCH_MODEL`, `SEARCH_MODEL_REVISION` and `SEARCH_MODEL_DIM` must match
 `server/config.php` (the reload rejects a mismatch). New config keys come with
 defaults, so an older `config.php` keeps working.
+
+**Upgrading to M18 (semantic tier on the VPS).** An existing `config.php` has
+no `vps` section, so search stays keyword-only after the upgrade (the old
+browser vectors are ignored). To turn the VPS on, add to `config.php` (or set
+the matching `SEARCH_VPS_*` environment variables):
+
+```php
+    'vps' => [
+        'url'        => 'https://vps.example.com:8600',
+        'token'      => '<the VPS_TOKEN from /etc/search-vectors.env>',
+        'timeout_ms' => 300,
+    ],
+```
+
+and change `semantic_min_score` from e5's `0.82` to about `0.4` (bge-m3's
+scale; tune it on the test page). Update the storefront snippet
+([INTEGRATION.md](./INTEGRATION.md#storefront-reference)) **before** deleting
+the old `public_html/search-client/` folder, then delete it and any `client/`
+folder next to `test.html`: nothing reads them any more.
 
 **3. Deploy** on the cPanel host: unzip, then one `curl`.
 
@@ -830,10 +810,12 @@ RENAME TABLE products TO products_bad, products_old TO products;
 cd ~/search-service/server && mv data data_bad && mv data_old data
 ```
 
-Do both together, because the table and the vectors must come from the same
-bundle. Afterwards, drop `products_bad` and remove `data_bad/`. Each PHP
-worker caches the vectors under a key that includes `vectors.bin`'s mtime, so
-the restored files are picked up without a restart.
+Do both together, because the table and the bundle files (spellcheck,
+synonyms, aliases) must come from the same bundle. Afterwards, drop
+`products_bad` and remove `data_bad/`. Each PHP worker caches the dictionary
+under a key that includes the file's identity, so the restored files are picked
+up without a restart. Roll the VPS vectors back too if they were updated with
+this catalog (`vps/README.md`, "Rollback").
 
 ## Production Go-Live Checklist
 
@@ -843,28 +825,25 @@ M0–M5. Verify each item on the production host before wide rollout.
 
 **Blocking: search quality and the model**
 - [ ] **Persian embedding-model feasibility test (mandatory before wide
-  rollout).** `intfloat/multilingual-e5-small` is a provisional default
-  (CLAUDE.md §7). Label Persian, English, and mixed queries from real traffic
-  into `fixtures/eval_queries.json`, then run
-  `php server/tools/eval.php --k=10` in keyword-only and hybrid mode (add
-  per-query `q_vector`s embedded by the browser client). Accept the model only
-  if hybrid clearly beats keyword-only on Persian and cross-language queries.
+  rollout).** bge-m3 on the VPS is the semantic model since M17/M18. Label
+  Persian, English, and mixed queries from real traffic into
+  `fixtures/eval_queries.json`, then run `php server/tools/eval.php --k=10`
+  without and with `SEARCH_VPS_URL` / `SEARCH_VPS_TOKEN` (keyword-only vs
+  hybrid). Accept the model only if hybrid clearly beats keyword-only on
+  Persian and cross-language queries.
   Changing the model means following
   [INTEGRATION.md, Changing the model](./INTEGRATION.md#changing-the-model).
 - [ ] **Persian search quality on the real ~20k catalog.** Check keyword-tier
   results for common Persian queries: ZWNJ variants, ی/ک variants, Persian
   digits, model numbers. Normalization rules were only verified against
   fixtures.
-- [ ] **JS↔Python embedder parity** with the exact model files deployed to the
-  store: `EMBEDDER=real python pipeline/tools/model_parity.py` must PASS
-  (cosine ≥ 0.99). Rerun it whenever the model, its files, or the
-  transformers.js version change.
-- [ ] Consider pinning `SEARCH_MODEL_REVISION` / `MODEL_REVISION` to a commit
-  hash instead of `main`, so a later upstream change cannot desynchronize
-  rebuilt product vectors from the browser model.
-- [ ] Tune `SEARCH_SEMANTIC_MIN_SCORE` (default 0.82) and the fusion weights
-  on the real catalog: search known "no match" queries (e.g. ball bearing,
-  shorts) and known good cross-language queries on the test page, read each
+- [ ] **VPS query/product model parity** with the model files on the VPS
+  (`vps/README.md`, "Model parity": `VPS_REAL_PARITY=1 pytest
+  vps/tests/test_real_model.py`). Rerun it whenever either side's model, files
+  or ONNX build change.
+- [ ] Tune `SEARCH_SEMANTIC_MIN_SCORE` (default 0.4 on bge-m3's scale; e5's
+  0.82 no longer applies) and the fusion weights on the real catalog: search
+  known "no match" queries (e.g. ball bearing, shorts) and known good cross-language queries on the test page, read each
   card's cosine, and set the floor between them. Confirm with
   `server/tools/eval.php` in hybrid mode. Too high loses cross-language recall;
   too low brings back unrelated neighbours.
@@ -883,8 +862,16 @@ M0–M5. Verify each item on the production host before wide rollout.
 **Blocking: host capacity and latency**
 - [ ] **Real latency on cPanel** for keyword-only and hybrid requests, measured
   with `latency_ms` in `search_logs` and end-to-end from the storefront, against
-  the 200 ms budget. CI measured about 105–127 ms for a warm 20k×384 cosine
-  top-K; the production host was never measured.
+  the 200 ms budget. Hybrid now adds one cPanel→VPS round trip (network +
+  bge-m3 query embedding, ~50–100 ms end to end on a dev VM, never measured
+  between the real hosts). Pick `SEARCH_VPS_TIMEOUT_MS` from the measured p95:
+  too low turns slow VPS answers into keyword-only results (watch for
+  `semantic tier unavailable (timeout)` in the PHP error log), too high lets a
+  sick VPS slow every search.
+- [ ] **cPanel can reach the VPS.** Outbound HTTPS from the shared host to the
+  VPS port (some hosts firewall outbound ports), the VPS firewall allows the
+  host's real outbound IP, and PHP's curl extension is enabled. Check with
+  `test.html` (hybrid badge) and the error log.
 - [ ] **Zero-result query latency.** "Did you mean" now reads the bundle's
   `spellcheck.txt` instead of scanning the `products` table on each request
   (M6). On a synthetic 20k catalog (32k-term dictionary) on local MariaDB, a
@@ -901,16 +888,10 @@ M0–M5. Verify each item on the production host before wide rollout.
   than the buffer pool (128 MB default) it was I/O-bound at 600–800 ms. The
   FULLTEXT path stayed at about 50–60 ms. Measure `latency_ms` for short-token
   queries on the host with the real specs size.
-- [ ] **LVE memory headroom.** The parsed vector matrix costs about **150 MB
-  per PHP worker** (about 300 MB peak while loading). Check the account's LVE
-  memory limit (PMEM) and PHP `memory_limit` against
-  `workers × 150 MB`. Under pressure, reduce LSAPI children or fall back to
-  re-ranking keyword candidates (CLAUDE.md §5).
 - [ ] **APCu availability.** Check `php -m | grep apcu` on the host (CLI and web
-  SAPI can differ) and that `apc.shm_size` holds the ~30 MB `vectors.bin`
-  (the default is often 32 MB) plus about 3 MB for the spellcheck dictionary.
-  Without APCu, or when the segment is full, each cold worker reads and parses
-  the files once, which is slower but correct.
+  SAPI can differ) and that `apc.shm_size` holds about 3 MB for the spellcheck
+  dictionary. Without APCu, each cold worker parses the file once, which is
+  slower but correct. (Since M18 no vector matrix is loaded in PHP.)
 - [ ] `max_allowed_packet` and the phpMyAdmin upload limit accept the staged
   `products.load.sql`. Statements are at most 1 MB
   (`SEARCH_LOAD_MAX_STATEMENT_BYTES`), and the file is about 46 MB (12 MB
@@ -963,21 +944,22 @@ M0–M5. Verify each item on the production host before wide rollout.
 - [x] **M1** — Keyword backbone (schema, loader, FULLTEXT + LIKE fallback, `/health`).
 - [x] **M2** — Persian normalization (parity), typo/keymap tolerance, "did you mean", logging, `POST /search`.
 - [x] **M3** — Offline pipeline (`build.py`, `embed.py` mock+real), bundle + `meta.json`, atomic `POST /reload`.
-- [x] **M4** — Semantic tier: browser query embedder, cosine top-K + caching, RRF hybrid + business boosts, `/search` vector path, latency guard, eval harness.
+- [x] **M4** — Semantic tier: browser query embedder, cosine top-K + caching, RRF hybrid + business boosts, `/search` vector path, latency guard, eval harness (browser embedder and PHP cosine replaced by the VPS in M18).
 - [x] **M5** — Integration + docs: `INTEGRATION.md` (HTTP contract, storefront reference, model self-hosting), operator runbook, Go-Live checklist.
 - [ ] **M6** — Follow-up: "did you mean" served from the bundle's `spellcheck.txt` (cached per worker + APCu, refreshed on `/reload`); zero-result latency guard.
 - [ ] **M8** — Search test page (`server/public/test.html`), opt-in `with_details` on `/search`, `fetch_web_model.py` for self-hosted browser assets.
 - [ ] **M9** — Relevance tuning: semantic cosine floor (empty result instead of far neighbours), keyword-first hybrid fusion, frequency-gated "did you mean" from high-signal fields, cosine score + "no results" state on the test page.
 - [ ] **M10** — Keyword relevance by field: title vs description scored separately (configurable weights), title phrase bonus, title matches always above description-only matches (also in the hybrid merge); keyword latency guard.
-- [ ] **M11** — Keyword index covers only the first `desc_index_chars` of each description (requires a rebuild); with a query vector, description-only keyword hits below the semantic floor are dropped.
+- [ ] **M11** — Keyword index covers only the first `desc_index_chars` of each description (requires a rebuild); with semantic results, description-only keyword hits below the semantic floor are dropped.
 - [ ] **M12** — SKU search (exact/prefix SKU matches ranked first, SKU in the title-weighted text), `accept_status = '0'` export filter, one-command `release.py` (+ `release.bat`) producing `release.zip`, and `reload.php?load=1` loading the staging table in PHP before the atomic swap.
 - [ ] **M13** — Specs field: product attributes and PHP-serialized `feature` titles in a FULLTEXT-indexed `normalized_specs` column (`spec_weight`, ranked between title and description-only matches, also in hybrid mode), and in the embedded passage within `SEARCH_PASSAGE_CHAR_LIMIT`.
 - [ ] **M14** — Self-contained release (browser model included by default, `--no-model` for routine updates, `db/schema.sql` packed) and a web installer, `public/install.php`: validates the form, tests the DB connection, creates the schema, writes `config.php` (never overwriting one), loads the staged catalog, then refuses to run again. `store_base` / `image_base` config for absolute `with_details` links.
 - [ ] **M15** — Name / alias / form matching: standalone Roman numerals → digits (normalization version 3), query-side expansion from `synonyms.json` and an owner-maintained `aliases.json` (whole terms, title-only variants), `desc_index_chars` default 800.
 - [ ] **M14.1** — `release.py` downloads the browser assets itself when `client/` lacks them (cached; `--no-model` skips), so one command builds a complete release. `desc_index_chars` leaves the installer and server config and becomes `release.py --desc-index-chars`.
 - [ ] **M15.1** — `normalization_version` in `config.php` (and the installer prefill) defaults to the code's `Normalizer::VERSION`, and the pipeline always stamps its own `NORMALIZATION_VERSION`, so a rules bump reloads with no config edit.
-- [ ] **M17** — VPS vector service (`vps/`): bge-m3 (ONNX, CPU) query embedding, `POST /search-vectors` global cosine top-K with a score floor, token auth, validated atomic `POST /reload`, `GET /health`, `setup.sh` + systemd; `build.py` / `release.py --vps-out` produce its bge-m3 product vectors. Not wired into cPanel yet.
+- [ ] **M17** — VPS vector service (`vps/`): bge-m3 (ONNX, CPU) query embedding, `POST /search-vectors` global cosine top-K with a score floor, token auth, validated atomic `POST /reload`, `GET /health`, `setup.sh` + systemd; `build.py` / `release.py --vps-out` produce its bge-m3 product vectors.
 - [ ] **M16** — Multi-word queries require every word across title, specs and description (per alias variant), ranked title band, spec band (no title match), description-only, then score; best-partial fallback when nothing holds every word; semantic neighbours not appended to all-words hits (`SEARCH_REQUIRE_ALL_TERMS`, default on).
+- [ ] **M18** — Semantic tier from the VPS: `/search` POSTs the query server-to-server to the VPS `/search-vectors` (`SEARCH_VPS_URL` / `_TOKEN` / `_TIMEOUT_MS`, `min_score` = the cPanel floor, now 0.4 for bge-m3), RRF-merges the neighbours as before, and falls back to logged keyword-only results when the VPS is off, down, slow or failing. The browser model is gone (`client/`, `fetch_web_model.py`, the model in `release.zip`, `q_vector`); the test page and storefront snippet send only `{q}`.
 
 ## Contributing
 

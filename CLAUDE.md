@@ -16,18 +16,25 @@ A standalone product-search service for an OpenCart 2.0.3.1 storefront
   normalization + typo tolerance + keyboard-layout tolerance + "did you mean".
   This tier must work with zero ML and never breaks.
 - **Tier 2 — semantic (additive enhancement):** cosine similarity over
-  precomputed product vectors. If Tier 2 is unavailable, Tier 1 still answers.
+  precomputed product vectors, served by a separate **VPS vector service**
+  (`vps/`, bge-m3). If Tier 2 is unavailable, Tier 1 still answers.
 
 Heavy processing (product embedding) runs **offline** on the developer's GPU
-machine. The **cPanel** server only serves requests: keyword search plus cosine
-math in PHP over precomputed vectors. **Query embedding happens off-server, in
-the browser (WASM).** The server never runs an embedding model.
+machine. The **cPanel** server only serves requests: keyword search, one
+server-to-server HTTP call to the VPS (token-authenticated, bounded by a short
+timeout), and the hybrid merge. **Query embedding happens on the VPS** — not in
+the browser (no model is shipped to shoppers since M18) and never on cPanel:
+the cPanel server never runs an embedding model. The VPS holds the query model
+and the product vectors, returns `[{product_id, score}]` for a query text, and
+is reachable only from cPanel. If the VPS is not configured, unreachable, slow
+or failing, `/search` returns keyword-only results and logs the degradation.
 
 ### Hard constraints (do not violate)
 - Target host is **cPanel shared hosting** (PHP 8.x + LiteSpeed + MariaDB) under
   CloudLinux LVE limits. **No long-running daemons, no root, no background
   services.** Therefore: **no Meilisearch, no Qdrant, no Redis, no Elasticsearch,
-  no Python service on the server.**
+  no Python service on the cPanel server.** (The VPS vector service is a
+  separate host, not part of the cPanel deployment.)
 - Search latency budget: **under 200 ms** server-side per request.
 - The server runs **plain PHP, no framework** (no Laravel/Symfony). A tiny
   front controller only. Runtime must have **zero Composer runtime
@@ -38,8 +45,8 @@ the browser (WASM).** The server never runs an embedding model.
 ### Out of scope (do NOT build now)
 - Admin panel / product-management UI (deferred).
 - OpenCart core changes. The storefront integration is a separate OC module in
-  another repo; here you deliver only the client embedder and a documented HTTP
-  contract.
+  another repo; here you deliver only a documented HTTP contract and a reference
+  storefront snippet (query text only, no browser model).
 - Any ANN engine, vector daemon, or GPU dependency on the server.
 
 ---
@@ -75,16 +82,14 @@ abstraction layers.
 │   ├── src/
 │   │   ├── Normalizer.php         # MUST mirror pipeline/normalize.py exactly
 │   │   ├── Keyword.php            # FULLTEXT + fuzzy + keymap + did-you-mean
-│   │   ├── Vectors.php            # load vectors.bin, cosine top-K + re-rank
+│   │   ├── VpsClient.php          # server-to-server call to the VPS /search-vectors
 │   │   ├── Ranker.php             # hybrid merge + business ranking
 │   │   ├── Logger.php             # search logs
 │   │   └── Db.php                 # thin PDO wrapper
 │   ├── config.php                # reads from env; config.example.php committed
 │   ├── data/                      # active bundle (gitignored)
 │   └── tests/
-├── client/
-│   ├── embedder.js               # transformers.js wrapper, SAME model as pipeline
-│   └── model/                    # ONNX model assets (gitignored, documented)
+├── vps/                          # VPS vector service (Python): query embedding + cosine top-K
 └── fixtures/
     ├── products.sample.sql       # tiny catalog for tests
     ├── normalization_cases.json  # shared parity fixture (both test suites read it)
@@ -103,10 +108,11 @@ Breaking any of these produces silently wrong results. Enforce each with a test.
    canonicalization, whitespace). Both test suites load
    `fixtures/normalization_cases.json` and assert equality. Bump
    `normalization_version` in both when rules change.
-2. **Model parity.** `pipeline/embed.py` (product vectors) and
-   `client/embedder.js` (query vectors) must use the same model, revision,
-   pooling, and L2-normalization. Vectors from different models are not
-   comparable.
+2. **Model parity.** `pipeline/embed.py` (product vectors, `--vps-out`) and
+   the VPS query embedder (`vps/search_vectors/embedder.py`) must use the same
+   model, revision, pooling, prefixes, and L2-normalization. Vectors from
+   different models are not comparable; the VPS `/reload` rejects mismatched
+   vectors.
 3. **Bundle compatibility.** `meta.json` carries `{model, revision, dim,
    normalization_version, count, built_at, checksum}`. `POST /reload` must
    reject a bundle whose `model`, `dim`, or `normalization_version` does not
@@ -128,26 +134,26 @@ Breaking any of these produces silently wrong results. Enforce each with a test.
   `keymap.json`.
 - `meta.json` — see contract 3.
 
-The server reads `vectors.bin` as packed floats (`unpack`), not JSON. Cache the
-parsed vectors in APCu when available; degrade gracefully when not.
+Since M18 cPanel's `/search` does not read the bundle's `vectors.bin` (the VPS
+serves Tier 2 from its own vectors, `build.py --vps-out`); `/reload` still
+validates it (contract 3).
 
 ---
 
 ## 5. Runtime flow (`POST /search`)
 
-Request: `{ "q": string, "q_vector"?: number[dim], "customer_id"?: string,
-"limit"?: int }`
+Request: `{ "q": string, "customer_id"?: string, "limit"?: int }` (a legacy
+`q_vector` is ignored).
 
 1. Normalize `q` (Normalizer.php).
 2. Keyboard-layout fix + spell-correct -> keyword query; compute "did you mean".
 3. Tier 1: FULLTEXT search -> candidates with keyword scores.
-4. Tier 2 (only if `q_vector` present and bundle loaded):
-   - Global cosine top-K over `vectors.bin` (brute force, O(count·dim)).
-   - This is what delivers cross-language recall; keep it, do not replace it with
-     candidate-only re-rank.
-   - Benchmark it. If it cannot meet the latency budget on realistic data,
-     fall back to re-ranking Tier 1 candidates and record the limitation in the
-     PR. Do NOT introduce a daemon or external engine.
+4. Tier 2 (only if the VPS is configured): POST the query text to the VPS
+   `/search-vectors` (token + timeout), which embeds it and returns the global
+   cosine top-K `[{product_id, score}]` (brute force over all product vectors,
+   which is what delivers cross-language recall). Apply the relevance floor
+   (`semantic_min_score`, sent as `min_score` and re-applied). Do NOT
+   introduce a daemon or external engine on cPanel.
 5. Ranker.php: hybrid merge (keyword + semantic) + business ranking
    (stock, popularity).
 6. Logger.php: write one row to `search_logs`
@@ -155,8 +161,9 @@ Request: `{ "q": string, "q_vector"?: number[dim], "customer_id"?: string,
    latency_ms).
 7. Return ordered `product_id`s + the "did you mean" suggestion.
 
-If `q_vector` is absent, return Tier 1 results (keyword-only). Never error the
-whole request because Tier 2 is unavailable.
+If the VPS is not configured, unreachable, times out or errors, return Tier 1
+results (keyword-only) and log the degradation. Never error the whole request
+because Tier 2 is unavailable.
 
 ---
 
@@ -181,11 +188,19 @@ whole request because Tier 2 is unavailable.
 - Pipeline: Python 3.11+, `sentence-transformers`/`transformers`, `numpy`. Real
   embedding needs a GPU; tests use a deterministic **mock embedder** (config
   `EMBEDDER=mock|real`) so CI needs no GPU or model download.
-- Client: `transformers.js` (Xenova) running an ONNX model in-browser.
-- Default model: `intfloat/multilingual-e5-small` (dim 384). **Parameterize it**
-  in `pipeline/config.py`, `server/config.php`, and `client/embedder.js` — it is
-  pending a Persian-quality test and may change. Never hardcode the model,
-  dim, or thresholds; read them from config.
+- VPS vector service: Python 3.11+, FastAPI, ONNX Runtime (CPU), numpy; one
+  worker under systemd on a 2–4 GB VPS (`vps/README.md`). It embeds queries
+  and runs the cosine top-K. No model runs in the browser.
+- cPanel reaches the VPS with PHP curl: `SEARCH_VPS_URL`, `SEARCH_VPS_TOKEN`,
+  `SEARCH_VPS_TIMEOUT_MS` (small, default 300). Empty URL = keyword-only.
+- Semantic model: `BAAI/bge-m3` (dim 1024), configured in `pipeline/config.py`
+  (`SEARCH_VPS_MODEL*`) and on the VPS (`VPS_MODEL*`); it is pending a
+  Persian-quality test and may change. The cosine floor
+  (`SEARCH_SEMANTIC_MIN_SCORE`, default 0.4 for bge-m3) needs real-catalog
+  tuning; one-word precision comes from the keyword tier fused by RRF, not the
+  floor. The cPanel bundle's `meta.json` model (`SEARCH_MODEL`, default
+  `intfloat/multilingual-e5-small`, dim 384) is only checked on `/reload`.
+  Never hardcode models, dims, or thresholds; read them from config.
 - Config via env; commit `config.example.php` and `.env.example`. Never commit
   secrets, `data/`, bundles, or model files.
 
@@ -200,15 +215,17 @@ tests for the code it adds.
   bundle format (dim, count, L2-normalization) with the mock embedder;
   determinism.
 - **Server (PHPUnit):** Normalizer; Keyword (against a seeded test DB from
-  `db/schema.sql` + `fixtures/products.sample.sql`); Vectors cosine correctness
-  and top-K; Ranker merge; `/search` and `/health`; `/reload` atomicity and
-  meta-mismatch rejection.
+  `db/schema.sql` + `fixtures/products.sample.sql`); the VPS client and the
+  `/search` merge against a mocked VPS (success, floor, VPS down / slow /
+  failing -> keyword-only); Ranker merge; `/search` and `/health`; `/reload`
+  atomicity and meta-mismatch rejection.
 - **Parity test (both suites):** load `fixtures/normalization_cases.json`, assert
   Python and PHP normalization outputs are identical.
-- **Latency guard:** synthesize a `20000 × dim` vector file, assert the PHP
-  cosine top-K path completes under a fixed threshold. CI hardware differs from
-  cPanel — treat this as a regression guard, not an absolute SLA, and note the
-  measured number in the PR.
+- **Latency guard:** synthesize `20000 × dim` vectors and assert the VPS cosine
+  top-K completes under a fixed threshold (`vps/tests/test_store.py`), and
+  assert that a slow or dead VPS costs `/search` no more than its timeout.
+  CI hardware differs from cPanel and the VPS — treat these as regression
+  guards, not absolute SLAs, and note the measured numbers in the PR.
 - **Eval harness:** a script that runs `fixtures/eval_queries.json` (labeled
   query -> expected product_ids) and reports precision@k / recall@k, so search
   changes are measurable. Seed small; it will grow from real logs.
@@ -232,7 +249,8 @@ wait for review before starting the next.
   `meta.json`, `/reload` atomic swap. Tests.
 - **M4 — Semantic tier:** `client/embedder.js`, `Vectors.php` cosine top-K,
   `Ranker.php` hybrid, `/search` vector path. Tests + latency guard + eval
-  harness.
+  harness. (Since M18 query embedding and the top-K run on the VPS; the
+  browser embedder and `Vectors.php` are gone.)
 - **M5 — Integration + docs:** `INTEGRATION.md` (HTTP contract + minimal
   storefront JS with keyword-only fallback), finalized `README.md`.
 
@@ -254,7 +272,7 @@ data files committed.
 - CI (`.github/workflows/ci.yml`) runs on every PR: PHPUnit, pytest, and linters.
   A PR that fails CI is not ready.
 - `.gitignore` must exclude: `vendor/`, `node_modules/`, `__pycache__/`,
-  `server/data/`, `server/data_incoming/`, bundles, `client/model/`, `.env`,
+  `server/data/`, `server/data_incoming/`, bundles, model files, `.env`,
   local config.
 
 ### PR description template

@@ -6,16 +6,11 @@ composer.lock
 .php-cs-fixer.cache
 .phpcs.cache
 
-# Node / client model assets
+# Node
 node_modules/
-/client/model/
-# Self-hosted browser runtime + font (pipeline/tools/fetch_web_model.py)
-/client/vendor/
-/client/fonts/
+# Leftover browser model copies from before M18 (queries are embedded on the VPS)
+/client/
 /server/public/client
-# Offline-only client deps (installed ad hoc for the model-parity check)
-/client/package.json
-/client/package-lock.json
 
 # Python
 __pycache__/

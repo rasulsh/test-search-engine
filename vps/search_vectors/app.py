@@ -1,7 +1,7 @@
 """HTTP API. Run with `python -m search_vectors` (one worker; see __main__.py).
 
     GET  /health           open: readiness, model, vector count
-    POST /search-vectors   token: {q, limit?} -> {results: [{product_id, score}]}
+    POST /search-vectors   token: {q, limit?, min_score?} -> {results: [{product_id, score}]}
     POST /reload           token: validate + atomically swap in incoming/
 """
 
@@ -28,6 +28,9 @@ log = logging.getLogger("search_vectors")
 class SearchRequest(BaseModel):
     q: str = Field(min_length=1)
     limit: int | None = Field(default=None, ge=1)
+    # The caller's relevance floor (cPanel's semantic_min_score); the service's
+    # own VPS_SEMANTIC_MIN_SCORE applies when it is absent.
+    min_score: float | None = Field(default=None, ge=-1, le=1)
 
 
 def create_app(settings: Settings | None = None, embedder: Embedder | None = None) -> FastAPI:
@@ -77,7 +80,8 @@ def create_app(settings: Settings | None = None, embedder: Embedder | None = Non
         # One text per call: batching would shift the int8 model's output.
         query = state["embedder"].embed([settings.query_prefix + text])[0]
         limit = min(request.limit or settings.default_limit, settings.max_limit)
-        hits = top_k(index, query, limit, settings.min_score)
+        floor = settings.min_score if request.min_score is None else request.min_score
+        hits = top_k(index, query, limit, floor)
         return {
             "results": [{"product_id": pid, "score": round(score, 6)} for pid, score in hits],
             "model": settings.model,

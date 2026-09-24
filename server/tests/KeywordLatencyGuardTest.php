@@ -5,7 +5,9 @@ declare(strict_types=1);
 namespace App\Tests;
 
 use App\Keyword;
+use App\SearchController;
 use App\Synonyms;
+use App\VpsClient;
 use PHPUnit\Framework\Attributes\DataProvider;
 
 /**
@@ -35,6 +37,12 @@ use PHPUnit\Framework\Attributes\DataProvider;
  * M16: a query no product fully matches pays the strict search AND the
  * any-terms fallback, which scores every row holding any word (here the 2600
  * rows of either broad word): timed together on the default bundle shape.
+ *
+ * M18: the whole /search hybrid path on cPanel (keyword search, parsing the
+ * VPS's 100 neighbours, the existence/signals query, RRF fusion, logging) on
+ * the default bundle shape, with the VPS answered in-process so the network
+ * and the VPS's own embedding time (measured separately, vps/README.md) are
+ * excluded.
  */
 final class KeywordLatencyGuardTest extends DatabaseTestCase
 {
@@ -143,6 +151,49 @@ final class KeywordLatencyGuardTest extends DatabaseTestCase
             (int) $budgetMs
         ));
         self::assertLessThan($budgetMs, $median, 'strict + any-terms fallback exceeded the latency budget');
+    }
+
+    public function testHybridSearchWithVpsNeighboursStaysWithinBudget(): void
+    {
+        $config = require self::repoRoot() . '/server/config.example.php';
+        $budgetMs = (float) $config['search']['latency_budget_ms'];
+        $topK = (int) $config['search']['semantic_top_k'];
+        $this->seedCatalog(self::DESC_INDEX_CHARS, true);
+        $neighbours = [];
+        for ($i = 0; $i < $topK; $i++) {
+            $neighbours[] = ['product_id' => 1 + $i * 199, 'score' => round(0.9 - $i * 0.004, 4)];
+        }
+        $body = (string) json_encode(['results' => $neighbours, 'model' => 'BAAI/bge-m3', 'took_ms' => 30.0]);
+        $vps = new VpsClient('http://vps.test', 't', 300, static fn (): array => ['status' => 200, 'body' => $body]);
+        $config['db']['products_table'] = 'products';
+        $config['db']['search_logs_table'] = 'search_logs';
+        $config['paths']['data'] = sys_get_temp_dir() . '/no-bundle';
+        $controller = SearchController::fromConfig($this->pdo, $config, $vps);
+        $query = 'دسته';
+
+        $result = $controller->search(['q' => $query]); // warm the buffer pool
+        self::assertArrayHasKey('cosine_scores', $result); // hybrid path taken
+        self::assertCount(20, $result['product_ids']);
+
+        $times = [];
+        for ($i = 0; $i < self::RUNS; $i++) {
+            $start = hrtime(true);
+            $controller->search(['q' => $query]);
+            $times[] = (hrtime(true) - $start) / 1e6;
+        }
+        sort($times);
+        $median = $times[intdiv(self::RUNS, 2)];
+
+        fwrite(STDERR, sprintf(
+            "\n[hybrid guard] %d products, capped + specs, broad query + %d VPS neighbours (VPS in-process): "
+            . "median %.1f ms (max %.1f, budget %d ms)\n",
+            self::PRODUCTS,
+            $topK,
+            $median,
+            max($times),
+            (int) $budgetMs
+        ));
+        self::assertLessThan($budgetMs, $median, 'hybrid /search path exceeded the latency budget');
     }
 
     private function seedCatalog(int $descIndexChars, bool $withSpecs): void

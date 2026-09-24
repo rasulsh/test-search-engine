@@ -16,26 +16,30 @@ use Throwable;
  * than the literal query; when the literal query matched nothing, its results
  * are served instead (`did_you_mean_applied`).
  *
- * Tier 2 (additive, M4): when the request carries a query vector AND a bundle is
- * loaded, run global cosine top-K, drop neighbours below `semanticMinScore`, and
- * fuse the rest below the keyword hits (see Ranker). With a vector, a keyword
- * hit that matched only in the description must also reach `semanticMinScore`
- * (M11): products that merely mention the query in their spec text (case fans
- * for "ball bearing") are otherwise served for things the shop does not sell.
- * Title and specs (attribute / feature title, M13) matches are never dropped, and a hit with no vector is kept (no
- * evidence either way). If neither tier yields anything the response is
- * empty — far neighbours never pad it. Tier 2 is purely
- * additive — if the vector is absent, malformed, or the bundle is unavailable,
- * the request returns Tier 1 results and never errors (CLAUDE.md sec. 5).
+ * Tier 2 (additive; M4, sourced from the VPS since M18): when a VPS vector
+ * service is configured, the query text is sent to it server-to-server (the VPS
+ * embeds it and runs the global cosine top-K), neighbours below
+ * `semanticMinScore` are dropped, and the rest are fused below the keyword hits
+ * (see Ranker). With semantic results, a keyword hit that matched only in the
+ * description must also reach `semanticMinScore` (M11): products that merely
+ * mention the query in their spec text (case fans for "ball bearing") are
+ * otherwise served for things the shop does not sell. Title and specs
+ * (attribute / feature title, M13) matches are never dropped. The VPS returns
+ * only its top-K, so a description-only hit it did not return is dropped when
+ * the list is shorter than K (everything else is below the floor) and kept when
+ * the list is full (it may score above the floor further down: no evidence
+ * either way). If neither tier yields anything the response is empty — far
+ * neighbours never pad it. Tier 2 is purely additive — if the VPS is not
+ * configured, unreachable, slow (timeout) or answers badly, the request returns
+ * Tier 1 results, logs the degradation and never errors (CLAUDE.md sec. 5).
  *
  * All terms (M16, require_all_terms): a multi-word query matches only products
  * holding every word (Keyword). When that finds nothing, even after the
  * keyboard-layout / spelling recovery, the best partial matches are served
  * instead, so the shopper still sees something. While the keyword hits do
- * hold every word, semantic-only neighbours are not appended: on
- * multilingual-e5-small (sample passages), "red keyboard" puts black
- * keyboards and red mice above the floor, the one-word matches the rule
- * excludes. Semantic
+ * hold every word, semantic-only neighbours are not appended: embeddings put
+ * black keyboards and red mice close to "red keyboard", the one-word matches
+ * the rule excludes. Semantic
  * evidence still reorders those hits; single-word, SKU and partial-fallback
  * requests keep the additive neighbours.
  */
@@ -48,7 +52,7 @@ final class SearchController
     /** @var callable(?string): string */
     private $normalize;
     private int $topIdsLimit;
-    private ?Vectors $vectors;
+    private ?VpsClient $vps;
     private ?Ranker $ranker;
     /** @var null|callable(list<int>): array<int, array{stock: int, popularity: int}> */
     private $signalsProvider;
@@ -65,7 +69,7 @@ final class SearchController
      *        Returns business signals keyed by product_id for the ids that EXIST
      *        in the products table; ids it omits are treated as absent, which is
      *        how a transient vector/table mismatch degrades (contract-tolerant
-     *        reader). Required, with $vectors and $ranker, to enable Tier 2.
+     *        reader). Required, with $vps and $ranker, to enable Tier 2.
      */
     public function __construct(
         Keyword $keyword,
@@ -73,12 +77,12 @@ final class SearchController
         callable $spellerFactory,
         ?callable $normalizer = null,
         int $topIdsLimit = 10,
-        ?Vectors $vectors = null,
+        ?VpsClient $vps = null,
         ?Ranker $ranker = null,
         ?callable $signalsProvider = null,
         int $semanticTopK = 100,
         int $defaultLimit = 20,
-        float $semanticMinScore = 0.82,
+        float $semanticMinScore = 0.4,
         int $suggestMinResults = 3,
         bool $descOnlyNeedsSemantic = true
     ) {
@@ -87,7 +91,7 @@ final class SearchController
         $this->spellerFactory = $spellerFactory;
         $this->normalize = $normalizer ?? [Normalizer::class, 'normalize'];
         $this->topIdsLimit = max(1, $topIdsLimit);
-        $this->vectors = $vectors;
+        $this->vps = $vps;
         $this->ranker = $ranker;
         $this->signalsProvider = $signalsProvider;
         $this->semanticTopK = max(1, $semanticTopK);
@@ -100,11 +104,13 @@ final class SearchController
     /**
      * The production wiring shared by POST /search and the eval harness, so the
      * harness measures exactly the knobs /search serves. Search keys missing
-     * from an older config.php fall back to the documented defaults.
+     * from an older config.php fall back to the documented defaults (no `vps`
+     * section: keyword-only).
      *
      * @param array<string, mixed> $config the server config array
+     * @param VpsClient|null $vps replaces the client built from $config['vps'] (tests)
      */
-    public static function fromConfig(PDO $pdo, array $config): self
+    public static function fromConfig(PDO $pdo, array $config, ?VpsClient $vps = null): self
     {
         $search = $config['search'];
         $productsTable = $config['db']['products_table'];
@@ -161,7 +167,7 @@ final class SearchController
             $spellerFactory,
             null,
             10,
-            new Vectors($config['paths']['data'], (int) $config['model']['dim']),
+            $vps ?? VpsClient::fromConfig($config['vps'] ?? []),
             new Ranker(
                 (int) $search['rrf_k'],
                 (float) $search['stock_boost'],
@@ -172,7 +178,7 @@ final class SearchController
             $signalsProvider,
             (int) $search['semantic_top_k'],
             (int) $search['default_limit'],
-            (float) ($search['semantic_min_score'] ?? 0.82),
+            (float) ($search['semantic_min_score'] ?? 0.4),
             (int) ($search['suggest_min_results'] ?? 3),
             (bool) ($search['desc_only_needs_semantic'] ?? true)
         );
@@ -196,7 +202,6 @@ final class SearchController
         $customerId = isset($request['customer_id']) && is_string($request['customer_id'])
             ? $request['customer_id']
             : null;
-        $queryVector = $this->queryVector($request);
 
         $start = microtime(true);
         $normalized = ($this->normalize)($raw);
@@ -243,16 +248,17 @@ final class SearchController
         $productIds = $keywordIds;
         $cosineScores = null;
 
-        // Tier 2 is additive: only reshuffle when a usable vector and bundle are
-        // present. Otherwise the keyword ordering above stands.
-        if ($queryVector !== null && $this->semanticEnabled()) {
+        // Tier 2 is additive: only reshuffle when the VPS answered. Otherwise the
+        // keyword ordering above stands.
+        $semantic = $this->semantic($raw, $normalized);
+        if ($semantic !== null) {
             [$productIds, $cosineScores] = $this->hybrid(
                 $keywordIds,
                 $titleIds,
                 $specIds,
                 $skuIds,
                 $partialIds,
-                $queryVector,
+                $semantic,
                 $limit,
                 !$allTermsHits
             );
@@ -266,7 +272,7 @@ final class SearchController
             $this->logger->log([
                 'raw_q'        => $raw,
                 'normalized_q' => $normalized,
-                'had_vector'   => $queryVector !== null,
+                'had_vector'   => $semantic !== null,
                 'result_count' => count($productIds),
                 'top_ids'      => array_slice($productIds, 0, $this->topIdsLimit),
                 'customer_id'  => $customerId,
@@ -291,10 +297,28 @@ final class SearchController
     }
 
     /**
-     * Global cosine top-K (above the relevance floor) fused below the keyword
-     * hits, plus each returned id's cosine (null when it has no vector).
-     * Description-only keyword hits (no title or specs match) scoring below the
-     * floor are dropped first.
+     * The VPS's global cosine top-K (above the relevance floor), or null when the
+     * semantic tier is off or failed. A failure is logged and never raised.
+     *
+     * @return list<array{product_id: int, score: float}>|null
+     */
+    private function semantic(string $raw, string $normalized): ?array
+    {
+        if ($this->vps === null || $this->ranker === null || $this->signalsProvider === null || $normalized === '') {
+            return null;
+        }
+        $semantic = $this->vps->search($raw, $this->semanticTopK, $this->semanticMinScore);
+        if ($semantic === null) {
+            error_log('search: semantic tier unavailable (' . $this->vps->failure() . '); served keyword-only results');
+        }
+
+        return $semantic;
+    }
+
+    /**
+     * Semantic neighbours fused below the keyword hits, plus each returned id's
+     * cosine (null when the VPS did not return it). Description-only keyword
+     * hits (no title or specs match) below the floor are dropped first.
      * Semantic ids not present in the products table are dropped (the signals
      * provider omits them), so a partial reload degrades instead of surfacing
      * dead ids.
@@ -304,7 +328,7 @@ final class SearchController
      * @param list<int> $specIds keyword ids that matched in the specs, not the title
      * @param list<int> $skuIds keyword ids that matched by SKU, kept first in order
      * @param list<int> $partialIds keyword ids missing a query word (any-terms mode)
-     * @param list<float> $queryVector
+     * @param list<array{product_id: int, score: float}> $semantic best first, all >= the floor
      * @param bool $neighbours false: semantic evidence only reorders the keyword hits
      * @return array{0: list<int>, 1: list<?float>}
      */
@@ -314,11 +338,12 @@ final class SearchController
         array $specIds,
         array $skuIds,
         array $partialIds,
-        array $queryVector,
+        array $semantic,
         ?int $limit,
         bool $neighbours
     ): array {
-        $semantic = $this->vectors->topK($queryVector, $this->semanticTopK, $this->semanticMinScore);
+        // A full top-K list may omit ids that still clear the floor further down.
+        $truncated = count($semantic) >= $this->semanticTopK;
         if (!$neighbours) {
             $keywordSet = array_flip($keywordIds);
             $semantic = array_values(array_filter(
@@ -331,14 +356,9 @@ final class SearchController
 
         if ($this->descOnlyNeedsSemantic) {
             $descOnly = array_flip(array_diff($keywordIds, $titleIds, $specIds));
-            $known += $this->vectors->scoresFor(
-                $queryVector,
-                array_values(array_diff(array_keys($descOnly), array_keys($known)))
-            );
-            $floor = $this->semanticMinScore;
             $keywordIds = array_values(array_filter(
                 $keywordIds,
-                static fn (int $id): bool => !isset($descOnly[$id]) || !isset($known[$id]) || $known[$id] >= $floor
+                static fn (int $id): bool => !isset($descOnly[$id]) || isset($known[$id]) || $truncated
             ));
         }
 
@@ -372,48 +392,12 @@ final class SearchController
             );
         }
 
-        $missing = array_values(array_diff($productIds, array_keys($known)));
-        $known += $this->vectors->scoresFor($queryVector, $missing);
         $cosine = array_map(
             static fn (int $id): ?float => isset($known[$id]) ? round($known[$id], 4) : null,
             $productIds
         );
 
         return [$productIds, $cosine];
-    }
-
-    private function semanticEnabled(): bool
-    {
-        return $this->vectors !== null
-            && $this->ranker !== null
-            && $this->signalsProvider !== null
-            && $this->vectors->isLoaded();
-    }
-
-    /**
-     * A candidate query vector: a non-empty numeric list. Absent, non-list, or
-     * non-numeric input yields null (Tier 1 only). Dimension is not checked here
-     * — Vectors::topK owns that and degrades to keyword-only on a mismatch, so a
-     * stale client dim can never error the request.
-     *
-     * @param array<string, mixed> $request
-     * @return list<float>|null
-     */
-    private function queryVector(array $request): ?array
-    {
-        $raw = $request['q_vector'] ?? null;
-        if (!is_array($raw) || $raw === [] || !array_is_list($raw)) {
-            return null;
-        }
-        $vector = [];
-        foreach ($raw as $value) {
-            if (!is_int($value) && !is_float($value)) {
-                return null;
-            }
-            $vector[] = (float) $value;
-        }
-
-        return $vector;
     }
 
     /**

@@ -85,6 +85,18 @@ def test_floor_drops_low_cosine_results(tmp_path) -> None:
     assert other.json()["results"] == []
 
 
+def test_request_min_score_overrides_the_service_floor(tmp_path) -> None:
+    settings = make_settings(tmp_path / "data", VPS_SEMANTIC_MIN_SCORE="0.99")
+    write_vectors(settings.vectors_dir, settings, list(TEXTS), vectors_for(TEXTS))
+    with TestClient(create_app(settings)) as client:
+        loose = client.post("/search-vectors", json={"q": "apple iphone 15 pro", "min_score": -1},
+                            headers=AUTH).json()
+        default = client.post("/search-vectors", json={"q": "apple iphone 15 pro"},
+                              headers=AUTH).json()
+    assert len(loose["results"]) == 3
+    assert [r["product_id"] for r in default["results"]] == [101]
+
+
 def test_query_prefix_is_applied(tmp_path) -> None:
     settings = make_settings(tmp_path / "data", VPS_QUERY_PREFIX="query: ")
     texts = {1: "query: laptop", 2: "laptop"}
@@ -95,7 +107,8 @@ def test_query_prefix_is_applied(tmp_path) -> None:
 
 
 @pytest.mark.parametrize("body", [{}, {"q": ""}, {"q": "   "}, {"q": "x", "limit": 0},
-                                  {"q": 5}, {"q": "x", "limit": "many"}])
+                                  {"q": 5}, {"q": "x", "limit": "many"},
+                                  {"q": "x", "min_score": 2}, {"q": "x", "min_score": "high"}])
 def test_bad_requests_are_422(served, body) -> None:
     assert served.post("/search-vectors", json=body, headers=AUTH).status_code == 422
 

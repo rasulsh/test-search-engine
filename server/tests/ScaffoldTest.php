@@ -51,18 +51,41 @@ final class ScaffoldTest extends TestCase
 
         $this->assertSame('', $config['db']['password'], 'config.example must not ship a DB password');
         $this->assertSame('', $config['reload']['token'], 'config.example must not ship a reload token');
+        $this->assertSame('', $config['vps']['token'], 'config.example must not ship a VPS token');
     }
 
     public function testRelevanceKnobsAreConfigDrivenWithDefaults(): void
     {
         $search = $this->loadExampleConfig()['search'];
 
-        $this->assertSame(0.82, $search['semantic_min_score']);
+        // bge-m3 scale (M18); e5's 0.82 would drop nearly every neighbour.
+        $this->assertSame(0.4, $search['semantic_min_score']);
         $this->assertSame(1.0, $search['keyword_weight']);
         $this->assertSame(1.0, $search['semantic_weight']);
         $this->assertSame(3, $search['suggest_min_results']);
         $this->assertSame(2, $search['suggest_min_frequency']);
         $this->assertSame(2, $search['suggest_max_distance']);
+    }
+
+    public function testVpsIsConfigDrivenAndOffByDefault(): void
+    {
+        $this->assertSame(['url' => '', 'token' => '', 'timeout_ms' => 300], $this->loadExampleConfig()['vps']);
+
+        putenv('SEARCH_VPS_URL=https://vps.example.com:8600');
+        putenv('SEARCH_VPS_TOKEN=secret-from-env-0123');
+        putenv('SEARCH_VPS_TIMEOUT_MS=150');
+        try {
+            $vps = $this->loadExampleConfig()['vps'];
+        } finally {
+            putenv('SEARCH_VPS_URL');
+            putenv('SEARCH_VPS_TOKEN');
+            putenv('SEARCH_VPS_TIMEOUT_MS');
+        }
+
+        $this->assertSame(
+            ['url' => 'https://vps.example.com:8600', 'token' => 'secret-from-env-0123', 'timeout_ms' => 150],
+            $vps
+        );
     }
 
     public function testExplicitZeroFromTheEnvironmentIsHonoured(): void

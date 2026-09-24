@@ -67,6 +67,9 @@ final class InstallerTest extends TestCase
             'normalization_version' => '2',
             'store_base' => 'https://shop.example.com/',
             'image_base' => 'https://shop.example.com/image/',
+            'vps_url' => 'https://vps.example.com:8600',
+            'vps_token' => str_repeat('cd34', 8),
+            'vps_timeout_ms' => '250',
             'semantic_min_score' => '0.75',
             'title_weight' => '12',
             'desc_weight' => '0.5',
@@ -153,6 +156,10 @@ final class InstallerTest extends TestCase
         self::assertSame('https://shop.example.com/', $config['storefront']['store_base']);
         self::assertSame('https://shop.example.com/image/', $config['storefront']['image_base']);
         self::assertEqualsWithDelta(0.75, $config['search']['semantic_min_score'], 1e-9);
+        self::assertSame(
+            ['url' => 'https://vps.example.com:8600', 'token' => $input['vps_token'], 'timeout_ms' => 250],
+            $config['vps']
+        );
         self::assertEqualsWithDelta(12.0, $config['search']['title_weight'], 1e-9);
         self::assertEqualsWithDelta(0.5, $config['search']['desc_weight'], 1e-9);
         self::assertEqualsWithDelta(6.0, $config['search']['spec_weight'], 1e-9);
@@ -186,7 +193,11 @@ final class InstallerTest extends TestCase
         self::assertSame('intfloat/multilingual-e5-small', $first['model_name']);
         self::assertSame('384', $first['model_dim']);
         self::assertSame((string) Normalizer::VERSION, $first['normalization_version']);
-        self::assertSame('0.82', $first['semantic_min_score']);
+        self::assertSame('0.4', $first['semantic_min_score']);
+        // Keyword-only until a VPS is entered.
+        self::assertSame('', $first['vps_url']);
+        self::assertSame('', $first['vps_token']);
+        self::assertSame('300', $first['vps_timeout_ms']);
         self::assertSame('10.0', $first['title_weight']);
         self::assertSame('1.0', $first['desc_weight']);
         self::assertSame('6.0', $first['spec_weight']);
@@ -218,6 +229,12 @@ final class InstallerTest extends TestCase
             'non-numeric weight' => [['phrase_bonus' => 'abc'], 'phrase_bonus', 'invalid'],
             'non-http store base' => [['store_base' => 'javascript:alert(1)'], 'store_base', 'invalid'],
             'relative image base' => [['image_base' => 'image/'], 'image_base', 'invalid'],
+            'non-http vps url' => [['vps_url' => 'ftp://vps.example.com'], 'vps_url', 'invalid'],
+            'vps url without token' => [['vps_token' => ''], 'vps_token', 'invalid'],
+            'short vps token' => [['vps_token' => 'short'], 'vps_token', 'invalid'],
+            'vps token with space' => [['vps_token' => str_repeat('a', 20) . ' b'], 'vps_token', 'invalid'],
+            'vps timeout too small' => [['vps_timeout_ms' => '10'], 'vps_timeout_ms', 'invalid'],
+            'vps timeout not a number' => [['vps_timeout_ms' => 'fast'], 'vps_timeout_ms', 'invalid'],
         ];
     }
 
@@ -243,11 +260,16 @@ final class InstallerTest extends TestCase
             'semantic_min_score' => '۰٫۸',
             'store_base' => '',
             'image_base' => '',
+            'vps_url' => '',
+            'vps_token' => '',
+            'vps_timeout_ms' => '۳۰۰',
         ]));
 
         self::assertSame('384', $values['model_dim']);
         self::assertSame('0.8', $values['semantic_min_score']);
         self::assertSame('', $values['store_base']);
+        self::assertSame('', $values['vps_url']); // keyword-only needs no token
+        self::assertSame('300', $values['vps_timeout_ms']);
     }
 
     public function testStagedBundleForAnotherModelIsRejectedBeforeAnythingIsWritten(): void

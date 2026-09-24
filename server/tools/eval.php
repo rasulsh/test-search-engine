@@ -8,9 +8,10 @@
  *
  *   php server/tools/eval.php [--queries=<path>] [--k=<int>] [--min-recall=<float>]
  *
- * DB connection and model settings come from the environment (see config). With
- * only keyword labels the report reflects the Tier 1 tier; add a per-query
- * "q_vector" to the fixture to measure the hybrid tier with real query vectors.
+ * DB connection, search and VPS settings come from the environment (see
+ * config). Without SEARCH_VPS_URL the report reflects Tier 1 only; with it, each
+ * query goes through the VPS exactly as /search does (the hybrid tier), and the
+ * header counts the queries the VPS actually answered.
  * Exits non-zero when --min-recall is given and recall@k falls below it.
  */
 
@@ -19,7 +20,6 @@ declare(strict_types=1);
 use App\Db;
 use App\Evaluator;
 use App\SearchController;
-use App\Vectors;
 
 if (PHP_SAPI !== 'cli') {
     http_response_code(404);
@@ -39,27 +39,25 @@ if (!is_array($decoded) || !isset($decoded['queries']) || !is_array($decoded['qu
     fwrite(STDERR, "Invalid eval file: {$queriesPath}\n");
     exit(2);
 }
-/** @var list<array{q: string, expected_ids: list<int>, q_vector?: list<float>}> $cases */
+/** @var list<array{q: string, expected_ids: list<int>}> $cases */
 $cases = $decoded['queries'];
 
 $db = new Db($config['db']);
 $pdo = $db->pdo();
 $controller = SearchController::fromConfig($pdo, $config);
-$vectors = new Vectors($config['paths']['data'], (int) $config['model']['dim']);
+$semanticCount = 0;
 
-$search = static function (array $case) use ($controller): array {
-    $request = ['q' => (string) ($case['q'] ?? ''), 'limit' => 20];
-    if (isset($case['q_vector']) && is_array($case['q_vector'])) {
-        $request['q_vector'] = $case['q_vector'];
-    }
+$search = static function (array $case) use ($controller, &$semanticCount): array {
+    $response = $controller->search(['q' => (string) ($case['q'] ?? ''), 'limit' => 20]);
+    $semanticCount += isset($response['cosine_scores']) ? 1 : 0;
 
-    return $controller->search($request)['product_ids'];
+    return $response['product_ids'];
 };
 
 $report = (new Evaluator($search))->run($cases, $k);
 
-$tier = $vectors->isLoaded() ? 'loaded' : 'absent';
-printf("Eval: %d queries, k=%d  (vectors %s)\n", $report['query_count'], $report['k'], $tier);
+$tier = ($config['vps']['url'] ?? '') === '' ? 'VPS not configured' : "VPS answered {$semanticCount}";
+printf("Eval: %d queries, k=%d  (%s)\n", $report['query_count'], $report['k'], $tier);
 printf("%-26s %8s %8s %8s\n", 'query', 'hits', 'P@k', 'R@k');
 foreach ($report['per_query'] as $row) {
     printf("%-26s %8d %8.3f %8.3f\n", $row['q'], $row['hits'], $row['precision'], $row['recall']);

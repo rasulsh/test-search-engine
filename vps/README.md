@@ -3,8 +3,11 @@
 A small, self-contained Python service for a 2–4 GB VPS. It holds the bge-m3
 query model and the product vectors, and answers **query text → top-K
 `{product_id, score}`**. cPanel keeps the keyword tier and stays the public,
-same-origin endpoint; it will call this service server-to-server (follow-up PR).
-The service is never meant to be reachable from browsers.
+same-origin endpoint; since M18 its `/search` calls this service
+server-to-server (`SEARCH_VPS_URL` / `SEARCH_VPS_TOKEN` /
+`SEARCH_VPS_TIMEOUT_MS`, see INTEGRATION.md, "Semantic tier: cPanel to VPS")
+and falls back to keyword-only results whenever it is unreachable, slow or
+failing. The service is never meant to be reachable from browsers.
 
 Product vectors are still built **offline** on the GPU machine
 (`pipeline/build.py --vps-out` / `pipeline/release.py --vps-out`) and uploaded
@@ -32,7 +35,7 @@ All requests and responses are JSON. Every endpoint except `/health` needs
 | Method + path | Body | Success | Errors |
 |---|---|---|---|
 | `GET /health` (open) | – | `200 {"ok":true,"model","dim","count","built_at"}` | `503` same shape with `"ok":false` while no vectors are loaded |
-| `POST /search-vectors` | `{"q": "...", "limit"?: int}` | `200 {"results":[{"product_id":int,"score":float}], "model", "took_ms"}` | `401`, `422` (blank `q`, `limit < 1`), `503` no vectors loaded |
+| `POST /search-vectors` | `{"q": "...", "limit"?: int, "min_score"?: float}` | `200 {"results":[{"product_id":int,"score":float}], "model", "took_ms"}` | `401`, `422` (blank `q`, `limit < 1`, `min_score` outside -1..1), `503` no vectors loaded |
 | `POST /reload` | – | `200 {"ok":true,"count","model","built_at"}` | `401`, `409` reload already running, `422 {"ok":false,"error"}` invalid/mismatched upload, `500` disk swap failed |
 
 `/search-vectors`:
@@ -42,9 +45,11 @@ All requests and responses are JSON. Every endpoint except `/health` needs
   instruction), embedded, and compared by cosine against **every** product
   vector (brute force; 20k × 1024 floats is ~80 MB and a few ms).
 - `limit` defaults to `VPS_DEFAULT_LIMIT` and is capped at `VPS_MAX_LIMIT`.
-- Results are best-first (ties by `product_id`). Neighbours below
-  `VPS_SEMANTIC_MIN_SCORE` are dropped, so a query with nothing close returns
-  `"results": []`, not far-away products.
+- Results are best-first (ties by `product_id`). Neighbours below the floor
+  are dropped, so a query with nothing close returns `"results": []`, not
+  far-away products. The floor is the request's `min_score` when given (cPanel
+  always sends its `SEARCH_SEMANTIC_MIN_SCORE`, so the relevance floor is
+  tuned in one place), else `VPS_SEMANTIC_MIN_SCORE`.
 
 ```bash
 curl -s https://vps.example.com:8600/search-vectors \
@@ -95,7 +100,7 @@ curl -s http://127.0.0.1:8600/health     # 503 until the first vectors are loade
 | `VPS_MODEL_DIR`, `VPS_ONNX_FILE` | `/opt/search-vectors/model`, `onnx/model_quantized.onnx` | Model location; `onnx/model.onnx` = fp32 build (see "Model parity"). Re-run `setup.sh` after changing the file. |
 | `VPS_MAX_TOKENS`, `VPS_THREADS` | `512`, `0` (all cores) | Tokenizer truncation; ONNX Runtime threads. |
 | `VPS_DATA_DIR` | `/var/lib/search-vectors` | Holds `active/`, `incoming/`, `previous/`. |
-| `VPS_SEMANTIC_MIN_SCORE` | `0.5` | Cosine floor. bge-m3 scores differ from e5's (e5's floor was 0.82); tune on the eval set. On the 6-product fixture, right single-word hits scored 0.42–0.49 (`تلویزیون` → the LG TV 0.42) while wrong ones reached 0.43, and multi-word hits 0.53–0.62: no floor separates short queries, which is why cPanel will fuse with keyword results. |
+| `VPS_SEMANTIC_MIN_SCORE` | `0.5` | Cosine floor for requests without `min_score` (cPanel always sends its own, `SEARCH_SEMANTIC_MIN_SCORE`, default 0.4). bge-m3 scores differ from e5's (e5's floor was 0.82); tune on the eval set. On the 6-product fixture, right single-word hits scored 0.42–0.49 (`تلویزیون` → the LG TV 0.42) while wrong ones reached 0.43, and multi-word hits 0.53–0.62: no floor separates short queries, which is why cPanel will fuse with keyword results. |
 | `VPS_DEFAULT_LIMIT` / `VPS_MAX_LIMIT` | `100` / `500` | Result count. |
 | `VPS_MAX_QUERY_CHARS` | `200` | Longer queries are cut. |
 

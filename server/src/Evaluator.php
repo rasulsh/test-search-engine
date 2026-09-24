@@ -15,16 +15,16 @@ namespace App;
  * Aggregates are the unweighted mean across queries.
  *
  * The search function is injected, so the harness measures whatever tier is
- * wired: keyword-only (deterministic, CI-runnable) or the full hybrid when
- * labeled query vectors are supplied (offline, real model).
+ * wired: keyword-only (deterministic, CI-runnable) or the full hybrid when a
+ * VPS vector service is configured (offline, real model).
  */
 final class Evaluator
 {
-    /** @var callable(array{q: string, expected_ids: list<int>, q_vector?: list<float>}): list<int> */
+    /** @var callable(array{q: string, expected_ids: list<int>}): list<int> */
     private $search;
 
     /**
-     * @param callable(array{q: string, expected_ids: list<int>, q_vector?: list<float>}): list<int> $search
+     * @param callable(array{q: string, expected_ids: list<int>}): list<int> $search
      *        Returns ranked product_ids for a labeled query case.
      */
     public function __construct(callable $search)
@@ -33,7 +33,7 @@ final class Evaluator
     }
 
     /**
-     * @param list<array{q: string, expected_ids: list<int>, q_vector?: list<float>}> $cases
+     * @param list<array{q: string, expected_ids: list<int>}> $cases
      * @return array{
      *     k: int,
      *     query_count: int,

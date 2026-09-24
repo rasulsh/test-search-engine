@@ -12,7 +12,7 @@ use PDO;
  * catalog. Works for Persian and Latin (multibyte-aware edit distance).
  *
  * The vocabulary comes from the bundle's `spellcheck.txt` (built offline by
- * pipeline/keyword.py) and is cached like the vectors: parsed once per PHP
+ * pipeline/keyword.py) and is cached: parsed once per PHP
  * worker, and in APCu when available so a fresh worker skips the parse. Only
  * when the dictionary is missing does the caller fall back to scanning the
  * products table ({@see fromProducts}), which is too slow for the latency budget

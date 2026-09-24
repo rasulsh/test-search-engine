@@ -34,6 +34,9 @@ final class Installer
         'normalization_version' => 'SEARCH_NORMALIZATION_VERSION',
         'store_base'            => 'SEARCH_STORE_BASE',
         'image_base'            => 'SEARCH_IMAGE_BASE',
+        'vps_url'               => 'SEARCH_VPS_URL',
+        'vps_token'             => 'SEARCH_VPS_TOKEN',
+        'vps_timeout_ms'        => 'SEARCH_VPS_TIMEOUT_MS',
         'semantic_min_score'    => 'SEARCH_SEMANTIC_MIN_SCORE',
         'title_weight'          => 'SEARCH_TITLE_WEIGHT',
         'desc_weight'           => 'SEARCH_DESC_WEIGHT',
@@ -52,6 +55,7 @@ final class Installer
     private const NUMBERS = [
         'model_dim'             => ['int', 1, 8192],
         'normalization_version' => ['int', 1, 1000],
+        'vps_timeout_ms'        => ['int', 50, 10000],
         'semantic_min_score'    => ['float', -1, 1],
         'title_weight'          => ['float', 0, 1000],
         'desc_weight'           => ['float', 0, 1000],
@@ -175,7 +179,14 @@ final class Installer
             'model_name',
             'invalid'
         );
-        foreach (['store_base', 'image_base'] as $field) {
+        // The VPS refuses tokens shorter than 16 characters; sent as an HTTP header.
+        $require(
+            preg_match('/^[\x21-\x7E]{16,256}$/', $values['vps_token']) === 1
+                || ($values['vps_token'] === '' && $values['vps_url'] === ''),
+            'vps_token',
+            'invalid'
+        );
+        foreach (['store_base', 'image_base', 'vps_url'] as $field) {
             $url = $values[$field];
             $require(
                 $url === '' || (filter_var($url, FILTER_VALIDATE_URL) !== false

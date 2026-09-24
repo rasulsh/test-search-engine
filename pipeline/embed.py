@@ -6,12 +6,9 @@ Two embedders behind one interface:
   tests can run without the real model.
 - RealEmbedder: sentence-transformers on the developer's GPU machine.
 
-The same code embeds for two models: config['model'] (e5, the cPanel bundle
-and browser queries) and config['vps_model'] (bge-m3, the VPS vector service).
-
-Model parity (contract 2): multilingual-e5 REQUIRES asymmetric prefixes. Product
-passages are embedded with PASSAGE_PREFIX here; the M4 browser client MUST embed
-queries with QUERY_PREFIX. Vectors from mismatched prefixes are not comparable.
+The same code embeds for two models: config['model'] (e5, the cPanel bundle)
+and config['vps_model'] (bge-m3, the VPS vector service, which embeds queries
+since M18; contract 2 is between this file and vps/search_vectors).
 """
 
 from __future__ import annotations
@@ -21,9 +18,8 @@ from typing import Protocol
 
 import numpy as np
 
-# e5 asymmetric prefixes. Do not change one without the other.
+# e5 passage prefix (the cPanel bundle's model).
 PASSAGE_PREFIX = "passage: "
-QUERY_PREFIX = "query: "  # M4 client contract: prefix every query with this.
 
 
 def l2_normalize(vectors: np.ndarray) -> np.ndarray:
@@ -108,13 +104,3 @@ def embed_passages(
 ) -> np.ndarray:
     """Embed product passages with the model's passage prefix (e5 by default)."""
     return embedder.embed([prefix + text for text in texts])
-
-
-def embed_queries(embedder: Embedder, texts: list[str]) -> np.ndarray:
-    """Embed search queries with the required e5 query prefix.
-
-    This is the offline reference for the browser client (client/embedder.js),
-    which MUST prepend the same QUERY_PREFIX. Used by the model-parity check to
-    compare the two implementations' query vectors.
-    """
-    return embedder.embed([QUERY_PREFIX + text for text in texts])

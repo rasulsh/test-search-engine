@@ -257,7 +257,7 @@ Content-Type: application/json
 
 | setting (`config.php` `vps`, or env) | default | meaning |
 | --- | --- | --- |
-| `SEARCH_VPS_URL` | empty | Base URL of the VPS service (`https://vps.example.com:8600`). Empty = keyword-only search, nothing is called. |
+| `SEARCH_VPS_URL` | empty | Base URL of the VPS service (`https://vsearch.example.com`, the URL `vps/setup.sh --domain` prints). Empty = keyword-only search, nothing is called. |
 | `SEARCH_VPS_TOKEN` | empty | The VPS's `VPS_TOKEN`. A secret: keep it in the environment or `config.php` (install.php asks for it). |
 | `SEARCH_VPS_TIMEOUT_MS` | `300` | Budget for the whole call, connect included. A slower VPS means a keyword-only answer for that search. |
 | `SEARCH_SEMANTIC_MIN_SCORE` | `0.4` | The cosine floor, sent as `min_score` and re-applied on cPanel. See below. |

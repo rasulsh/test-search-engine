@@ -21,8 +21,9 @@ vps/
     embedder.py        ONNX (bge-m3) query embedder, deterministic mock for tests
     config.py          settings from the environment
     fetch_model.py     pinned + checksummed model download
-  setup.sh             provisioning (Debian/Ubuntu, systemd)
+  setup.sh             provisioning (Debian/Ubuntu, systemd, Caddy TLS proxy, ufw)
   search-vectors.service
+  caddy.service        systemd unit for the pinned Caddy binary
   search-vectors.env.example
   tests/               pytest (mock embedder; real model behind a flag)
 ```
@@ -52,7 +53,7 @@ All requests and responses are JSON. Every endpoint except `/health` needs
   tuned in one place), else `VPS_SEMANTIC_MIN_SCORE`.
 
 ```bash
-curl -s https://vps.example.com:8600/search-vectors \
+curl -s https://vsearch.example.com/search-vectors \
   -H "Authorization: Bearer $VPS_TOKEN" -H 'Content-Type: application/json' \
   -d '{"q":"هدفون بی‌سیم","limit":20}'
 # {"results":[{"product_id":2002,"score":0.71},...],"model":"BAAI/bge-m3","took_ms":31.4}
@@ -64,15 +65,35 @@ Needs Python 3.11+, ~1.1 GB RAM for the int8 model (fp32: ~1.5 GB) plus ~2×
 the vectors file during a reload, and ~600 MB disk for the int8 model (fp32:
 ~2.3 GB).
 
+**One prerequisite, outside the script:** create a DNS **A record** for the
+name you will use (e.g. `vsearch.example.com`) pointing at the VPS's public IP.
+`setup.sh` cannot create DNS, and Let's Encrypt needs it to resolve before it
+can issue the certificate. Then:
+
 ```bash
 git clone <this repo> && cd <repo>/vps
-sudo ./setup.sh
+sudo ./setup.sh --domain vsearch.example.com
+# optional: only the cPanel server may reach 443
+sudo ./setup.sh --domain vsearch.example.com --allow-ip <CPANEL_OUTBOUND_IP>
 ```
 
-`setup.sh` (safe to re-run; it updates code and dependencies and keeps the
-env file, model and vectors):
+`--domain` can also be given as `SEARCH_VPS_DOMAIN`, `--allow-ip` as
+`SEARCH_VPS_ALLOW_IP`. When it finishes, the service answers at
+`https://vsearch.example.com/` on 443 with a valid certificate; no manual
+Caddy, TLS or firewall steps remain. Put that URL into cPanel's
+`SEARCH_VPS_URL` and the `VPS_TOKEN` from `/etc/search-vectors.env` into
+`SEARCH_VPS_TOKEN`.
 
-1. installs `python3` + `python3-venv`, creates the `searchvec` system user;
+Without `--domain`, the script prints the DNS instruction, skips the proxy and
+firewall, and still brings the service up on `127.0.0.1:8600`; re-run with
+`--domain` once the A record exists.
+
+`setup.sh` (safe to re-run; it updates code and dependencies and keeps the
+env file, token, model, vectors and the live certificate):
+
+1. installs whichever of `python3`, `python3-venv`, `curl`, `tar`, `ufw` is
+   missing (apt is not touched when nothing is missing, so an unreachable
+   distro mirror does not block a re-run), creates the `searchvec` system user;
 2. copies `search_vectors/` to `/opt/search-vectors/app` and installs
    `requirements.txt` into `/opt/search-vectors/venv` (CPU only, no torch);
 3. writes `/etc/search-vectors.env` from `search-vectors.env.example` **once**,
@@ -80,12 +101,39 @@ env file, model and vectors):
 4. downloads the query model into `VPS_MODEL_DIR` (`fetch_model.py`: pinned
    Hugging Face commit, every file sha256-checked, no partial files);
 5. installs and starts the `search-vectors` systemd unit (one worker, runs as
-   `searchvec`, read-only system except `/var/lib/search-vectors`).
+   `searchvec`, read-only system except `/var/lib/search-vectors`);
+6. with `--domain`: downloads the official **Caddy static binary** over HTTPS
+   from GitHub Releases, pinned to a version and **sha512** (the digest Caddy
+   publishes; a mismatch aborts before anything is installed; no distro apt
+   mirror involved), installs it to `/usr/local/bin/caddy` with the
+   `caddy.service` unit, and writes `/etc/caddy/Caddyfile`:
+
+   ```
+   vsearch.example.com {
+       reverse_proxy 127.0.0.1:8600
+   }
+   ```
+
+   Caddy obtains and renews the Let's Encrypt certificate itself (state in
+   `/var/lib/caddy`, kept across re-runs). The vector service stays bound to
+   `127.0.0.1`;
+7. with `--domain`: configures **ufw**: allows SSH (ports read from `sshd -T`,
+   default 22), 80 (ACME challenge and redirect) and 443, explicitly denies
+   the service port (8600), and enables ufw.
+
+Re-running with another `--domain` or `--allow-ip` rewrites the Caddyfile and
+the 443 rule in place and reloads Caddy (the 443 rule is removed and re-added,
+so 443 blips for a moment). Re-running without `--domain` leaves an existing
+proxy untouched. To change the pinned Caddy version, update `CADDY_VERSION`
+and the two sha512 values in `setup.sh` together (from the release's
+`caddy_<version>_checksums.txt`).
 
 ```bash
-systemctl status search-vectors
+systemctl status search-vectors caddy
 journalctl -u search-vectors -f
+journalctl -u caddy -f                   # certificate issuance
 curl -s http://127.0.0.1:8600/health     # 503 until the first vectors are loaded
+curl -s https://vsearch.example.com/health
 ```
 
 ### Configuration (`/etc/search-vectors.env`)
@@ -108,21 +156,19 @@ After editing: `sudo systemctl restart search-vectors`.
 
 ### Keeping the model private
 
-Only cPanel should ever reach the service; the token is a second lock, not the
-only one. Pick one:
+Only cPanel should ever reach the service. `setup.sh --domain` already sets up
+the locks that matter: TLS on 443 through Caddy and the bearer token, with the
+service itself on `127.0.0.1` and its port denied by ufw.
 
-- **TLS reverse proxy (recommended).** Keep `VPS_HOST=127.0.0.1`; put Caddy or
-  nginx with a certificate in front, and allow only the cPanel server's IP at
-  the proxy or firewall.
-- **Direct.** Set `VPS_HOST` to the VPS's public IP, set
-  `VPS_SSL_CERTFILE`/`VPS_SSL_KEYFILE` (the token must not travel in clear
-  text), and firewall the port to the cPanel server's outbound IP:
-
-  ```bash
-  ufw allow OpenSSH
-  ufw allow from <CPANEL_SERVER_IP> to any port 8600 proto tcp
-  ufw enable
-  ```
+- **Default:** 443 is open to the internet, protected by TLS and the bearer
+  token (`/health` is public; everything else needs the token).
+- **Stricter:** `--allow-ip <CPANEL_OUTBOUND_IP>` limits 443 to the cPanel
+  server. Port 80 stays open on purpose: Let's Encrypt validates and renews
+  over it, and it only serves Caddy's redirect. Use a stable IP: if the host's
+  outbound IP changes, cPanel falls back to keyword-only search until you
+  re-run with the new IP.
+- **No proxy (advanced):** set `VPS_HOST` to the public IP and
+  `VPS_SSL_CERTFILE`/`VPS_SSL_KEYFILE`, and firewall port 8600 yourself.
 
 Find the cPanel server's outbound IP from cPanel ("Shared IP Address" /
 "Server Information") or ask the host; shared hosts sometimes send outbound
@@ -147,7 +193,7 @@ checksum, embedder`). Upload and reload:
 ```bash
 rsync -a --delete ./vps_vectors/ root@vps:/var/lib/search-vectors/incoming/
 ssh root@vps chown -R searchvec: /var/lib/search-vectors/incoming
-curl -s -X POST https://vps.example.com:8600/reload -H "Authorization: Bearer $VPS_TOKEN"
+curl -s -X POST https://vsearch.example.com/reload -H "Authorization: Bearer $VPS_TOKEN"
 # {"ok":true,"count":20000,"model":"BAAI/bge-m3","built_at":"..."}
 ```
 

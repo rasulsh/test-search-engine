@@ -702,7 +702,7 @@ the matching `SEARCH_VPS_*` environment variables):
 
 ```php
     'vps' => [
-        'url'        => 'https://vps.example.com:8600',
+        'url'        => 'https://vsearch.example.com',
         'token'      => '<the VPS_TOKEN from /etc/search-vectors.env>',
         'timeout_ms' => 300,
     ],

@@ -79,8 +79,10 @@ jobs:
       - name: Ruff
         run: ruff check pipeline vps
 
-      - name: Shell syntax
-        run: bash -n vps/setup.sh
+      - name: Shell syntax + shellcheck
+        run: |
+          bash -n vps/setup.sh
+          shellcheck vps/setup.sh
 
       - name: Pytest
         run: pytest

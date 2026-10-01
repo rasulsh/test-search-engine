@@ -78,6 +78,7 @@ Request headers: `Content-Type: application/json`.
 | `customer_id` | string | no | Stored in `search_logs` only. **Must be a JSON string.** A number is silently logged as `NULL`, so send `String(id)`. Longer than 64 characters: the search is answered but its log row is dropped. |
 | `limit` | int | no | Maximum number of ids to return. Values below 1, or non-numeric values, are treated as 1. The default is `SEARCH_DEFAULT_LIMIT` (20). There is no server-side maximum, so the storefront should keep it at 50 or less. |
 | `with_details` | bool | no | Only the JSON value `true` enables it (a string `"true"` or `1` is ignored). Adds a `products` array with display fields. Omit it and the response is exactly as below. Used by the search test page; the storefront renders from OpenCart and does not need it. |
+| `debug` | `1` / `true` | no | M21, operator tooling, not for the storefront. Adds a per-result score breakdown (`debug`, below). Needs the header `X-Debug-Token` equal to the configured `SEARCH_DEBUG_TOKEN`; without a configured token, or with a wrong or missing header, the request is refused `403 debug_forbidden` and not run. The breakdown is never logged. |
 
 Response `200`:
 
@@ -100,6 +101,7 @@ Response `200`:
 | `count` | `product_ids.length`. |
 | `product_ids` | Ordered OpenCart `product_id`s, best first. The service returns ids only; the storefront renders the products. |
 | `cosine_scores` | Only on a hybrid response, that is when the VPS answered (see below): the cosine similarity of each returned product to the query, as computed on the VPS, aligned by index with `product_ids`, rounded to 4 decimals, `null` for a product the VPS did not return (below the floor or outside its top-K). A diagnostic for tuning (the test page shows it). Its absence means the response is keyword-only. |
+| `debug` | Only with `"debug": 1` and a valid `X-Debug-Token`: `{"tier": "keyword_only" \| "hybrid", "settings": {the ranker's weights and boosts}, "results": [{"product_id", "rank", "keyword_hit": {"match_type", "score", "title_match", "field_match", "name_all"} \| null, "pinned", "blend": {"keyword": {"score", "normalized"}, "semantic": {"cosine", "normalized", "assumed"}, "blended", "boosts": {"stock", "popularity", "brand", "category", "tag"}, "score"} \| null}]}`, in the order of `product_ids`. `keyword_hit` is `null` for a semantic-only neighbour, `pinned` is `true` for an exact-SKU hit (placed above the blend), and `blend` is `null` unless the VPS answered (keyword-only order has no blend). |
 | `products` | Only with `"with_details": true`: `[{"id", "title", "url", "image", "price"}]` in the same order as `product_ids`, read from the `products` table (`title` is the stored title, `url`/`image` as exported, or joined to `storefront.store_base` / `image_base` when those are set in `config.php` and the value is relative, `price` a number). An id missing from the table is skipped. |
 
 Semantics the storefront should know:
@@ -135,15 +137,45 @@ Semantics the storefront should know:
   added below. A query with no keyword hit and
   no neighbour above the floor returns `count: 0`, so either response can come
   back empty. Show a "no results" state.
-- Every request writes one row to `search_logs`; `had_vector` is `1` when
-  the VPS answered (a hybrid response) and `0` otherwise. Logging is
-  best-effort: a rejected log row (such as `q` longer than 512 characters)
-  does not fail the search.
+- Tags, brand and category (M21) are searched like the title and specs: a
+  query word found in a product's tags (the store's `oc_tag` names, often a
+  franchise or alternate name), brand or category matches it, ranked just
+  below a title match (tags), then brand, specs, category. In a hybrid
+  response a brand, category or tag-phrase that the query names also gets a
+  small ranking boost (README, "Tags, brand and category").
+- Every request writes one row to `search_logs`: the raw and normalized query,
+  `had_vector` (`1` when the VPS answered, a hybrid response), `tier`
+  (`keyword_only` or `hybrid`), `result_count`, the first ten ids, the
+  suggestion, `customer_id` and `latency_ms`. Logging is best-effort: a
+  rejected log row never fails the search, and a `q` longer than 512
+  characters is truncated in the log, not dropped.
 
-Errors: `400 invalid_json` (the body is not valid JSON, or is a bare string or number), `405
+Errors: `400 invalid_json` (the body is not valid JSON, or is a bare string or number), `403
+debug_forbidden` (`debug` asked without a valid debug token), `405
 method_not_allowed` (not a `POST`), `500 internal_error` (such as a database
 outage). On any non-`200`, fall back to OpenCart's native search. See the
 snippet below.
+
+### `GET /logs.php`
+
+M21, operator tooling (not part of the storefront contract). A read-only HTML
+page (English) over `search_logs`: `?view=recent` (newest first, default),
+`?view=zero` (only searches that returned nothing, the gaps worth fixing) or
+`?view=slowest` (by `latency_ms`), paginated with `?page=N` (`SEARCH_LOGS_PAGE_SIZE`
+rows, default 50). Columns: id, time, query, normalized query, tier, vector,
+result count, top ids, ms, suggestion, customer.
+
+Auth: the configured `SEARCH_LOGS_TOKEN`, in the `X-Logs-Token` header or as
+`?token=` (a browser without the header gets a form). Prefer the header: a URL
+token reaches browser history and access logs.
+
+| status | body | meaning |
+| --- | --- | --- |
+| 200 | HTML | The page. `Cache-Control: no-store`, `X-Robots-Tag: noindex`, a restrictive CSP. |
+| 401 | HTML form | Missing or wrong token (nothing from the log is shown). |
+| 405 | HTML | Not a `GET`. |
+| 500 | HTML | Database error. |
+| 503 | HTML | No `SEARCH_LOGS_TOKEN` configured: the page is off. |
 
 ### `GET /health`
 
@@ -229,6 +261,7 @@ that helps.
 | code | HTTP | endpoints |
 | --- | --- | --- |
 | `invalid_json` | 400 | `/search` |
+| `debug_forbidden` | 403 | `/search` with `"debug"` |
 | `unauthorized` | 401 | `/reload` |
 | `not_found` | 404 | front controller, unknown path |
 | `method_not_allowed` | 405 | all |

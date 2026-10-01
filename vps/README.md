@@ -177,10 +177,15 @@ disabled. `/health` is open but reveals only the model name and vector count.
 
 ## Updating the product vectors
 
-On the GPU machine, alongside the normal release:
+On the GPU machine, alongside the normal release (since M21 the vectors are built
+by default, into `vps_vectors/` next to the zip; `--vps-out DIR` moves them and
+`--no-vps` skips them). The passages now include the product's tags, brand and
+category (tags early), so rebuild the vectors whenever the cPanel catalog is
+rebuilt; `model`, `revision`, `dim`, pooling and prefixes are unchanged, so
+this service's `/reload` accepts them:
 
 ```bash
-EMBEDDER=real python pipeline/release.py --csv export.csv --out release.zip --vps-out ./vps_vectors
+EMBEDDER=real python pipeline/release.py --csv export.csv --out release.zip
 # or only the VPS vectors:
 EMBEDDER=real python pipeline/build.py --csv export.csv --vps-out ./vps_vectors
 ```

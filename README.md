@@ -119,8 +119,9 @@ vendor/bin/phpunit
 
 | endpoint | purpose |
 | --- | --- |
-| `POST /search` | `{q, customer_id?, limit?, with_details?}`, returns ordered `product_ids` + `did_you_mean` / `did_you_mean_applied` (plus `cosine_scores` on hybrid responses, and `products` display fields only with `"with_details": true`). Keyword tier always; hybrid when the configured VPS answers in time. |
+| `POST /search` | `{q, customer_id?, limit?, with_details?, debug?}`, returns ordered `product_ids` + `did_you_mean` / `did_you_mean_applied` (plus `cosine_scores` on hybrid responses, and `products` display fields only with `"with_details": true`). Keyword tier always; hybrid when the configured VPS answers in time. |
 | `GET /health` | Database reachability + live product count, for monitoring. |
+| `GET /logs.php` | M21, read-only, off until `SEARCH_LOGS_TOKEN` is set. Recent searches (newest first, paginated), the zero-result ones, or the slowest; see [Search logs and ranking debug](#logs-debug). |
 | `POST /reload` | Token-protected (`X-Reload-Token`). Validates the staged bundle and swaps it in atomically. With `?load=1` it first loads `data_incoming/products.load.sql` into the staging table itself. |
 
 The exact request/response JSON, headers, status codes, and every error and
@@ -147,6 +148,7 @@ Provide a `.sql` (INSERT statements) or `.csv` with these columns:
 | `url`, `image` | display fields |
 | `attributes` | optional; `name: value` pairs joined with ` \| ` (the export's `GROUP_CONCAT`), see [Specs](#specs-field) |
 | `feature` | optional; `oc_product.feature` exactly as stored (PHP `serialize()` output), see [Specs](#specs-field) |
+| `tags` | optional; the product's `oc_tag.name` values (via `oc_product_tag`) joined with a space, see [Tags, brand and category](#tags-brand-category) |
 
 Deriving it from **OpenCart 2.0.3.1** is step 1 of the
 [deploy runbook](#deploy--update-runbook) below. `build.py` decodes the HTML
@@ -164,6 +166,10 @@ default, so each fits a shared host's `max_allowed_packet`),
 `synonyms.json`, `aliases.json` (the owner's [alias file](#aliases),
 normalized), `spellcheck.txt`, `keymap.json`, and `meta.json`
 (`{model, revision, dim, normalization_version, count, built_at, checksum, embedder}`).
+M21 added the `normalized_tags`, `normalized_brand` and `normalized_category`
+columns to `products.load.sql`; `model`, `dim` and `normalization_version` in
+`meta.json` are unchanged, so both `/reload`s (cPanel and VPS) accept the new
+bundle and only `count` / `checksum` differ.
 
 **Embedding contract (model parity, contract 2).** The semantic tier's model
 is bge-m3 on the VPS: `build.py --vps-out` embeds products with
@@ -173,8 +179,9 @@ queries with the same model, revision, pooling and prefix (`vps/README.md`,
 cPanel bundle's own `vectors.bin` (e5, `"passage: "` prefix) is still built
 and validated on `/reload` (contract 3) but is no longer read by `/search`
 (M18). The passage is a bounded composed field, in priority order
-`title_fa title_en brand category model`, the feature titles, the attribute
-values, then the truncated `desc` (at most `SEARCH_DESC_CHAR_LIMIT`), all within
+`title_fa title_en tags brand category model` (tags early since M21), the
+feature titles, the attribute values, then the truncated `desc` (at most
+`SEARCH_DESC_CHAR_LIMIT`), all within
 `SEARCH_PASSAGE_CHAR_LIMIT` characters (default 1000): the description gives
 way first, then the tail of the specs. With the real e5 tokenizer a
 1000-character passage measured at most 349 tokens on realistic text and 417
@@ -366,6 +373,52 @@ The weight is a starting point and needs tuning on the real catalog. Needs a
 rebuild + reload (new column and FULLTEXT index); until then the live table has
 no specs and search runs on title and description as before.
 
+<a id="tags-brand-category"></a>**Tags, brand and category (M21).** Three more
+searched fields, wired through every layer rather than added as a lone column.
+
+*Where tags come from.* The store's custom tables, not
+`oc_product_description.tag`: `oc_tag(tag_id, name, meta_description,
+meta_keyword)` and the join `oc_product_tag(product_id, tag_id)`. The export
+adds one correlated-subquery column, `tags` (the distinct `oc_tag.name` values
+of the product joined with a space, see step 1 below). Tags are often franchise
+or alternate product names ("Assassins Creed Origins", "No Mans Sky"), so they
+are a high-value relevance signal, but the table is noisy (duplicate names,
+test rows such as "test"). `build.py` cleans at build time: trims, collapses
+whitespace, drops empties and 1-character tokens (a lone digit stays: "Fallout
+4"). Because the export joins names with a space, tag boundaries are gone, so
+the cleaner does not de-duplicate tokens (that would break the adjacent words
+of a multi-word tag); the export's `DISTINCT` already removes repeated names.
+
+*What changed:*
+
+| layer | change |
+| --- | --- |
+| schema | `normalized_tags`, `normalized_brand`, `normalized_category` columns, in the FULLTEXT index `(title, tags, brand, category, specs, desc)` |
+| `normalize.py` / `Normalizer.php` | tags use the **same** rules (shared fixture cases `tags:*`); `normalization_version` is **not** bumped (no rule changed) |
+| `build.py` | normalizes tags, brand and category into the load file; the embedding passage is `title tags brand category model features attributes desc` (tags early) |
+| `keyword.py` | tag words feed the `spellcheck.txt` dictionary, so "did you mean" learns franchise names (synonyms stay model/category based: tags carry no language pairing) |
+| `Keyword.php` | each query token not in the title but in tags / brand / category / specs earns that field's weight: `SEARCH_TAG_WEIGHT` 8 (just below the title's 10), `SEARCH_BRAND_WEIGHT` 7, `SEARCH_SPEC_WEIGHT` 6, `SEARCH_CATEGORY_WEIGHT` 5, description 1; a match in any of them (none in the title) ranks above every description-only row. A hit with every term in title **or tags** is a *name* match (`name_all`), solid for the hybrid floor |
+| `Ranker.php` | three small boosts after the floor, below |
+
+*Ranking boosts (hybrid mode only; keyword-only order comes from the field
+weights above).* Applied after the relevance floor, multiplying the relevance
+like stock and popularity: `score = relevance × (1 + stock + popularity +
+brand + category + tag)`. A boost can reorder close candidates but never admits
+a candidate the floor dropped, so a brand cannot flood unrelated results.
+
+| config / env | default | fires when |
+| --- | --- | --- |
+| `brand_match_boost` / `SEARCH_BRAND_MATCH_BOOST` | 0.15 | every word of the product's brand is in the query **or in one of its alias / synonym variants**. A Persian query meets a Latin brand name through [`aliases.json`](#aliases): add `["سامسونگ", "samsung"]` for "اس اس دی سامسونگ" |
+| `category_match_boost` / `SEARCH_CATEGORY_MATCH_BOOST` | 0.1 | every word of the product's category name is in the query (or a variant) |
+| `tag_match_boost` / `SEARCH_TAG_MATCH_BOOST` | 0.1 | a query of at least `tag_match_min_tokens` (`SEARCH_TAG_MATCH_MIN_TOKENS`, 2) words is a contiguous phrase inside the product's tags. One word is excluded: the keyword tier already credits it through `tag_weight` (no double count) |
+
+Needs a rebuild + reload (new columns and index); until then the live table has
+none of them and `/search` runs as before (the keyword tier and the signals
+query fall back on the missing columns). Brand and category match their whole
+exported name, so a category exported as "A / B" (several categories joined)
+matches only when all its words are in the query. All weights are starting
+points that need tuning on the real catalog.
+
 **Description index cap and gate (M11).** Only the first
 `SEARCH_DESC_INDEX_CHARS` (default 800 since M15, 400 before; or
 `release.py --desc-index-chars N`; cut back to a word boundary) characters
@@ -400,11 +453,43 @@ semantic-only neighbours are subject to the floor. A weak hit is capped at 0.4,
 below the floor, so "بلبرینگ" no longer returns power supplies whose specs
 mention "ball bearing" (high keyword, ~zero cosine). Consequence: a query whose
 hits are all weak and which the VPS finds nothing close to returns nothing.
+Since M21 the same call also applies the brand / category / tag match boosts
+(see [Tags, brand and category](#tags-brand-category)) and a hit with every term
+in the title **or tags** counts as solid.
 `SEARCH_SEMANTIC_TOP_K` defaults to 300 (VPS cap 500) so fewer legitimate
 products are missed. These values are untested on the real catalog and **need
 tuning on real queries**. Unchanged: exact-SKU hits are pinned first, the
 `require_all_terms` candidate filter, and the VPS-down keyword-only fallback
 (keyword order, no floor).
+
+<a id="logs-debug"></a>**Search logs and ranking debug (M21).** Every `/search`
+writes exactly one `search_logs` row: `ts`, `raw_q`, `normalized_q`,
+`had_vector`, `result_count`, `top_ids` (the first ten), `customer_id`,
+`latency_ms`, `did_you_mean` (the suggestion offered or applied) and `tier`
+(`keyword_only` or `hybrid`; `hybrid` = the VPS answered in time). Over-long
+queries are truncated to 512 characters, and a failed write (missing table, a
+rejected value) is logged with `error_log` and **never** fails the search.
+
+`public/logs.php` (`GET /logs.php`, English UI) shows the table read-only:
+**Recent** (newest first), **Zero results** (the gaps worth fixing: add aliases,
+tags or synonyms for them) and **Slowest**, paginated
+(`SEARCH_LOGS_PAGE_SIZE`, 50). It is off until `SEARCH_LOGS_TOKEN` is set. Send
+the token in the `X-Logs-Token` header or open `/logs.php?token=…` (a form asks
+for it otherwise); a URL token ends up in the browser history and the host's
+access log, so prefer the header and rotate the token if a link leaks. The page
+sends `no-store`, `noindex` and a restrictive CSP, escapes every value, and runs
+only `SELECT`s.
+
+`POST /search` with `"debug": 1` and the header `X-Debug-Token:
+$SEARCH_DEBUG_TOKEN` (off until that is set; `403 debug_forbidden` otherwise)
+adds `debug: {tier, settings, results[]}` to the response: per result its rank,
+keyword hit (match type, score, whether the title / a structured field / a name
+matched), whether it was pinned by an exact SKU, and, for hybrid results, the
+blend: raw and normalized keyword score, cosine and normalized cosine, the
+blended relevance, every boost (`stock`, `popularity`, `brand`, `category`,
+`tag`) and the final score. The breakdown is computed for that response only
+and is never written to the log. The search test page shows it under each card
+when opened as `test.html?debug` and given the token.
 
 **Tuning.** Every knob above lives in `server/config.php` (`search` section) or
 the matching `SEARCH_*` environment variable; a `config.php` copied before M9
@@ -499,7 +584,7 @@ the form. No config file editing, no separate model upload, no SSH needed.
    with the VPS vectors from the same export. This one command is all the
    first deploy needs:
    ```bash
-   python pipeline/release.py --csv export.csv --out release.zip --vps-out ./vps_vectors
+   python pipeline/release.py --csv export.csv --out release.zip
    ```
    Set up the VPS and load `./vps_vectors` there as described in
    [`vps/README.md`](./vps/README.md) (it can also come later: until then,
@@ -616,7 +701,13 @@ SELECT
           ON ad.attribute_id = pa.attribute_id AND ad.language_id = @fa
         WHERE pa.product_id = p.product_id
     ), '')                                                    AS attributes,
-    COALESCE(p.feature, '')                                   AS feature
+    COALESCE(p.feature, '')                                   AS feature,
+    COALESCE((
+        SELECT GROUP_CONCAT(DISTINCT t.name SEPARATOR ' ')
+        FROM oc_product_tag pt
+        JOIN oc_tag t ON t.tag_id = pt.tag_id
+        WHERE pt.product_id = p.product_id
+    ), '')                                                    AS tags
 FROM oc_product p
 JOIN oc_product_to_store ps ON ps.product_id = p.product_id AND ps.store_id = 0
 LEFT JOIN oc_product_description d_fa
@@ -655,6 +746,15 @@ Notes on the query:
 - `feature` is this shop's `oc_product.feature` column (not in stock OpenCart),
   exported untouched: `build.py` unserializes it (see [Specs](#specs-field)).
   Do not edit or re-encode it; PHP's byte counts must stay valid.
+- `tags` (M21) is the product's tag names from this shop's custom tables:
+  `oc_tag.name` through `oc_product_tag`, a correlated subquery so it cannot
+  multiply rows with the `attributes` subquery. It needs the `SET SESSION
+  group_concat_max_len` line like `attributes`. The `COALESCE` keeps products
+  without tags out of phpMyAdmin's literal `NULL` (`build.py` also treats a
+  bare `NULL` as empty). `oc_tag` is language-agnostic and noisy (about 2,200
+  rows, duplicate names, test rows); the cleaning is described under
+  [Tags, brand and category](#tags-brand-category). An older export without the
+  column still builds (no tags).
 - HTML escaping (`&lt;p&gt;`, `&amp;quot;`) and tags are left as stored.
   `build.py` decodes and strips them.
 
@@ -669,16 +769,20 @@ phpMyAdmin and mysqldump write.
 
 ```bash
 pip install -r pipeline/requirements.txt 'sentence-transformers>=2.2'   # once
-python pipeline/release.py --csv export.csv --out release.zip --vps-out ./vps_vectors
-# -> Built VPS vectors in ./vps_vectors: <count> products, BAAI/bge-m3, dim 1024, embedder real
+python pipeline/release.py --csv export.csv --out release.zip
+# -> Built VPS vectors in <dir>/vps_vectors: <count> products, BAAI/bge-m3, dim 1024, embedder real
 # -> Built release.zip: <count> products, dim 384, embedder real, <n> files
+# -> (then the copy-paste deploy commands for both hosts)
 ```
 
 The release carries no browser model (M18); `--no-model` is still accepted and
-does nothing. `--vps-out DIR` writes the VPS's bge-m3 product vectors from the
-same export; upload and reload them on the VPS ([`vps/README.md`](./vps/README.md),
-"Updating the product vectors") together with the cPanel deploy below, so both
-hosts serve the same catalog.
+does nothing. One run builds both artifacts from the same export (tags, brand
+and category in both): `release.zip` for cPanel and, since M21 by default, the
+VPS's bge-m3 product vectors in `vps_vectors/` next to the zip (`--vps-out DIR`
+moves them, `--no-vps` skips them). Upload and reload the vectors on the VPS
+([`vps/README.md`](./vps/README.md), "Updating the product vectors") together
+with the cPanel deploy below, so both hosts serve the same catalog. The command
+ends by printing the exact commands for both targets.
 
 `--desc-index-chars N` sets how many leading description characters are
 keyword-indexed (default `SEARCH_DESC_INDEX_CHARS`, else 800; 0 = the whole
@@ -686,7 +790,7 @@ description). It only affects the build; to change it, build and deploy a new
 release. `--aliases FILE` ships another [alias file](#aliases) instead of
 `pipeline/aliases.json`.
 
-On Windows: `pipeline\release.bat --csv export.csv --out release.zip --vps-out vps_vectors`
+On Windows: `pipeline\release.bat --csv export.csv --out release.zip`
 (same arguments). The command builds the bundle with the **real** embedder
 (whatever `EMBEDDER` says; `--mock` exists for tests only) and packs one
 `release.zip`, laid out relative to the host's `server/` directory:
@@ -761,6 +865,60 @@ simply skipped until the reload. A table from before M13 lacks
 reload (also after a rollback to such a table). A table from before M15 lacks
 the `idx_title_scan` index: synonym / alias expansion is then skipped (the
 literal query is still served) until the reload.
+
+<a id="upgrading-to-m21"></a>**Upgrading to M21 (tags, brand and category, logs).**
+`normalization_version`, the models and the dimensions are unchanged, so the new
+bundle passes both reloads (only `count` and `checksum` differ). The order is
+export, build, deploy both hosts:
+
+```bash
+# 1. In phpMyAdmin run the export query of step 1 (it now ends with the `tags`
+#    column) and save export.csv. Then, on the GPU machine, one command:
+python pipeline/release.py --csv export.csv --out release.zip
+# -> release.zip and vps_vectors/ (bge-m3 vectors) from the same export
+
+# 2. cPanel (SSH; without it, File Manager: upload release.zip, Extract, overwrite)
+cd ~/search-service/server && unzip -o ~/release.zip
+curl -sS -X POST -H "X-Reload-Token: $SEARCH_RELOAD_TOKEN" \
+     "https://shop.example.com/search-api/reload.php?load=1"
+# {"ok":true,"count":20000,"model":"intfloat/multilingual-e5-small","dim":384}
+
+# 3. VPS (any order relative to step 2; both hold the same catalog afterwards)
+rsync -a --delete ./vps_vectors/ root@vps:/var/lib/search-vectors/incoming/
+ssh root@vps chown -R searchvec: /var/lib/search-vectors/incoming
+curl -s -X POST https://vsearch.example.com/reload -H "Authorization: Bearer $VPS_TOKEN"
+# {"ok":true,"count":20000,"model":"BAAI/bge-m3","built_at":"..."}
+```
+
+Between the unzip and the reload the new code serves the old table: a table
+from before M21 has no `normalized_tags` / `normalized_brand` /
+`normalized_category`, so the keyword tier searches without them and the match
+boosts are off until the reload. `search_logs` is not part of the swap: the first search after the
+upgrade adds its two new columns (`did_you_mean`, `tier`) with one `ALTER TABLE`;
+if the database user may not alter, run it yourself (and logging keeps working
+on the old columns meanwhile):
+
+```sql
+ALTER TABLE search_logs
+    ADD COLUMN did_you_mean VARCHAR(512) DEFAULT NULL,
+    ADD COLUMN tier VARCHAR(16) NOT NULL DEFAULT 'keyword_only';
+```
+
+To use the new tooling add to `config.php` (or the environment) a
+`SEARCH_LOGS_TOKEN` and, for the score breakdown, a `SEARCH_DEBUG_TOKEN`: long
+random values, different from each other and from the reload token. New
+ranking keys (`tag_weight`, `brand_weight`, `category_weight`,
+`brand_match_boost`, `category_match_boost`, `tag_match_boost`,
+`tag_match_min_tokens`) default in code, so an older `config.php` keeps
+working; see `config.example.php` to change them. Add the brand pairs your
+shoppers type in the other script to `pipeline/aliases.json` before building
+(`["سامسونگ", "samsung"]`).
+
+**Memory note.** The keyword tier reads each matching row's text columns, so the
+table plus its FULLTEXT index should fit the host's `innodb_buffer_pool_size`.
+In the latency guard a table a little over the default 128 MB pool took ~300 ms
+per query instead of ~50 ms (page reads, not CPU). Check the real catalog's
+`information_schema.tables` size against the pool.
 
 <a id="upgrading-to-m15"></a>**Normalization version upgrades (M15.1).**
 A release that changes the normalization rules (M15's Roman numerals made it
@@ -859,6 +1017,12 @@ M0–M5. Verify each item on the production host before wide rollout.
   1) with `server/tools/eval.php` on real attribute / feature queries (brands,
   refresh rates, sizes). Check the build's malformed-`feature` warning count on
   the real export, and that `attributes` is not cut at 1024 bytes.
+- [ ] Tune the M21 weights on real queries (`tag_weight`, `brand_weight`,
+  `category_weight`, `brand_match_boost`, `category_match_boost`,
+  `tag_match_boost`) with the eval harness and the score breakdown (`debug`);
+  check that tags (noisy: duplicate and test names) help more than they hurt,
+  that the brand pairs shoppers use across scripts are in `aliases.json`, and
+  that the table and its FULLTEXT index fit `innodb_buffer_pool_size`.
 - [ ] Keyboard-layout recovery covers the common US→Persian keys only (M2), and
   synonyms and spelling are untuned. Review `search_logs` zero-result queries
   after launch; name variants found there go into `pipeline/aliases.json`.
@@ -969,6 +1133,7 @@ M0–M5. Verify each item on the production host before wide rollout.
 - [ ] **M16** — Multi-word queries require every word across title, specs and description (per alias variant), ranked title band, spec band (no title match), description-only, then score; best-partial fallback when nothing holds every word; semantic neighbours not appended to all-words hits (`SEARCH_REQUIRE_ALL_TERMS`, default on).
 - [ ] **M18** — Semantic tier from the VPS: `/search` POSTs the query server-to-server to the VPS `/search-vectors` (`SEARCH_VPS_URL` / `_TOKEN` / `_TIMEOUT_MS`, `min_score` = the cPanel floor, now 0.4 for bge-m3), RRF-merges the neighbours as before, and falls back to logged keyword-only results when the VPS is off, down, slow or failing. The browser model is gone (`client/`, `fetch_web_model.py`, the model in `release.zip`, `q_vector`); the test page and storefront snippet send only `{q}`.
 - [ ] **M20** — Blended hybrid ranking: relevance = keyword_weight × keyword_norm + semantic_weight × semantic_norm with a combined floor (`SEARCH_KEYWORD_WEIGHT` / `_SEMANTIC_WEIGHT` / `_MIN_RELEVANCE`); replaces the keyword-first tiers, RRF and the description-only gate. Server-only.
+- [ ] **M21** — Catalog tags (`oc_tag` / `oc_product_tag`, exported as `tags`) end to end: `normalized_tags` in the FULLTEXT index (weighted just below the title) and the embedding passage, learned by "did you mean"; brand and category as searched fields (`normalized_brand`, `normalized_category`) with config-driven weights; brand / category / tag-phrase ranking boosts after the floor; `search_logs` gains `did_you_mean` and `tier`; read-only token-protected `logs.php` (recent, zero-result, slowest); token-guarded `debug` score breakdown on `/search`; `release.py` also builds the VPS vectors and prints the deploy commands for both hosts. `normalization_version`, model and dim unchanged.
 
 
 ## Contributing

@@ -78,13 +78,15 @@ abstraction layers.
 │   │   ├── index.php             # front controller / router
 │   │   ├── search.php            # POST /search
 │   │   ├── health.php            # GET /health
-│   │   └── reload.php            # POST /reload (token-protected, atomic swap)
+│   │   ├── reload.php            # POST /reload (token-protected, atomic swap)
+│   │   └── logs.php              # GET /logs.php (M21: token-protected, read-only search_logs view)
 │   ├── src/
 │   │   ├── Normalizer.php         # MUST mirror pipeline/normalize.py exactly
 │   │   ├── Keyword.php            # FULLTEXT + fuzzy + keymap + did-you-mean
 │   │   ├── VpsClient.php          # server-to-server call to the VPS /search-vectors
 │   │   ├── Ranker.php             # hybrid merge + business ranking
-│   │   ├── Logger.php             # search logs
+│   │   ├── Logger.php             # search logs (incl. did_you_mean, tier)
+│   │   ├── LogsPage.php           # read-only search_logs view for logs.php (M21)
 │   │   └── Db.php                 # thin PDO wrapper
 │   ├── config.php                # reads from env; config.example.php committed
 │   ├── data/                      # active bundle (gitignored)
@@ -129,7 +131,10 @@ Breaking any of these produces silently wrong results. Enforce each with a test.
 - `vectors.idx` — UTF-8 text, one `product_id` per line, line order == row order
   in `vectors.bin`.
 - `products.load.sql` — INSERT/REPLACE rows for the `products` table (normalized
-  title/desc + brand, category, model, price, stock, url, image, popularity).
+  title/desc/specs/tags + brand, category, model, price, stock, url, image,
+  popularity). Tags (M21) are the store's `oc_tag` names via `oc_product_tag`
+  (export column `tags`); tags, brand and category are FULLTEXT-searched fields
+  with their own weights.
 - `synonyms.json`, `aliases.json` (owner-maintained, M15), `spellcheck.txt`,
   `keymap.json`.
 - `meta.json` — see contract 3.
@@ -155,10 +160,13 @@ Request: `{ "q": string, "customer_id"?: string, "limit"?: int }` (a legacy
    (`semantic_min_score`, sent as `min_score` and re-applied). Do NOT
    introduce a daemon or external engine on cPanel.
 5. Ranker.php: hybrid merge (keyword + semantic) + business ranking
-   (stock, popularity).
+   (stock, popularity) + small match boosts after the floor (brand, category,
+   tag phrase; M21, all config-driven).
 6. Logger.php: write one row to `search_logs`
    (ts, raw_q, normalized_q, had_vector, result_count, top_ids, customer_id,
-   latency_ms).
+   latency_ms, did_you_mean, tier). A log failure never fails the search.
+   `debug=1` (token-guarded) returns the per-result score breakdown, never
+   logged; `logs.php` (token-guarded, read-only) shows the log.
 7. Return ordered `product_id`s + the "did you mean" suggestion.
 
 If the VPS is not configured, unreachable, times out or errors, return Tier 1
@@ -253,6 +261,12 @@ wait for review before starting the next.
   browser embedder and `Vectors.php` are gone.)
 - **M5 — Integration + docs:** `INTEGRATION.md` (HTTP contract + minimal
   storefront JS with keyword-only fallback), finalized `README.md`.
+- **M21 — Catalog tags + category/brand ranking + log inspection:** tags
+  end to end (export, schema, build, passage, spellcheck, keyword search),
+  brand/category as searched fields and ranking boosts, `search_logs` columns,
+  `logs.php`, the `debug` breakdown, and a `release.py` that builds the cPanel
+  zip and the VPS vectors in one command. `normalization_version`, model and
+  dim unchanged (no rule changed).
 
 **Definition of Done (per PR):** code + tests pass in CI; docs updated;
 KISS respected (no unused abstraction); PR description complete; no secrets or

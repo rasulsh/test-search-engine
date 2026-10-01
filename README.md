@@ -291,7 +291,13 @@ variants' hits merge into it by the same title / spec / description bands.
 All variants share one extra scan of a covering title index
 (`idx_title_scan`), whatever their number; `SEARCH_ALIAS_MAX_VARIANTS`
 (default 6, the literal query included; 1 turns expansion off) caps how many
-are tried. List every
+are tried. Brands go
+in the same file, one group per brand: the **exact `oc_manufacturer.name`**
+first (trailing space included, e.g. `"Nanoleaf "`), then the spellings
+shoppers type (`["Samsung", "سامسونگ"]`), so the brand-match boost fires for a
+Persian query. Keep one brand per group, and add a variant to its existing
+group rather than a second group; the same Persian word may head several
+brands (`سونی` is in both Sony groups) and each is tried as a variant. List every
 spelling shoppers type: normalization removes the half-space, so `پلی‌استیشن`
 and `پلی استیشن` are two different terms. To change the aliases: edit the
 file, build a release, deploy and reload as for a catalog update. The build

@@ -10,6 +10,7 @@ from pathlib import Path
 
 import pytest
 
+import config as pipeline_config
 import release
 from normalize import NORMALIZATION_VERSION
 
@@ -185,3 +186,58 @@ def test_windows_wrapper_forwards_arguments() -> None:
     bat = (REPO_ROOT / "pipeline" / "release.bat").read_text(encoding="utf-8")
     assert 'python "%~dp0release.py" %*' in bat
     assert "exit /b %ERRORLEVEL%" in bat
+
+
+def test_one_command_builds_the_zip_and_the_vps_vectors(tmp_path: Path, dev_tree: Path) -> None:
+    # M21: the VPS vectors come from the same run and export (so tags, brand and
+    # category reach both tiers), next to the zip unless --vps-out says otherwise.
+    _release(tmp_path, dev_tree)
+
+    vps = tmp_path / "out" / "vps_vectors"
+    assert sorted(p.name for p in vps.iterdir()) == ["meta.json", "vectors.bin", "vectors.idx"]
+    vps_meta = json.loads((vps / "meta.json").read_text(encoding="utf-8"))
+    with zipfile.ZipFile(tmp_path / "out" / "release.zip") as archive:
+        meta = json.loads(archive.read("data_incoming/meta.json"))
+        bundle_ids = archive.read("data_incoming/vectors.idx").decode("utf-8")
+        assert not any("vps" in n for n in archive.namelist())
+    assert vps_meta["count"] == meta["count"] == 6
+    assert (vps / "vectors.idx").read_text() == bundle_ids  # the same products, same row order
+
+
+def test_no_vps_skips_the_vectors_and_the_flags_conflict(tmp_path: Path, dev_tree: Path) -> None:
+    _release(tmp_path, dev_tree, "--no-vps")
+    assert not (tmp_path / "out" / "vps_vectors").exists()
+
+    with pytest.raises(SystemExit) as exc:
+        _release(tmp_path, dev_tree, "--no-vps", "--vps-out", str(tmp_path / "x"))
+    assert exc.value.code == 2
+
+
+def test_release_prints_copy_paste_deploy_steps_for_both_targets(
+    tmp_path: Path, dev_tree: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _release(tmp_path, dev_tree)
+    text = capsys.readouterr().out
+
+    assert "reload.php?load=1" in text and "X-Reload-Token" in text  # cPanel /reload
+    assert "rsync -a --delete" in text and "/var/lib/search-vectors/incoming/" in text
+    assert "https://VPS_HOST/reload" in text and "Authorization: Bearer $VPS_TOKEN" in text
+
+    _release(tmp_path, dev_tree, "--no-vps")
+    assert "skipped (--no-vps)" in capsys.readouterr().out
+
+
+def test_release_bundle_stays_reload_compatible_with_the_live_server(
+    tmp_path: Path, dev_tree: Path
+) -> None:
+    # M21 adds fields, not rules: the keys /reload checks (model, dim,
+    # normalization_version) are what config.example.php and the pre-M21
+    # releases carry; only count and checksum differ between catalogs.
+    _release(tmp_path, dev_tree)
+    with zipfile.ZipFile(tmp_path / "out" / "release.zip") as archive:
+        meta = json.loads(archive.read("data_incoming/meta.json"))
+    config = pipeline_config.load()["model"]
+
+    assert (meta["model"], meta["dim"], meta["revision"]) == (
+        config["name"], config["dim"], config["revision"])
+    assert meta["normalization_version"] == NORMALIZATION_VERSION == 3

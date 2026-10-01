@@ -57,7 +57,7 @@ _kw_spec.loader.exec_module(_keyword)
 INPUT_COLUMNS = (
     "id", "title_fa", "title_en", "desc", "brand", "category",
     "model", "sku", "price", "stock", "url", "image", "popularity",
-    "attributes", "feature",
+    "attributes", "feature", "tags",
 )
 
 # GROUP_CONCAT separator of the `attributes` export column (README, step 1).
@@ -65,7 +65,8 @@ ATTRIBUTE_SEPARATOR = " | "
 
 _SERVER_COLUMNS = (
     "product_id", "title", "description", "normalized_title", "normalized_desc",
-    "normalized_specs", "brand", "category", "model", "sku", "normalized_sku",
+    "normalized_specs", "normalized_tags", "normalized_brand", "normalized_category",
+    "brand", "category", "model", "sku", "normalized_sku",
     "price", "stock", "url", "image", "popularity",
 )
 
@@ -83,7 +84,7 @@ def read_products(path: str | Path) -> list[dict[str, Any]]:
     return [_clean_row(row) for row in rows]
 
 
-_TEXT_COLUMNS = ("title_fa", "title_en", "desc", "brand", "category", "model", "sku")
+_TEXT_COLUMNS = ("title_fa", "title_en", "desc", "brand", "category", "model", "sku", "tags")
 _TAG = re.compile(r"<[^>]*>")
 _SPACE = re.compile(r"\s+")  # str.isspace() set: ZWNJ is NOT whitespace, so it survives
 
@@ -153,6 +154,24 @@ def _titles(data: Any) -> list[str]:
         else:
             found.extend(_titles(value))
     return found
+
+
+def clean_tags(raw: str | None) -> str:
+    """Tag names of a product as one space-joined string (the `tags` export
+    column: DISTINCT oc_tag.name values, README step 1).
+
+    Trims, collapses whitespace and drops empties and 1-character tokens. The
+    export joins names with a space, so tag boundaries are gone: a digit stays
+    even when alone ("Fallout 4" must keep its 4) and tokens are not
+    de-duplicated, which would break the adjacent words of a multi-word tag
+    that the server's tag-phrase boost matches. The export's DISTINCT already
+    removes repeated names. A bare NULL (phpMyAdmin's CSV text for a product
+    without tags) is empty, not a tag.
+    """
+    text = clean_text(raw) or ""
+    if text.upper() == "NULL":
+        return ""
+    return " ".join(t for t in _SPACE.split(text) if len(t) > 1 or t.isdigit())
 
 
 def compose_specs(product: dict[str, Any]) -> str:
@@ -269,8 +288,9 @@ def _finalize_field(raw: str, quoted: bool) -> str | None:
 def compose_passage(
     product: dict[str, Any], desc_char_limit: int, passage_char_limit: int = 0
 ) -> str:
-    """Bounded field embedded per product, in priority order: titles, brand,
-    category, model, feature titles, attribute values, then a truncated
+    """Bounded field embedded per product, in priority order: titles, tags
+    (franchise / alternate names, so they sit early), brand, category, model,
+    feature titles, attribute values, then a truncated
     description. At most passage_char_limit characters (0 = no cap) so it stays
     within the model's token limit: the description gives way first, then the
     tail of the specs. RAW text (not normalized), so the M4 client can embed
@@ -278,6 +298,7 @@ def compose_passage(
     parts = [
         product.get("title_fa"),
         product.get("title_en"),
+        clean_tags(product.get("tags")),
         product.get("brand"),
         product.get("category"),
         product.get("model"),
@@ -315,6 +336,7 @@ def to_server_row(product: dict[str, Any], desc_index_chars: int = 0) -> dict[st
     description = str(product.get("desc") or "")
     sku = str(product.get("sku") or "")
     normalized_sku = normalize_sku(sku)
+    tags = clean_tags(product.get("tags"))
     return {
         "product_id": int(product["id"]),
         "title": title,
@@ -325,6 +347,12 @@ def to_server_row(product: dict[str, Any], desc_index_chars: int = 0) -> dict[st
         "normalized_desc": normalize(index_description(description, desc_index_chars)),
         # Not capped like the description: specs are the high-signal text.
         "normalized_specs": normalize(compose_specs(product)),
+        # M21: tags, brand and category are searchable fields of their own.
+        "normalized_tags": normalize(tags),
+        "normalized_brand": normalize(str(product.get("brand") or "")),
+        "normalized_category": normalize(str(product.get("category") or "")),
+        # Cleaned, not normalized: feeds the spellcheck dictionary only (not a column).
+        "tags": tags,
         "brand": str(product.get("brand") or ""),
         "category": str(product.get("category") or ""),
         "model": str(product.get("model") or ""),

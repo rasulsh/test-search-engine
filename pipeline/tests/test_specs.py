@@ -139,6 +139,10 @@ def test_bundle_carries_specs_and_reports_malformed_features(
     build.build_bundle(products, tmp_path, config)
     load_sql = (tmp_path / "products.load.sql").read_text(encoding="utf-8")
     assert "normalized_specs MEDIUMTEXT" in load_sql
-    fulltext = "FULLTEXT KEY ft_normalized (normalized_title, normalized_specs, normalized_desc)"
+    fulltext = (
+        "FULLTEXT KEY ft_normalized (\n"
+        "        normalized_title, normalized_tags, normalized_brand, normalized_category,\n"
+        "        normalized_specs, normalized_desc\n    )"
+    )
     assert fulltext in load_sql
     assert "'" + rows[2005]["normalized_specs"] + "'" in load_sql

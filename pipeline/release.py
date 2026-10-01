@@ -1,7 +1,7 @@
 """One-command release: catalog export in -> a single deployable release.zip.
 
     python pipeline/release.py --csv export.csv --out release.zip
-        [--desc-index-chars N] [--aliases aliases.json] [--vps-out DIR]
+        [--desc-index-chars N] [--aliases aliases.json] [--vps-out DIR | --no-vps]
 
 Builds the bundle with the real embedder and packs, relative to the host's
 `server/` directory, everything the site needs:
@@ -12,8 +12,10 @@ Builds the bundle with the real embedder and packs, relative to the host's
 
 No browser model ships (M18): queries are embedded on the VPS.
 
---vps-out DIR also writes the bge-m3 product vectors for the VPS vector service
-(vps/README.md) to DIR; they are not part of release.zip (a different host).
+The same run also writes the bge-m3 product vectors for the VPS vector service
+(vps/README.md), from the same export (tags, brand and category included in the
+embedded passages), to --vps-out DIR (default: vps_vectors/ next to the zip);
+--no-vps skips them. They are not part of release.zip (a different host).
 
 config.php is never packed, so extracting over the server keeps its config.
 First deploy: extract, then open install.php. Updates: extract, then POST
@@ -84,6 +86,31 @@ def write_zip(entries: list[tuple[Path, str]], out: Path) -> None:
     _os.replace(tmp, out)
 
 
+def deploy_help(zip_path: Path, vps_dir: Path | None) -> str:
+    """Copy-paste deploy steps for the artifacts this run produced. Placeholders
+    in capitals are the operator's; nothing here is run by release.py."""
+    lines = [
+        "",
+        f"Deploy 1/2 - cPanel ({zip_path.name}); config.php is never in the zip:",
+        "  First deploy: extract it in the service directory, open install.php in the browser.",
+        f"  Update: unzip -o {zip_path.name} -d SERVICE_DIR   (or use the File Manager)",
+        '          curl -s -X POST "https://YOUR-SITE/SERVICE_PATH/reload.php?load=1" \\',
+        '               -H "X-Reload-Token: $RELOAD_TOKEN"',
+    ]
+    if vps_dir is None:
+        lines.append("Deploy 2/2 - VPS: skipped (--no-vps).")
+    else:
+        lines += [
+            f"Deploy 2/2 - VPS vectors ({vps_dir}):",
+            f"  rsync -a --delete {vps_dir}/ root@VPS:/var/lib/search-vectors/incoming/",
+            "  ssh root@VPS chown -R searchvec: /var/lib/search-vectors/incoming",
+            '  curl -s -X POST https://VPS_HOST/reload -H "Authorization: Bearer $VPS_TOKEN"',
+        ]
+    lines.append("Reload cPanel and the VPS from the same export; either order is safe.")
+
+    return "\n".join(lines)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Build the bundle and pack release.zip.")
     source = parser.add_mutually_exclusive_group(required=True)
@@ -98,8 +125,12 @@ def main(argv: list[str] | None = None) -> int:
                              "Build-time only: the server never re-indexes.")
     parser.add_argument("--aliases", help="Alias file shipped in the bundle (default "
                                           "SEARCH_ALIASES_FILE, else pipeline/aliases.json).")
-    parser.add_argument("--vps-out", metavar="DIR",
-                        help="Also write the VPS product vectors (vps/README.md) to DIR.")
+    vps = parser.add_mutually_exclusive_group()
+    vps.add_argument("--vps-out", metavar="DIR",
+                     help="Write the VPS product vectors (vps/README.md) to DIR (default: "
+                          "vps_vectors/ next to the zip).")
+    vps.add_argument("--no-vps", action="store_true",
+                     help="Build only release.zip, not the VPS vectors.")
     parser.add_argument("--mock", action="store_true",
                         help="Use the mock embedder (tests only; never deploy).")
     parser.add_argument("--server-dir", default=str(REPO_ROOT / "server"), help=argparse.SUPPRESS)
@@ -132,17 +163,15 @@ def main(argv: list[str] | None = None) -> int:
         meta = build.build_bundle(products, tmp, config)
         entries = release_entries(Path(tmp), Path(args.server_dir))
         write_zip(entries, out)
-    if args.vps_out:
-        vps_meta = build.build_vps_vectors(products, args.vps_out, config)
-        print(f"Built VPS vectors in {args.vps_out}: {vps_meta['count']} products, "
+    vps_dir = None if args.no_vps else Path(args.vps_out or out.parent / "vps_vectors").resolve()
+    if vps_dir is not None:
+        vps_meta = build.build_vps_vectors(products, vps_dir, config)
+        print(f"Built VPS vectors in {vps_dir}: {vps_meta['count']} products, "
               f"{vps_meta['model']}, dim {vps_meta['dim']}, embedder {vps_meta['embedder']}")
 
     print(f"Built {out.name}: {meta['count']} products, dim {meta['dim']}, "
           f"embedder {meta['embedder']}, {len(entries)} files")
-    print("Deploy: extract it in the service directory on the host (config.php is "
-          "never in the zip).")
-    print("  First deploy: open install.php in the browser and fill in the form.")
-    print("  Updates: POST reload.php?load=1 with the X-Reload-Token header.")
+    print(deploy_help(out, vps_dir))
     return 0
 
 

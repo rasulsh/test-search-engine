@@ -45,6 +45,17 @@ use PDOException;
  * normalized_specs column: search then runs on title + description as before
  * until the next reload.
  *
+ * Tags, brand, category (M21): oc_tag names (franchise / alternate product
+ * names), the manufacturer and the category are searched fields of their own
+ * (normalized_tags, normalized_brand, normalized_category). A token not in the
+ * title but in one of them is credited that field's weight (tag_weight just
+ * below the title, then brand_weight, category_weight, spec_weight); the
+ * fields rank in that order and, like specs, every row matching in one of them
+ * (and not the title) ranks above every description-only row. A hit holding
+ * every term in title or tags is `name_all`: a name match, as solid as a title
+ * one for the hybrid floor (SearchController). A live table that predates
+ * these columns is searched without them until the next reload.
+ *
  * SKU (M12): shoppers paste product codes. A product whose normalized SKU
  * equals the query's (Normalizer::normalizeSku) ranks first, then SKU prefix
  * matches, above every text match. Prefix matching needs at least
@@ -84,19 +95,28 @@ final class Keyword
     private float $descWeight;
     private float $phraseBonus;
     private int $skuPrefixMinLength;
-    private float $specWeight;
+    /**
+     * Searched columns after the title, best field first, in the order of the
+     * FULLTEXT index definition (db/schema.sql): [column, weight]. Pared down
+     * when the live table predates them (see dropNewestFields()).
+     *
+     * @var list<array{0: string, 1: float}>
+     */
+    private array $fields;
     private ?Synonyms $synonyms;
     private int $maxVariants;
     private bool $requireAllTerms;
     /** False once the live table turned out to predate the idx_title_scan index (M15). */
     private bool $titleIndex = true;
-    /** False once the live table turned out to predate the normalized_specs column. */
-    private bool $specs = true;
 
     public const MATCH_SKU = 'sku';
     public const MATCH_ALIAS = 'alias';
     /** A hit that misses at least one query token (any-terms mode only). */
     public const MATCH_PARTIAL = 'partial';
+    private const TAGS_COLUMN = 'normalized_tags';
+    private const SPECS_COLUMN = 'normalized_specs';
+    /** Columns added in M21; a live table from an older bundle lacks them. */
+    private const M21_COLUMNS = [self::TAGS_COLUMN, 'normalized_brand', 'normalized_category'];
     /** Covering index for the title-only variant scan (db/schema.sql). */
     private const TITLE_INDEX = 'idx_title_scan';
     /** SKU hits outrank any text score (title band tops out near title_weight + phrase_bonus). */
@@ -125,7 +145,10 @@ final class Keyword
         float $specWeight = 6.0,
         ?Synonyms $synonyms = null,
         int $maxVariants = 6,
-        bool $requireAllTerms = true
+        bool $requireAllTerms = true,
+        float $tagWeight = 8.0,
+        float $brandWeight = 7.0,
+        float $categoryWeight = 5.0
     ) {
         $this->pdo = $pdo;
         $this->table = Identifier::quote($productsTable);
@@ -138,10 +161,32 @@ final class Keyword
         $this->descWeight = max(0.0, $descWeight);
         $this->phraseBonus = max(0.0, $phraseBonus);
         $this->skuPrefixMinLength = max(1, $skuPrefixMinLength);
-        $this->specWeight = max(0.0, $specWeight);
+        $this->fields = [
+            [self::TAGS_COLUMN, max(0.0, $tagWeight)],
+            ['normalized_brand', max(0.0, $brandWeight)],
+            ['normalized_category', max(0.0, $categoryWeight)],
+            [self::SPECS_COLUMN, max(0.0, $specWeight)],
+        ];
         $this->synonyms = $synonyms;
         $this->maxVariants = max(1, $maxVariants);
         $this->requireAllTerms = $requireAllTerms;
+    }
+
+    /**
+     * The normalized query's tokens first, then its alias / synonym variants
+     * (the ones {@see search()} also looks up); Ranker's brand / category / tag
+     * boosts match against all of them.
+     *
+     * @return list<list<string>>
+     */
+    public function variants(string $query): array
+    {
+        $tokens = Tokenizer::split(($this->normalize)($query));
+        if ($tokens === []) {
+            return [];
+        }
+
+        return $this->synonyms?->variants($tokens, $this->maxVariants) ?? [$tokens];
     }
 
     public function requiresAllTerms(): bool
@@ -153,7 +198,7 @@ final class Keyword
      * @param bool $allTerms false searches any-terms even when require_all_terms is on
      * @return list<array{
      *     product_id: int, score: float, match_type: string,
-     *     title_match: bool, spec_match: bool, title_all: bool
+     *     title_match: bool, spec_match: bool, title_all: bool, name_all: bool
      * }>
      */
     public function search(string $query, ?int $limit = null, bool $allTerms = true): array
@@ -195,7 +240,7 @@ final class Keyword
      * @param non-empty-list<list<string>> $variants
      * @return list<array{
      *     product_id: int, score: float, match_type: string,
-     *     title_match: bool, spec_match: bool, title_all: bool
+     *     title_match: bool, spec_match: bool, title_all: bool, name_all: bool
      * }>
      */
     private function variantSearch(array $variants, int $limit, bool $allTerms): array
@@ -228,30 +273,54 @@ final class Keyword
      * @param list<string> $tokens
      * @return list<array{
      *     product_id: int, score: float, match_type: string,
-     *     title_match: bool, spec_match: bool, title_all: bool
+     *     title_match: bool, spec_match: bool, title_all: bool, name_all: bool
      * }>
      */
     private function textSearch(array $tokens, int $limit, bool $allTerms): array
     {
-        try {
-            return $this->textSearchOnce($tokens, $limit, $allTerms);
-        } catch (PDOException $e) {
-            // 42S22 (unknown column): the live table predates M13 (between code
-            // upload and reload, or after a rollback). Search it without specs.
-            if (!$this->specs || $e->getCode() !== '42S22') {
-                throw $e;
+        while (true) {
+            try {
+                return $this->textSearchOnce($tokens, $limit, $allTerms);
+            } catch (PDOException $e) {
+                // 42S22 (unknown column): the live table predates M13 (specs) or
+                // M21 (tags, brand, category), e.g. between code upload and
+                // reload, or after a rollback. Search it without those columns.
+                if ($e->getCode() !== '42S22' || !$this->dropNewestFields()) {
+                    throw $e;
+                }
             }
-            $this->specs = false;
-
-            return $this->textSearchOnce($tokens, $limit, $allTerms);
         }
+    }
+
+    /**
+     * Stop searching the newest generation of extra columns: the M21 ones
+     * first, then specs. False when none are left to drop.
+     */
+    private function dropNewestFields(): bool
+    {
+        if ($this->fields === []) {
+            return false;
+        }
+        $older = array_values(array_filter(
+            $this->fields,
+            static fn (array $field): bool => !in_array($field[0], self::M21_COLUMNS, true)
+        ));
+        $this->fields = count($older) === count($this->fields) ? [] : $older;
+
+        return true;
+    }
+
+    /** @return list<string> every searched column, in FULLTEXT index order */
+    private function searchedColumns(): array
+    {
+        return array_merge(['normalized_title'], array_column($this->fields, 0), ['normalized_desc']);
     }
 
     /**
      * @param list<string> $tokens
      * @return list<array{
      *     product_id: int, score: float, match_type: string,
-     *     title_match: bool, spec_match: bool, title_all: bool
+     *     title_match: bool, spec_match: bool, title_all: bool, name_all: bool
      * }>
      */
     private function textSearchOnce(array $tokens, int $limit, bool $allTerms): array
@@ -272,7 +341,7 @@ final class Keyword
      *
      * @return list<array{
      *     product_id: int, score: float, match_type: string,
-     *     title_match: bool, spec_match: bool, title_all: bool
+     *     title_match: bool, spec_match: bool, title_all: bool, name_all: bool
      * }>
      */
     private function skuSearch(string $sku, int $limit): array
@@ -308,6 +377,7 @@ final class Keyword
                 'title_match' => true,
                 'spec_match'  => false,
                 'title_all'   => true,
+                'name_all'    => true,
             ],
             $stmt->fetchAll(PDO::FETCH_ASSOC)
         );
@@ -317,14 +387,13 @@ final class Keyword
      * @param list<string> $tokens
      * @return list<array{
      *     product_id: int, score: float, match_type: string,
-     *     title_match: bool, spec_match: bool, title_all: bool
+     *     title_match: bool, spec_match: bool, title_all: bool, name_all: bool
      * }>
      */
     private function fulltextSearch(array $tokens, int $limit, bool $allTerms): array
     {
         // The column list must equal the FULLTEXT index definition exactly.
-        $match = 'MATCH(' . ($this->specs ? 'normalized_title, normalized_specs, normalized_desc'
-            : 'normalized_title, normalized_desc') . ') AGAINST(? IN BOOLEAN MODE)';
+        $match = 'MATCH(' . implode(', ', $this->searchedColumns()) . ') AGAINST(? IN BOOLEAN MODE)';
         // Prefix-matched, "+word*" when every token is required, else "word*".
         $expr = implode(' ', array_map(
             static fn (string $t): string => ($allTerms ? '+' : '') . $t . '*',
@@ -345,16 +414,14 @@ final class Keyword
      * @param list<string> $tokens
      * @return list<array{
      *     product_id: int, score: float, match_type: string,
-     *     title_match: bool, spec_match: bool, title_all: bool
+     *     title_match: bool, spec_match: bool, title_all: bool, name_all: bool
      * }>
      */
     private function likeSearch(array $tokens, int $limit, bool $allTerms): array
     {
         $clauses = [];
         $params = [];
-        $columns = $this->specs
-            ? ['normalized_title', 'normalized_specs', 'normalized_desc']
-            : ['normalized_title', 'normalized_desc'];
+        $columns = $this->searchedColumns();
         foreach ($tokens as $token) {
             $clauses[] = '(' . implode(' LIKE ? OR ', $columns) . ' LIKE ?)';
             $params = array_merge($params, array_fill(0, count($columns), '%' . $this->escapeLike($token) . '%'));
@@ -375,7 +442,8 @@ final class Keyword
 
     /**
      * Rank the rows matching $where by the field-weighted score: title band,
-     * then spec band (spec match, no title match), then description-only.
+     * then the band of the other structured fields (tags, brand, category,
+     * specs: a match there, none in the title), then description-only.
      * $relevance (the engine's own score, or a constant) only breaks ties
      * between equal field scores, ahead of popularity.
      *
@@ -391,7 +459,7 @@ final class Keyword
      * @param null|array{0: string, 1: list<string>} $termHits
      * @return list<array{
      *     product_id: int, score: float, match_type: string,
-     *     title_match: bool, spec_match: bool, title_all: bool
+     *     title_match: bool, spec_match: bool, title_all: bool, name_all: bool
      * }>
      */
     private function scoredSearch(
@@ -404,22 +472,22 @@ final class Keyword
         string $matchType,
         ?array $termHits = null
     ): array {
-        $titleHits = [];
-        $specHits = [];
+        // One CASE per token names the best field it is found in (1 = title,
+        // 2.. = $this->fields in order, 0 = description only): one regex chain
+        // per token, everything below is arithmetic on these levels. Tokens
+        // hold only letters and digits (Tokenizer), so they are safe inside a
+        // regex and need no escaping; they are still bound.
+        $levels = [];
         $params = $relevanceParams;
-        $specParams = [];
-        foreach ($tokens as $token) {
-            // Tokens hold only letters and digits (Tokenizer), so they are safe
-            // inside a regex and need no escaping; they are still bound.
-            $pattern = self::WORD_START . $token;
-            $titleHits[] = '(normalized_title REGEXP ?)';
-            $params[] = $pattern;
-            if ($this->specs) {
-                $specHits[] = '(CASE WHEN normalized_title REGEXP ? THEN 0 ELSE normalized_specs REGEXP ? END)';
-                array_push($specParams, $pattern, $pattern);
+        foreach ($tokens as $i => $token) {
+            $branches = 'WHEN normalized_title REGEXP ? THEN 1';
+            $params[] = self::WORD_START . $token;
+            foreach ($this->fields as $n => [$column]) {
+                $branches .= " WHEN {$column} REGEXP ? THEN " . ($n + 2);
+                $params[] = self::WORD_START . $token;
             }
+            $levels[] = "CASE {$branches} ELSE 0 END AS lv{$i}";
         }
-        $params = array_merge($params, $specParams);
         $phrase = '0';
         if (count($tokens) > 1) {
             $phrase = '(normalized_title REGEXP ?)';
@@ -434,30 +502,56 @@ final class Keyword
 
         // Weights come from config as floats; inlined in a fixed format.
         $weight = static fn (float $w): string => sprintf('%.6F', $w);
+        $levelWeights = [1 => $this->titleWeight];
+        $tagsLevel = null;
+        foreach ($this->fields as $n => [$column, $fieldWeight]) {
+            $levelWeights[$n + 2] = $fieldWeight;
+            $tagsLevel = $column === self::TAGS_COLUMN ? $n + 2 : $tagsLevel;
+        }
+        $sum = static function (callable $term) use ($count): string {
+            $parts = [];
+            for ($i = 0; $i < $count; $i++) {
+                $parts[] = $term($i);
+            }
+
+            return '(' . implode(' + ', $parts) . ')';
+        };
+        $titleHits = $sum(static fn (int $i): string => "(lv{$i} = 1)");
+        $fieldHits = $sum(static fn (int $i): string => "(lv{$i} > 1)");
+        // Title or tags: the product's names, solid evidence (see title_all).
+        $nameHits = $sum(static fn (int $i): string => "(lv{$i} = 1"
+            . ($tagsLevel === null ? '' : " OR lv{$i} = {$tagsLevel}") . ')');
+        $credit = $sum(static function (int $i) use ($levelWeights, $weight): string {
+            $cases = '';
+            foreach ($levelWeights as $level => $w) {
+                $cases .= " WHEN {$level} THEN " . $weight($w);
+            }
+
+            return "CASE lv{$i}{$cases} ELSE 0 END";
+        });
         // GREATEST: a word-prefix REGEXP and the engine's own match can
         // disagree on an odd token edge; never credit a negative count.
-        $score = '((' . $weight($this->titleWeight) . ' * title_hits + '
-               . $weight($this->specWeight) . ' * spec_hits + '
-               . $weight($this->descWeight) . ' * GREATEST(term_hits - title_hits - spec_hits, 0))'
+        $score = "(({$credit} + " . $weight($this->descWeight)
+               . " * GREATEST(term_hits - {$titleHits} - {$fieldHits}, 0))"
                . " / {$count} + " . $weight($this->phraseBonus) . ' * phrase_hit)';
 
         // The inner LIMIT keeps the derived table from being merged into the
         // outer query (MySQL and MariaDB both materialize a derived table with
-        // a LIMIT); merged, every use of title_hits / spec_hits in the score
-        // and ORDER BY re-ran their REGEXPs, 3x slower with the specs.
-        $sql = "SELECT product_id, title_hits, spec_hits, term_hits < {$count} AS partial, {$score} AS score
+        // a LIMIT); merged, every use of a level in the score and ORDER BY
+        // re-ran its REGEXPs, 3x slower with the specs.
+        $sql = "SELECT product_id, {$titleHits} AS title_hits, {$fieldHits} AS spec_hits,
+                       {$nameHits} AS name_hits, term_hits < {$count} AS partial, {$score} AS score
                 FROM (
                     SELECT product_id, popularity,
                            {$relevance} AS relevance,
-                           (" . implode(' + ', $titleHits) . ") AS title_hits,
-                           (" . ($specHits === [] ? '0' : implode(' + ', $specHits)) . ") AS spec_hits,
+                           " . implode(', ', $levels) . ",
                            {$phrase} AS phrase_hit,
                            {$terms} AS term_hits
                     FROM {$this->table}
                     WHERE {$where}
                     LIMIT " . PHP_INT_MAX . "
                 ) matched
-                ORDER BY term_hits DESC, (title_hits > 0) DESC, (title_hits = 0 AND spec_hits > 0) DESC,
+                ORDER BY term_hits DESC, ({$titleHits} > 0) DESC, ({$titleHits} = 0 AND {$fieldHits} > 0) DESC,
                          score DESC, relevance DESC, popularity DESC, product_id ASC
                 LIMIT " . (int) $limit;
 
@@ -480,7 +574,7 @@ final class Keyword
      * @param list<list<string>> $variants
      * @return list<array{
      *     product_id: int, score: float, match_type: string,
-     *     title_match: bool, spec_match: bool, title_all: bool
+     *     title_match: bool, spec_match: bool, title_all: bool, name_all: bool
      * }>
      */
     private function titleSearch(array $variants, int $limit): array
@@ -542,7 +636,7 @@ final class Keyword
      * @param list<array<string, mixed>> $rows
      * @return list<array{
      *     product_id: int, score: float, match_type: string,
-     *     title_match: bool, spec_match: bool, title_all: bool
+     *     title_match: bool, spec_match: bool, title_all: bool, name_all: bool
      * }>
      */
     private function hydrate(array $rows, string $matchType, int $termCount = 1): array
@@ -555,6 +649,7 @@ final class Keyword
                 'title_match' => (int) $row['title_hits'] > 0,
                 'spec_match'  => (int) $row['spec_hits'] > 0,
                 'title_all'   => (int) $row['title_hits'] >= $termCount,
+                'name_all'    => (int) ($row['name_hits'] ?? $row['title_hits']) >= $termCount,
             ],
             $rows
         );

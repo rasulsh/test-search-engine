@@ -262,6 +262,12 @@
   /* Cosine similarity to the query: a tuning aid, deliberately quiet. */
   .cosine { font-size: 11px; opacity: 0.8; font-variant-numeric: tabular-nums; }
 
+  /* Debug breakdown (?debug in the URL + the server's debug token): a tuning aid. */
+  .debug-bar { margin-top: 10px; font-size: 12px; direction: ltr; }
+  .debug-bar input { padding: 4px 8px; width: 240px; }
+  details.debug { margin-top: 4px; font-size: 11px; direction: ltr; text-align: left; color: var(--muted); }
+  details.debug pre { margin: 4px 0 0; white-space: pre-wrap; font-size: 11px; }
+
   .empty-state {
     margin: 48px auto;
     max-width: 420px;
@@ -304,6 +310,9 @@
              placeholder="نام محصول، برند یا مدل را بنویسید…" aria-label="عبارت جستجو">
       <button id="submit" class="search-button" type="submit">جستجو</button>
     </form>
+    <div id="debug-bar" class="debug-bar" hidden>
+      <label>Debug token <input id="debug-token" type="password" autocomplete="off"></label>
+    </div>
   </header>
 
   <div id="notice" class="notice" role="status" hidden></div>
@@ -345,6 +354,7 @@
     cosine: (score) => `شباهت ${scoreFormat.format(score)}`,
     cosineTitle: 'شباهت کسینوسی به عبارت جستجو',
     noTitle: 'بدون عنوان',
+    debugRejected: 'Debug token rejected by the server (X-Debug-Token).',
   };
 
   const numberFormat = new Intl.NumberFormat('fa-IR');
@@ -357,6 +367,19 @@
   const form = $('search-form');
   const input = $('q');
   const submitButton = $('submit');
+
+  // Score breakdown per result: only when the URL has ?debug, and the server
+  // accepts the token (X-Debug-Token). Shoppers never see the field.
+  const DEBUG_MODE = new URL(location.href).searchParams.has('debug');
+  const debugToken = $('debug-token');
+  if (DEBUG_MODE) {
+    $('debug-bar').hidden = false;
+    try {
+      debugToken.value = sessionStorage.getItem('search-debug-token') ?? '';
+    } catch {
+      // storage can be blocked; the field still works for this page view
+    }
+  }
 
   // ---- Search ------------------------------------------------------------------
   let searchSeq = 0;
@@ -372,15 +395,27 @@
 
     // Only the query: the server adds the semantic tier (via the VPS) when it can.
     const body = { q, limit: LIMIT, with_details: true };
+    const headers = { 'Content-Type': 'application/json' };
+    if (DEBUG_MODE && debugToken.value) {
+      body.debug = 1;
+      headers['X-Debug-Token'] = debugToken.value;
+      try {
+        sessionStorage.setItem('search-debug-token', debugToken.value);
+      } catch {
+        // see above
+      }
+    }
     const start = performance.now();
     let data = null;
+    let debugRejected = false;
     try {
       const res = await fetch(SEARCH_URL, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers,
         body: JSON.stringify(body),
       });
       if (!res.ok) {
+        debugRejected = res.status === 403 && body.debug === 1;
         throw new Error(`search service returned HTTP ${res.status}`);
       }
       data = await res.json();
@@ -394,7 +429,7 @@
     }
     submitButton.disabled = false;
     if (!data) {
-      showNotice(TEXT.serviceError, true);
+      showNotice(debugRejected ? TEXT.debugRejected : TEXT.serviceError, true);
       return;
     }
     render(q, data, { roundTripMs });
@@ -435,7 +470,26 @@
     return node;
   }
 
-  function card(product, cosine) {
+  // One line per component of the ranking, from the server's `debug` block.
+  function debugLines(row) {
+    const hit = row.keyword_hit;
+    const lines = [`rank ${row.rank}${row.pinned ? ' (pinned: exact SKU)' : ''}`];
+    lines.push(hit
+      ? `keyword: ${hit.match_type} score ${hit.score}, title ${hit.title_match}, name_all ${hit.name_all}`
+      : 'keyword: no hit (semantic neighbour)');
+    const blend = row.blend;
+    if (blend) {
+      const k = blend.keyword;
+      const s = blend.semantic;
+      lines.push(`blend keyword ${k.score ?? '-'} (norm ${k.normalized}), `
+        + `semantic ${s.cosine ?? '-'} (norm ${s.normalized}${s.assumed ? ', assumed' : ''}) = ${blend.blended}`);
+      lines.push(`boosts ${Object.entries(blend.boosts).map(([name, v]) => `${name} ${v}`).join(', ')}`);
+      lines.push(`final ${blend.score}`);
+    }
+    return lines;
+  }
+
+  function card(product, cosine, debugRow) {
     const href = safeUrl(product.url, STORE_BASE);
     const link = el(href ? 'a' : 'div', 'card');
     if (href) {
@@ -478,6 +532,11 @@
     link.append(thumb, bodyEl);
     const item = el('li');
     item.append(link);
+    if (debugRow) {
+      const details = el('details', 'debug');
+      details.append(el('summary', null, 'why'), el('pre', null, debugLines(debugRow).join('\n')));
+      item.append(details);
+    }
     return item;
   }
 
@@ -516,7 +575,10 @@
     }
     const products = Array.isArray(data.products) ? data.products : ids.map((id) => ({ id }));
     const results = $('results');
-    results.replaceChildren(...products.map((product) => card(product, cosineById.get(product.id))));
+    const debugById = new Map((data.debug?.results ?? []).map((row) => [row.product_id, row]));
+    results.replaceChildren(
+      ...products.map((product) => card(product, cosineById.get(product.id), debugById.get(product.id))),
+    );
     results.hidden = products.length === 0;
 
     const empty = $('empty');

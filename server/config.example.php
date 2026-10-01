@@ -65,6 +65,15 @@ return [
         // ranks above any description-only match, below any title match; the
         // weight orders rows within the bands. Needs real-catalog tuning.
         'spec_weight'       => (float) $setting('SEARCH_SPEC_WEIGHT', '6.0'),
+        // Tags, brand, category (M21): a token not in the title but in one of
+        // these fields is credited that field's weight, like spec_weight above,
+        // and the fields rank tags > brand > category > specs. tag_weight sits
+        // just below title_weight: tags are franchise / alternate product names.
+        // A match there (and none in the title) still ranks above any
+        // description-only match. Starting points; tune on the real catalog.
+        'tag_weight'        => (float) $setting('SEARCH_TAG_WEIGHT', '8.0'),
+        'brand_weight'      => (float) $setting('SEARCH_BRAND_WEIGHT', '7.0'),
+        'category_weight'   => (float) $setting('SEARCH_CATEGORY_WEIGHT', '5.0'),
         // SKU search (M12): a product whose normalized SKU equals the query
         // ranks first, then SKU prefix matches, above all text matches. Prefix
         // matching needs at least this many characters and a digit in the query.
@@ -125,6 +134,21 @@ return [
         // Light business boosts applied AFTER fusion (kept small on purpose).
         'stock_boost'       => (float) $setting('SEARCH_STOCK_BOOST', '0.1'),
         'popularity_boost'  => (float) $setting('SEARCH_POPULARITY_BOOST', '0.1'),
+        // Match boosts (M21), the same kind as stock / popularity: applied after
+        // the floor, multiplying the blended relevance by (1 + boosts). They
+        // reorder close candidates and never admit a dropped one, so a brand
+        // cannot flood unrelated results. brand_match_boost: all words of the
+        // product's brand are in the query (or in one of its alias / synonym
+        // variants, so a Persian query meets a Latin brand: list the pair in
+        // aliases.json). category_match_boost: likewise for the whole category
+        // name. tag_match_boost: a query of at least tag_match_min_tokens words
+        // is a phrase inside the product's tags; one word is excluded because the
+        // keyword tier already credits it through tag_weight (no double count).
+        // 0 disables a boost. Hybrid mode only (keyword-only is ordered by Keyword).
+        'brand_match_boost'    => (float) $setting('SEARCH_BRAND_MATCH_BOOST', '0.15'),
+        'category_match_boost' => (float) $setting('SEARCH_CATEGORY_MATCH_BOOST', '0.1'),
+        'tag_match_boost'      => (float) $setting('SEARCH_TAG_MATCH_BOOST', '0.1'),
+        'tag_match_min_tokens' => (int) $setting('SEARCH_TAG_MATCH_MIN_TOKENS', '2'),
         // "Did you mean": tried only when the literal query has fewer than
         // suggest_min_results keyword hits, and offered only if the suggestion
         // returns more. Candidates must occur in at least suggest_min_frequency
@@ -156,6 +180,20 @@ return [
         'url'        => $setting('SEARCH_VPS_URL', ''),
         'token'      => $setting('SEARCH_VPS_TOKEN', ''),
         'timeout_ms' => (int) $setting('SEARCH_VPS_TIMEOUT_MS', '300'),
+    ],
+
+    // Read-only tooling (M21), each off until its token is set. `debug`: a
+    // /search request with "debug": 1 and this token in the X-Debug-Token header
+    // gets a per-result score breakdown (never logged). `logs`: public/logs.php,
+    // a read-only page of recent searches, opened with this token (header
+    // X-Logs-Token, or ?token= in the URL). Use long random values and different
+    // ones: they are secrets, keep them in the environment or in config.php.
+    'debug' => [
+        'token' => $setting('SEARCH_DEBUG_TOKEN', ''),
+    ],
+    'logs' => [
+        'token'     => $setting('SEARCH_LOGS_TOKEN', ''),
+        'page_size' => (int) $setting('SEARCH_LOGS_PAGE_SIZE', '50'),
     ],
 
     // Active bundle plus staging directory used for the atomic reload swap.

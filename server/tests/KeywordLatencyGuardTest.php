@@ -38,6 +38,19 @@ use PHPUnit\Framework\Attributes\DataProvider;
  * any-terms fallback, which scores every row holding any word (here the 2600
  * rows of either broad word): timed together on the default bundle shape.
  *
+ * M21: normalized_tags (2-3 words per product, 10% of the catalog holding the
+ * query only there), normalized_brand and normalized_category join the searched
+ * fields, widening both the FULLTEXT index and the per-token REGEXP chain. The
+ * same two measurements (broad keyword query, whole hybrid path) run on that
+ * shape with ~100-word descriptions. With the 300-word descriptions of the
+ * shapes above the M21 data pushed the working set past MariaDB's default
+ * 128 MB InnoDB buffer pool: Innodb_buffer_pool_reads showed ~23k page reads
+ * per four searches and the query took ~300 ms instead of ~50 ms, timing the
+ * disk rather than the query (a full scan of the table, after which the pages
+ * stay cached, brought it back to ~80 ms). Descriptions are therefore shorter
+ * here so the guard measures CPU, and "the working set must fit the host's
+ * innodb_buffer_pool_size" is a production-validation item (README).
+ *
  * M18: the whole /search hybrid path on cPanel (keyword search, parsing the
  * VPS's 100 neighbours, the existence/signals query, RRF fusion, logging) on
  * the default bundle shape, with the VPS answered in-process so the network
@@ -48,6 +61,8 @@ final class KeywordLatencyGuardTest extends DatabaseTestCase
 {
     private const PRODUCTS = 20000;
     private const DESC_WORDS = 300;
+    /** Descriptions of the M21 shapes (see the class docblock). */
+    private const STRUCTURED_DESC_WORDS = 100;
     private const RUNS = 5;
     /** Mirrors the default of desc_index_chars in pipeline/config.py. */
     private const DESC_INDEX_CHARS = 800;
@@ -196,8 +211,90 @@ final class KeywordLatencyGuardTest extends DatabaseTestCase
         self::assertLessThan($budgetMs, $median, 'hybrid /search path exceeded the latency budget');
     }
 
-    private function seedCatalog(int $descIndexChars, bool $withSpecs): void
+    public function testStructuredFieldsBroadQueryStaysWithinBudget(): void
     {
+        $config = require self::repoRoot() . '/server/config.example.php';
+        $budgetMs = (float) $config['search']['latency_budget_ms'];
+        $this->seedCatalog(self::DESC_INDEX_CHARS, true, true);
+        $keyword = new Keyword($this->pdo, 'products', 3, 20, null, 10.0, 1.0, 5.0, 4, 6.0);
+        $query = 'دسته بازی';
+
+        $results = $keyword->search($query); // warm the buffer pool
+        self::assertCount(20, $results);
+        self::assertTrue($results[0]['title_match']);
+        // 800 title rows, then the 2000 tag-only rows (a tag outranks a spec): the
+        // band after the title band is served from tags, and they count as names.
+        $tagged = $keyword->search($query, 1000)[900];
+        self::assertTrue($tagged['spec_match'] && !$tagged['title_match'] && $tagged['name_all']);
+
+        $median = $this->median(static fn () => $keyword->search($query));
+        fwrite(STDERR, sprintf(
+            "\n[keyword guard] %d products, ~%d-word descriptions, index cap %d chars, %d spec pairs + "
+            . "tags/brand/category, broad query: median %.1f ms (budget %d ms)\n",
+            self::PRODUCTS,
+            self::STRUCTURED_DESC_WORDS,
+            self::DESC_INDEX_CHARS,
+            self::SPEC_PAIRS,
+            $median,
+            (int) $budgetMs
+        ));
+        self::assertLessThan($budgetMs, $median, 'keyword query with tags/brand/category exceeded the budget');
+    }
+
+    public function testStructuredFieldsHybridSearchStaysWithinBudget(): void
+    {
+        $config = require self::repoRoot() . '/server/config.example.php';
+        $budgetMs = (float) $config['search']['latency_budget_ms'];
+        $topK = (int) $config['search']['semantic_top_k'];
+        $this->seedCatalog(self::DESC_INDEX_CHARS, true, true);
+        $neighbours = [];
+        for ($i = 0; $i < $topK; $i++) {
+            $neighbours[] = ['product_id' => 1 + $i * 199, 'score' => round(0.9 - $i * 0.004, 4)];
+        }
+        $body = (string) json_encode(['results' => $neighbours, 'model' => 'BAAI/bge-m3', 'took_ms' => 30.0]);
+        $vps = new VpsClient('http://vps.test', 't', 300, static fn (): array => ['status' => 200, 'body' => $body]);
+        $config['db']['products_table'] = 'products';
+        $config['db']['search_logs_table'] = 'search_logs';
+        $config['paths']['data'] = sys_get_temp_dir() . '/no-bundle';
+        $controller = SearchController::fromConfig($this->pdo, $config, $vps);
+
+        $result = $controller->search(['q' => 'دسته بازی'], true); // warm the buffer pool
+        self::assertArrayHasKey('cosine_scores', $result);
+        self::assertCount(20, $result['product_ids']);
+        self::assertArrayHasKey('debug', $result); // breakdown costs are part of the measurement
+
+        $median = $this->median(static fn () => $controller->search(['q' => 'دسته بازی']));
+        $debugMedian = $this->median(static fn () => $controller->search(['q' => 'دسته بازی'], true));
+        fwrite(STDERR, sprintf(
+            "\n[hybrid guard] %d products, tags/brand/category, broad query + %d VPS neighbours (VPS in-process): "
+            . "median %.1f ms, with debug breakdown %.1f ms (budget %d ms)\n",
+            self::PRODUCTS,
+            $topK,
+            $median,
+            $debugMedian,
+            (int) $budgetMs
+        ));
+        self::assertLessThan($budgetMs, $median, 'hybrid /search with tags/brand/category exceeded the budget');
+    }
+
+    /** @param callable(): mixed $run */
+    private function median(callable $run): float
+    {
+        $times = [];
+        for ($i = 0; $i < self::RUNS; $i++) {
+            $start = hrtime(true);
+            $run();
+            $times[] = (hrtime(true) - $start) / 1e6;
+        }
+        sort($times);
+
+        return $times[intdiv(self::RUNS, 2)];
+    }
+
+    /** @param bool $structured also fill M21 tags, brand and category (with shorter descriptions) */
+    private function seedCatalog(int $descIndexChars, bool $withSpecs, bool $structured = false): void
+    {
+        $descWords = $structured ? self::STRUCTURED_DESC_WORDS : self::DESC_WORDS;
         mt_srand(10);
         $filler = [];
         for ($i = 0; $i < 2000; $i++) {
@@ -209,12 +306,12 @@ final class KeywordLatencyGuardTest extends DatabaseTestCase
         for ($id = 1; $id <= self::PRODUCTS; $id++) {
             $title = 'محصول ' . $id . ($id % 25 === 0 ? ' دسته بازی' : ' ' . $filler[$id % 2000]);
             $words = [];
-            for ($w = 0; $w < self::DESC_WORDS; $w++) {
+            for ($w = 0; $w < $descWords; $w++) {
                 $words[] = $filler[mt_rand(0, 1999)];
             }
             if ($id % 10 === 0) {
                 // Broad description-only mentions, as on the real catalog.
-                array_splice($words, mt_rand(0, self::DESC_WORDS), 0, ['سازگار', 'با', 'دسته', 'بازی']);
+                array_splice($words, mt_rand(0, $descWords), 0, ['سازگار', 'با', 'دسته', 'بازی']);
             }
             $desc = implode(' ', $words);
             $specs = [];
@@ -225,7 +322,14 @@ final class KeywordLatencyGuardTest extends DatabaseTestCase
                 $specs[] = 'سازگار با دسته بازی'; // spec-only mentions
             }
 
-            $batch[] = '(?, ?, ?, ?, ?, ?, ?)';
+            // M21: franchise-like tags, 40 brands, 200 categories; a tenth of the
+            // catalog is tagged with the query phrase and nothing else matches it there.
+            $tags = $structured ? 'سری ' . $filler[$id % 2000] . ' ' . $filler[mt_rand(0, 1999)] : '';
+            if ($structured && $id % 10 === 7) {
+                $tags .= ' دسته بازی';
+            }
+
+            $batch[] = '(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)';
             array_push(
                 $params,
                 $id,
@@ -234,6 +338,9 @@ final class KeywordLatencyGuardTest extends DatabaseTestCase
                 $title,
                 self::indexed($desc, $descIndexChars),
                 implode(' | ', $specs),
+                $tags,
+                $structured ? 'برند' . ($id % 40) : '',
+                $structured ? 'گروه' . ($id % 200) : '',
                 $id % 1000
             );
             if (count($batch) === 500) {
@@ -269,7 +376,8 @@ final class KeywordLatencyGuardTest extends DatabaseTestCase
     {
         $this->pdo->prepare(
             'INSERT INTO products (product_id, title, description, normalized_title, normalized_desc,
-                                   normalized_specs, popularity)
+                                   normalized_specs, normalized_tags, normalized_brand, normalized_category,
+                                   popularity)
              VALUES ' . implode(',', $batch)
         )->execute($params);
     }

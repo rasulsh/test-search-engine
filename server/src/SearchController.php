@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App;
 
 use PDO;
+use PDOException;
 use Throwable;
 
 /**
@@ -36,6 +37,9 @@ use Throwable;
  * black keyboards and red mice close to "red keyboard", the one-word matches
  * the rule excludes. Semantic evidence still reorders those hits; single-word, SKU and partial-fallback
  * requests keep the additive neighbours.
+ *
+ * M21: every request logs its suggestion and tier; `debug` (see search()) adds
+ * a per-result score breakdown to the response, never to the log.
  */
 final class SearchController
 {
@@ -121,7 +125,10 @@ final class SearchController
             (float) ($search['spec_weight'] ?? 6.0),
             Synonyms::fromDirectory($config['paths']['data'], (int) ($search['synonyms_max_group_size'] ?? 4)),
             (int) ($search['alias_max_variants'] ?? 6),
-            (bool) ($search['require_all_terms'] ?? true)
+            (bool) ($search['require_all_terms'] ?? true),
+            (float) ($search['tag_weight'] ?? 8.0),
+            (float) ($search['brand_weight'] ?? 7.0),
+            (float) ($search['category_weight'] ?? 5.0)
         );
         // The bundle dictionary is cached per worker (and in APCu); the table scan
         // is only a fallback for a data directory without spellcheck.txt.
@@ -132,21 +139,38 @@ final class SearchController
 
         // The signals provider both fetches business signals and acts as the
         // existence filter (ids it omits are treated as absent from the catalog).
-        $signalsProvider = static function (array $ids) use ($pdo, $productsTable): array {
+        // The M21 match texts (normalized brand, category, tags) ride along; a live
+        // table that predates them (42S22) just gets no match boosts.
+        $withTexts = true;
+        $signalsProvider = static function (array $ids) use ($pdo, $productsTable, &$withTexts): array {
             if ($ids === []) {
                 return [];
             }
             $placeholders = implode(',', array_fill(0, count($ids), '?'));
-            $sql = 'SELECT product_id, stock, popularity FROM ' . Identifier::quote($productsTable)
-                 . ' WHERE product_id IN (' . $placeholders . ')';
-            $stmt = $pdo->prepare($sql);
-            $stmt->execute(array_values($ids));
+            $query = static fn (string $columns): string => 'SELECT product_id, stock, popularity' . $columns
+                . ' FROM ' . Identifier::quote($productsTable) . ' WHERE product_id IN (' . $placeholders . ')';
+            try {
+                $texts = ', normalized_brand, normalized_category, normalized_tags';
+                $stmt = $pdo->prepare($query($withTexts ? $texts : ''));
+                $stmt->execute(array_values($ids));
+            } catch (PDOException $e) {
+                if (!$withTexts || $e->getCode() !== '42S22') {
+                    throw $e;
+                }
+                $withTexts = false;
+                $stmt = $pdo->prepare($query(''));
+                $stmt->execute(array_values($ids));
+            }
             $signals = [];
             foreach ($stmt as $row) {
                 $signals[(int) $row['product_id']] = [
                     'stock'      => (int) $row['stock'],
                     'popularity' => (int) $row['popularity'],
-                ];
+                ] + ($withTexts ? [
+                    'brand'    => (string) $row['normalized_brand'],
+                    'category' => (string) $row['normalized_category'],
+                    'tags'     => (string) $row['normalized_tags'],
+                ] : []);
             }
 
             return $signals;
@@ -164,7 +188,11 @@ final class SearchController
                 (float) $search['popularity_boost'],
                 (float) ($search['keyword_weight'] ?? 0.4),
                 (float) ($search['semantic_weight'] ?? 0.6),
-                (float) ($search['min_relevance'] ?? 0.45)
+                (float) ($search['min_relevance'] ?? 0.45),
+                (float) ($search['brand_match_boost'] ?? 0.15),
+                (float) ($search['category_match_boost'] ?? 0.1),
+                (float) ($search['tag_match_boost'] ?? 0.1),
+                (int) ($search['tag_match_min_tokens'] ?? 2)
             ),
             $signalsProvider,
             (int) $search['semantic_top_k'],
@@ -182,10 +210,12 @@ final class SearchController
      *     did_you_mean_applied: bool,
      *     count: int,
      *     product_ids: list<int>,
-     *     cosine_scores?: list<?float>
+     *     cosine_scores?: list<?float>,
+     *     debug?: array<string, mixed>
      * }
+     * @param bool $debug the caller verified the debug token: add the per-result score breakdown
      */
-    public function search(array $request): array
+    public function search(array $request, bool $debug = false): array
     {
         $raw = is_string($request['q'] ?? null) ? $request['q'] : '';
         $limit = isset($request['limit']) ? (int) $request['limit'] : null;
@@ -225,17 +255,23 @@ final class SearchController
         $keywordIds = array_map(static fn (array $row): int => $row['product_id'], $results);
         $productIds = $keywordIds;
         $cosineScores = null;
+        $explanation = null;
 
         // Tier 2 is additive: only reshuffle when the VPS answered. Otherwise the
         // keyword ordering above stands.
         $semantic = $this->semantic($raw, $normalized);
         if ($semantic !== null) {
-            [$productIds, $cosineScores] = $this->hybrid(
+            // Boost words come from the query that produced the results: the applied
+            // suggestion when the literal query matched nothing.
+            $boostQuery = $applied && $didYouMean !== null ? $didYouMean : $normalized;
+            [$productIds, $cosineScores, $explanation] = $this->hybrid(
                 $results,
                 $skuIds,
                 $semantic,
                 $limit,
-                !$allTermsHits
+                !$allTermsHits,
+                $this->keyword->variants($boostQuery),
+                $debug
             );
         }
 
@@ -252,6 +288,8 @@ final class SearchController
                 'top_ids'      => array_slice($productIds, 0, $this->topIdsLimit),
                 'customer_id'  => $customerId,
                 'latency_ms'   => $latencyMs,
+                'did_you_mean' => $didYouMean,
+                'tier'         => $semantic !== null ? Logger::TIER_HYBRID : Logger::TIER_KEYWORD_ONLY,
             ]);
         } catch (Throwable $e) {
             error_log('search: log write failed: ' . $e->getMessage());
@@ -266,6 +304,9 @@ final class SearchController
         ];
         if ($cosineScores !== null) {
             $response['cosine_scores'] = $cosineScores;
+        }
+        if ($debug) {
+            $response['debug'] = $this->explain($results, $productIds, $semantic !== null, $explanation);
         }
 
         return $response;
@@ -297,14 +338,23 @@ final class SearchController
      * table are dropped (the signals provider omits them), so a partial reload
      * degrades instead of surfacing dead ids.
      *
-     * @param list<array{product_id: int, score: float, title_all: bool}> $results keyword hits
+     * @param list<array{product_id: int, score: float, name_all: bool}> $results keyword hits
      * @param list<int> $skuIds keyword ids that matched by SKU, kept first in order
      * @param list<array{product_id: int, score: float}> $semantic best first, all >= the floor
      * @param bool $neighbours false: semantic evidence only reorders the keyword hits
-     * @return array{0: list<int>, 1: list<?float>}
+     * @param list<list<string>> $variants query token variants for the Ranker's match boosts
+     * @param bool $explain also return each ranked id's score breakdown (third element)
+     * @return array{0: list<int>, 1: list<?float>, 2: array<int, array<string, mixed>>}
      */
-    private function hybrid(array $results, array $skuIds, array $semantic, ?int $limit, bool $neighbours): array
-    {
+    private function hybrid(
+        array $results,
+        array $skuIds,
+        array $semantic,
+        ?int $limit,
+        bool $neighbours,
+        array $variants,
+        bool $explain
+    ): array {
         $skuSet = array_flip($skuIds);
         $keywordScores = [];
         $solid = [];
@@ -312,9 +362,10 @@ final class SearchController
             // SKU scores are on their own huge scale and pinned anyway.
             if (!isset($skuSet[$row['product_id']])) {
                 $keywordScores[$row['product_id']] = $row['score'];
-                // Every query term in the title (name) is solid: kept whatever
-                // the VPS says. Terms found only in specs / description are weak.
-                if ($row['title_all']) {
+                // Every query term in the title or tags (the product's names) is
+                // solid: kept whatever the VPS says. Terms found only in specs /
+                // description / brand / category are weak.
+                if ($row['name_all']) {
                     $solid[] = $row['product_id'];
                 }
             }
@@ -337,7 +388,9 @@ final class SearchController
             $signals,
             $effectiveLimit,
             $solid,
-            $this->semanticMinScore
+            $this->semanticMinScore,
+            $variants,
+            $explain
         );
         $pinned = array_values(array_intersect($skuIds, array_keys($signals)));
         $productIds = array_slice(
@@ -354,7 +407,53 @@ final class SearchController
             $productIds
         );
 
-        return [$productIds, $cosine];
+        $details = [];
+        foreach ($ranked as $row) {
+            if (isset($row['detail'])) {
+                $details[$row['product_id']] = $row['detail'];
+            }
+        }
+
+        return [$productIds, $cosine, $details];
+    }
+
+    /**
+     * The debug breakdown: per returned id its keyword hit (match type and
+     * fields), and, for ids the hybrid ranker scored, the blend and every
+     * boost; the ranker's knobs once. Never logged.
+     *
+     * @param list<array<string, mixed>> $results keyword hits
+     * @param list<int> $productIds the returned ids, in order
+     * @param array<int, array<string, mixed>>|null $scored hybrid detail per id
+     * @return array<string, mixed>
+     */
+    private function explain(array $results, array $productIds, bool $hybrid, ?array $scored): array
+    {
+        $hits = array_column($results, null, 'product_id');
+        $rows = [];
+        foreach ($productIds as $rank => $id) {
+            $hit = $hits[$id] ?? null;
+            $rows[] = [
+                'product_id' => $id,
+                'rank'       => $rank + 1,
+                'keyword_hit' => $hit === null ? null : [
+                    'match_type'  => $hit['match_type'],
+                    'score'       => round($hit['score'], 4),
+                    'title_match' => $hit['title_match'],
+                    'field_match' => $hit['spec_match'],
+                    'name_all'    => $hit['name_all'],
+                ],
+                // Exact-SKU hits are pinned above the blend and carry no blend detail.
+                'pinned'     => $hit !== null && $hit['match_type'] === Keyword::MATCH_SKU,
+                'blend'      => $scored[$id] ?? null,
+            ];
+        }
+
+        return [
+            'tier'     => $hybrid ? Logger::TIER_HYBRID : Logger::TIER_KEYWORD_ONLY,
+            'settings' => $this->ranker?->settings(),
+            'results'  => $rows,
+        ];
     }
 
     /**

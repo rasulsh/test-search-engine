@@ -40,9 +40,11 @@ final class ProductLoader
         $stmt = $this->pdo->prepare(
             "REPLACE INTO {$this->table}
                 (product_id, title, description, normalized_title, normalized_desc, normalized_specs,
+                 normalized_tags, normalized_brand, normalized_category,
                  brand, category, model, sku, normalized_sku, price, stock, url, image, popularity)
              VALUES
                 (:product_id, :title, :description, :normalized_title, :normalized_desc, :normalized_specs,
+                 :normalized_tags, :normalized_brand, :normalized_category,
                  :brand, :category, :model, :sku, :normalized_sku, :price, :stock, :url, :image, :popularity)"
         );
 
@@ -63,6 +65,10 @@ final class ProductLoader
                 // Pre-composed spec text (build.py composes it from attributes
                 // and feature titles).
                 'normalized_specs' => ($this->normalize)((string) ($row['specs'] ?? '')),
+                // M21: cleaned tag names (build.py clean_tags), brand and category.
+                'normalized_tags'     => ($this->normalize)((string) ($row['tags'] ?? '')),
+                'normalized_brand'    => ($this->normalize)((string) ($row['brand'] ?? '')),
+                'normalized_category' => ($this->normalize)((string) ($row['category'] ?? '')),
                 'brand'            => (string) ($row['brand'] ?? ''),
                 'category'         => (string) ($row['category'] ?? ''),
                 'model'            => (string) ($row['model'] ?? ''),

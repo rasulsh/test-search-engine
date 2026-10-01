@@ -331,7 +331,14 @@ final class SearchController
         $cosines = array_intersect_key($cosines, $signals);
 
         $effectiveLimit = $limit !== null ? max(1, $limit) : $this->defaultLimit;
-        $ranked = $this->ranker->blend($keywordScores, $cosines, $signals, $effectiveLimit, $solid, $this->semanticMinScore);
+        $ranked = $this->ranker->blend(
+            $keywordScores,
+            $cosines,
+            $signals,
+            $effectiveLimit,
+            $solid,
+            $this->semanticMinScore
+        );
         $pinned = array_values(array_intersect($skuIds, array_keys($signals)));
         $productIds = array_slice(
             array_values(array_unique(array_merge(
@@ -356,7 +363,7 @@ final class SearchController
      * alternative returns more than $baseline results.
      *
      * @return array{
-     *     0: list<array{product_id: int, score: float, match_type: string, title_match: bool, spec_match: bool, title_all: bool}>,
+     *     0: list<array{product_id: int, score: float, match_type: string}>,
      *     1: ?string
      * }
      */

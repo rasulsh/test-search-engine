@@ -68,8 +68,7 @@ final class Ranker
         int $limit,
         array $solid = [],
         float $solidCosine = 0.0
-    ): array
-    {
+    ): array {
         $maxKeyword = $keywordScores === [] ? 0.0 : max($keywordScores);
         $maxCosine = $cosines === [] ? 0.0 : max($cosines);
         $maxPopularity = 0;

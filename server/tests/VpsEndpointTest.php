@@ -132,7 +132,7 @@ final class VpsEndpointTest extends TestCase
     private function scenario(array $extra = []): void
     {
         self::$vps?->setScenario($extra + [
-            'products' => [1011 => [1.0, 0.0], 1009 => [0.0, 1.0]],
+            'products' => [1011 => [1.0, 0.0], 1007 => [0.9, 0.43589], 1009 => [0.0, 1.0]],
             'queries'  => ['macbook' => [1.0, 0.0]],
         ]);
     }
@@ -144,12 +144,12 @@ final class VpsEndpointTest extends TestCase
         [$status, $body] = $this->search('up', ['q' => 'macbook', 'customer_id' => 'c-42']);
 
         self::assertSame(200, $status);
-        self::assertSame([1007, 1011], $body['product_ids']); // keyword hit, then the VPS neighbour
-        self::assertEquals([null, 1.0], $body['cosine_scores']); // JSON: 1.0 arrives as 1
+        self::assertSame([1007, 1011], $body['product_ids']); // keyword hit with cosine 0.9, then the neighbour
+        self::assertEquals([0.9, 1.0], $body['cosine_scores']); // JSON: 1.0 arrives as 1
         $sent = self::$vps?->lastRequest() ?? [];
         self::assertSame('/search-vectors', $sent['path']);
         self::assertSame('Bearer ' . FakeVps::TOKEN, $sent['authorization']);
-        self::assertSame(['q' => 'macbook', 'limit' => 100, 'min_score' => 0.4], $sent['body']);
+        self::assertSame(['q' => 'macbook', 'limit' => 300, 'min_score' => 0.4], $sent['body']);
     }
 
     public function testWithDetailsCarriesTheCosineOfEachResult(): void
@@ -159,7 +159,7 @@ final class VpsEndpointTest extends TestCase
         [, $body] = $this->search('up', ['q' => 'macbook', 'with_details' => true]);
 
         self::assertSame([1007, 1011], array_column($body['products'], 'id'));
-        self::assertEquals([null, 1.0], $body['cosine_scores']); // JSON: 1.0 arrives as 1
+        self::assertEquals([0.9, 1.0], $body['cosine_scores']); // JSON: 1.0 arrives as 1
     }
 
     public function testVpsErrorFallsBackToKeywordOnlyAndIsLogged(): void

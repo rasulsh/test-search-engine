@@ -8,8 +8,9 @@ use App\Ranker;
 use PHPUnit\Framework\TestCase;
 
 /**
- * Hybrid ranking: Reciprocal Rank Fusion + light business boosts (CLAUDE.md
- * sec. 5.5). No database — Ranker operates on rank order and a signals map.
+ * Blended hybrid ranking (M20): weighted keyword + semantic relevance, a
+ * combined floor, light business boosts after it. No database — Ranker works on
+ * score maps and a signals map.
  */
 final class RankerTest extends TestCase
 {
@@ -19,167 +20,169 @@ final class RankerTest extends TestCase
         return array_map(static fn (array $row): int => $row['product_id'], $rows);
     }
 
-    public function testPureRrfOrderingWithoutBoosts(): void
+    public function testBlendedScoreOrdersByWeightedNormalizedSignals(): void
     {
-        $ranker = new Ranker(60, 0.0, 0.0);
+        $ranker = new Ranker(0.0, 0.0, 0.4, 0.6, 0.0);
 
-        $out = $ranker->fuse([1, 2, 3], [3, 4, 5], [], 10);
+        // 1: keyword 1.0 / cosine 0.5 -> 0.4 + 0.6*(0.5/0.8)=0.775
+        // 2: keyword 0.5 / cosine 0.8 -> 0.2 + 0.6          =0.8
+        $out = $ranker->blend([1 => 10.0, 2 => 5.0], [1 => 0.5, 2 => 0.8], [], 10);
 
-        // id 3 appears in both lists (highest fused score); ties (2 and 4, both
-        // rank 2 in one list) break by product_id ascending.
-        self::assertSame([3, 1, 2, 4, 5], self::ids($out));
+        self::assertSame([2, 1], self::ids($out));
+        self::assertEqualsWithDelta(0.8, $out[0]['score'], 1e-9);
+        self::assertEqualsWithDelta(0.775, $out[1]['score'], 1e-9);
     }
 
-    public function testStockBoostBreaksAnRrfTie(): void
+    public function testStrongSemanticWeakKeywordOutranksStrongKeywordWeakSemantic(): void
     {
-        $ranker = new Ranker(60, 0.2, 0.0);
-        // Mirrored ranks in the two lists -> identical RRF score.
+        $ranker = new Ranker(0.0, 0.0, 0.4, 0.6, 0.0);
+
+        $out = $ranker->blend([1 => 10.0, 2 => 1.0], [1 => 0.2, 2 => 0.9], [], 10);
+
+        self::assertSame([2, 1], self::ids($out)); // semantic drives, no keyword tier
+    }
+
+    public function testSemanticOnlyNeighbourCanOutrankAKeywordHit(): void
+    {
+        $ranker = new Ranker(0.0, 0.0, 0.4, 0.6, 0.0);
+
+        $out = $ranker->blend([1 => 10.0], [1 => 0.1, 2 => 0.9], [], 10);
+
+        self::assertSame([2, 1], self::ids($out));
+        self::assertFalse($out[0]['keyword']);
+        self::assertTrue($out[1]['keyword']);
+    }
+
+    public function testKeywordOnlyHitFallsBelowTheCombinedFloor(): void
+    {
+        // The "بلبرینگ" case: top keyword score (specs mention) but ~zero
+        // cosine -> blend 0.4 < 0.45; the semantically supported hit stays.
+        $ranker = new Ranker(0.0, 0.0, 0.4, 0.6, 0.45);
+
+        $out = $ranker->blend([1 => 10.0, 2 => 4.0], [2 => 0.7], [], 10);
+
+        self::assertSame([2], self::ids($out));
+    }
+
+    public function testSolidHitIsExemptFromTheFloorButWeakHitIsNot(): void
+    {
+        $ranker = new Ranker(0.0, 0.0, 0.4, 0.6, 0.45);
+
+        // 1 solid, 2 weak, both keyword-only (0.4 / 0.2 < 0.45); 3 has cosine.
+        $out = $ranker->blend([1 => 10.0, 2 => 5.0], [3 => 0.8], [], 10, [1]);
+
+        self::assertSame([3, 1], self::ids($out));
+    }
+
+    public function testSolidHitWithoutAnyCosineSurvivesAnEmptySemanticList(): void
+    {
+        $ranker = new Ranker(0.0, 0.0, 0.4, 0.6, 0.45);
+
+        $out = $ranker->blend([1 => 10.0, 2 => 5.0], [], [], 10, [1, 2], 0.4);
+
+        self::assertSame([1, 2], self::ids($out)); // keyword order, nothing blanked
+    }
+
+    public function testUnreturnedSolidHitIsAssumedAtTheFloorAndLeadsPureNeighbours(): void
+    {
+        $ranker = new Ranker(0.0, 0.0, 0.4, 0.6, 0.45);
+
+        // 1: solid, not returned: 0.4 + 0.6 * (0.4 / 0.8) = 0.7; 2: pure semantic: 0.6.
+        $out = $ranker->blend([1 => 10.0], [2 => 0.8], [], 10, [1], 0.4);
+
+        self::assertSame([1, 2], self::ids($out));
+        // Not exempt: a weak hit gets no assumed cosine and no pass.
+        self::assertSame([2], self::ids($ranker->blend([1 => 10.0], [2 => 0.8], [], 10, [], 0.4)));
+    }
+
+    public function testEverythingBelowTheFloorYieldsNothing(): void
+    {
+        $ranker = new Ranker(0.0, 0.0, 0.4, 0.6, 0.45);
+
+        self::assertSame([], $ranker->blend([1 => 10.0], [], [], 10));
+        self::assertSame([], $ranker->blend([], [], [], 10));
+    }
+
+    public function testFloorAppliesBeforeBoostsSoTheyNeverRescue(): void
+    {
+        $ranker = new Ranker(1.0, 1.0, 0.4, 0.6, 0.45);
+        $signals = [1 => ['stock' => 5, 'popularity' => 100]];
+
+        self::assertSame([], $ranker->blend([1 => 10.0], [], $signals, 10));
+    }
+
+    public function testStockBoostBreaksATie(): void
+    {
+        $ranker = new Ranker(0.2, 0.0, 0.4, 0.6, 0.0);
         $signals = [
             1 => ['stock' => 0, 'popularity' => 0],
             2 => ['stock' => 3, 'popularity' => 0],
         ];
 
-        $out = $ranker->fuse([1, 2], [2, 1], $signals, 10);
+        $out = $ranker->blend([1 => 5.0, 2 => 5.0], [1 => 0.5, 2 => 0.5], $signals, 10);
 
-        self::assertSame([2, 1], self::ids($out)); // in-stock nudged ahead
+        self::assertSame([2, 1], self::ids($out));
     }
 
-    public function testPopularityBoostBreaksAnRrfTie(): void
+    public function testPopularityBoostBreaksATieAndIsBounded(): void
     {
-        $ranker = new Ranker(60, 0.0, 0.2);
+        $ranker = new Ranker(0.0, 0.2, 0.4, 0.6, 0.0);
         $signals = [
             1 => ['stock' => 1, 'popularity' => 10],
-            2 => ['stock' => 1, 'popularity' => 100],
+            2 => ['stock' => 1, 'popularity' => 100000],
         ];
 
-        $out = $ranker->fuse([1, 2], [2, 1], $signals, 10);
+        $out = $ranker->blend([1 => 5.0, 2 => 5.0], [1 => 0.5, 2 => 0.5], $signals, 10);
 
-        self::assertSame([2, 1], self::ids($out)); // more popular nudged ahead
+        self::assertSame([2, 1], self::ids($out));
+        self::assertEqualsWithDelta(1.0 * 1.2, $out[0]['score'], 1e-9); // boost capped at +20%
     }
 
-    public function testBoostsDoNotOverrideAnItemRankedInBothLists(): void
+    public function testBoostsDoNotOverrideClearRelevanceLead(): void
     {
-        // Even a maxed-out in-stock + popular item that appears only once, low in
-        // the semantic list, must not beat an item strong in BOTH lists.
-        $ranker = new Ranker(60, 0.1, 0.1);
-        $semantic = array_merge([99], range(200, 228)); // id 99 at semantic rank 1; filler
+        $ranker = new Ranker(0.1, 0.1, 0.4, 0.6, 0.0);
         $signals = [
-            1  => ['stock' => 0, 'popularity' => 0],   // strong: keyword #1 + semantic #1
-            99 => ['stock' => 9, 'popularity' => 1000], // weak rank but max signals
+            1 => ['stock' => 0, 'popularity' => 0],
+            2 => ['stock' => 9, 'popularity' => 1000],
         ];
 
-        $out = $ranker->fuse([1], array_merge([1], $semantic), $signals, 5);
+        $out = $ranker->blend([1 => 10.0, 2 => 8.0], [1 => 0.9, 2 => 0.5], $signals, 10);
 
         self::assertSame(1, self::ids($out)[0]);
     }
 
-    public function testKeywordHitOutranksAFarSemanticNeighbour(): void
+    public function testKeywordOnlyAndSemanticOnlyInputs(): void
     {
-        // 50 is the #1 semantic neighbour and maximally boosted; 7 is the last of
-        // three keyword hits with no semantic support and no signals. Plain RRF
-        // would put 50 first; keyword hits must lead.
-        $ranker = new Ranker(60, 0.1, 0.1);
-        $signals = [50 => ['stock' => 9, 'popularity' => 1000]];
+        $ranker = new Ranker(0.0, 0.0, 0.4, 0.6, 0.0);
 
-        $out = $ranker->fuse([5, 6, 7], [50, 51], $signals, 10);
-
-        self::assertSame([5, 6, 7, 50, 51], self::ids($out));
-        self::assertSame([true, true, true, false, false], array_column($out, 'keyword'));
+        self::assertSame([2, 1], self::ids($ranker->blend([1 => 1.0, 2 => 3.0], [], [], 10)));
+        self::assertSame([3, 4], self::ids($ranker->blend([], [3 => 0.9, 4 => 0.5], [], 10)));
     }
 
-    public function testSemanticReordersKeywordHitsWithinTheirBand(): void
+    public function testWeightsAreConfigDriven(): void
     {
-        // 3 is the weakest keyword hit but the top semantic one: it rises within
-        // the keyword band; the semantic-only 9 stays below all keyword hits.
-        $ranker = new Ranker(60, 0.0, 0.0);
+        $keywordHeavy = new Ranker(0.0, 0.0, 1.0, 0.0, 0.0);
+        $semanticHeavy = new Ranker(0.0, 0.0, 0.0, 1.0, 0.0);
+        $keyword = [1 => 10.0, 2 => 1.0];
+        $cosine = [1 => 0.2, 2 => 0.9];
 
-        $out = $ranker->fuse([1, 2, 3], [3, 9], [], 10);
-
-        self::assertSame([3, 1, 2, 9], self::ids($out));
-    }
-
-    public function testTitleMatchedKeywordHitsLeadDescriptionOnlyHits(): void
-    {
-        // 2 matched only in its description but is the top semantic neighbour
-        // and maximally boosted; 1 matched in its title. The title band leads,
-        // then description-only keyword hits, then semantic-only ids.
-        $ranker = new Ranker(60, 0.1, 0.1);
-        $signals = [2 => ['stock' => 9, 'popularity' => 1000], 1 => ['stock' => 0, 'popularity' => 0]];
-
-        $out = $ranker->fuse([2, 1], [2, 9], $signals, 10, [1]);
-
-        self::assertSame([1, 2, 9], self::ids($out));
-        self::assertSame([true, true, false], array_column($out, 'keyword'));
-    }
-
-    public function testSpecMatchesSitBetweenTitleAndDescriptionOnlyHits(): void
-    {
-        // 3 is description-only but the top semantic neighbour and maximally
-        // boosted; 2 matched in its specs (attributes / feature titles); 1 in
-        // its title.
-        $ranker = new Ranker(60, 0.1, 0.1);
-        $signals = [3 => ['stock' => 9, 'popularity' => 1000]];
-
-        $out = $ranker->fuse([3, 2, 1], [3, 9], $signals, 10, [1], [2]);
-
-        self::assertSame([1, 2, 3, 9], self::ids($out));
-    }
-
-    public function testPartialKeywordHitsRankBelowAllWordsHitsAboveNeighbours(): void
-    {
-        $ranker = new Ranker(60, 0.0, 0.0);
-
-        // 1 is a partial title hit that semantic evidence ranks first; 3 holds
-        // every word but matched only in the description.
-        $out = $ranker->fuse([1, 2, 3], [1, 9], [], 10, [1, 2], [], [1]);
-
-        self::assertSame([2, 3, 1, 9], self::ids($out));
-    }
-
-    public function testTitleMatchesOutsideTheKeywordListAreIgnored(): void
-    {
-        // A title id that is not a keyword hit cannot jump the keyword band.
-        $ranker = new Ranker(60, 0.0, 0.0);
-
-        self::assertSame([1, 9], self::ids($ranker->fuse([1], [9], [], 10, [9])));
-    }
-
-    public function testWeightsControlHowMuchEachListReorders(): void
-    {
-        // Keyword order [1, 2], semantic order [2, 1]: equal weights tie (broken
-        // by id); the heavier list wins.
-        $keywordHeavy = new Ranker(60, 0.0, 0.0, 2.0, 1.0);
-        $semanticHeavy = new Ranker(60, 0.0, 0.0, 1.0, 2.0);
-
-        self::assertSame([1, 2], self::ids($keywordHeavy->fuse([1, 2], [2, 1], [], 10)));
-        self::assertSame([2, 1], self::ids($semanticHeavy->fuse([1, 2], [2, 1], [], 10)));
-    }
-
-    public function testKeywordOnlyFusion(): void
-    {
-        $ranker = new Ranker(60, 0.1, 0.1);
-
-        $out = $ranker->fuse([5, 6, 7], [], [], 10);
-
-        self::assertSame([5, 6, 7], self::ids($out));
-    }
-
-    public function testSemanticOnlyFusion(): void
-    {
-        $ranker = new Ranker(60, 0.1, 0.1);
-
-        $out = $ranker->fuse([], [8, 9], [], 10);
-
-        self::assertSame([8, 9], self::ids($out));
+        self::assertSame([1, 2], self::ids($keywordHeavy->blend($keyword, $cosine, [], 10)));
+        self::assertSame([2, 1], self::ids($semanticHeavy->blend($keyword, $cosine, [], 10)));
     }
 
     public function testLimitIsApplied(): void
     {
-        $ranker = new Ranker(60, 0.0, 0.0);
+        $ranker = new Ranker(0.0, 0.0, 0.4, 0.6, 0.0);
 
-        $out = $ranker->fuse([1, 2, 3, 4, 5], [], [], 2);
+        $out = $ranker->blend([], array_fill_keys(range(1, 30), 0.5), [], 5);
 
-        self::assertCount(2, $out);
-        self::assertSame([1, 2], self::ids($out));
+        self::assertCount(5, $out);
+    }
+
+    public function testTiesBreakByProductId(): void
+    {
+        $ranker = new Ranker(0.0, 0.0, 0.4, 0.6, 0.0);
+
+        self::assertSame([3, 7], self::ids($ranker->blend([], [7 => 0.5, 3 => 0.5], [], 10)));
     }
 }

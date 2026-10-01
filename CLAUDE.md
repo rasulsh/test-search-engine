@@ -197,7 +197,7 @@ because Tier 2 is unavailable.
   (`SEARCH_VPS_MODEL*`) and on the VPS (`VPS_MODEL*`); it is pending a
   Persian-quality test and may change. The cosine floor
   (`SEARCH_SEMANTIC_MIN_SCORE`, default 0.4 for bge-m3) needs real-catalog
-  tuning; one-word precision comes from the keyword tier fused by RRF, not the
+  tuning; one-word precision comes from the keyword tier blended with the cosine (M20), not the
   floor. The cPanel bundle's `meta.json` model (`SEARCH_MODEL`, default
   `intfloat/multilingual-e5-small`, dim 384) is only checked on `/reload`.
   Never hardcode models, dims, or thresholds; read them from config.

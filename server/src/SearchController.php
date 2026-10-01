@@ -18,20 +18,15 @@ use Throwable;
  *
  * Tier 2 (additive; M4, sourced from the VPS since M18): when a VPS vector
  * service is configured, the query text is sent to it server-to-server (the VPS
- * embeds it and runs the global cosine top-K), neighbours below
- * `semanticMinScore` are dropped, and the rest are fused below the keyword hits
- * (see Ranker). With semantic results, a keyword hit that matched only in the
- * description must also reach `semanticMinScore` (M11): products that merely
- * mention the query in their spec text (case fans for "ball bearing") are
- * otherwise served for things the shop does not sell. Title and specs
- * (attribute / feature title, M13) matches are never dropped. The VPS returns
- * only its top-K, so a description-only hit it did not return is dropped when
- * the list is shorter than K (everything else is below the floor) and kept when
- * the list is full (it may score above the floor further down: no evidence
- * either way). If neither tier yields anything the response is empty — far
- * neighbours never pad it. Tier 2 is purely additive — if the VPS is not
- * configured, unreachable, slow (timeout) or answers badly, the request returns
- * Tier 1 results, logs the degradation and never errors (CLAUDE.md sec. 5).
+ * embeds it and runs the global cosine top-K) and neighbours below
+ * `semanticMinScore` are dropped. Keyword hits and neighbours are then ranked
+ * together by one blended relevance score and a combined floor (M20, see
+ * Ranker); exact-SKU hits stay pinned on top and title (name) matches are
+ * never dropped by the floor, only weak spec / description hits are. Tier 2 is purely additive — if
+ * the VPS is not configured, unreachable, slow (timeout) or answers badly, the
+ * request returns Tier 1 results, logs the degradation and never errors
+ * (CLAUDE.md sec. 5). If neither tier yields anything the response is empty —
+ * far neighbours never pad it.
  *
  * All terms (M16, require_all_terms): a multi-word query matches only products
  * holding every word (Keyword). When that finds nothing, even after the
@@ -39,8 +34,7 @@ use Throwable;
  * instead, so the shopper still sees something. While the keyword hits do
  * hold every word, semantic-only neighbours are not appended: embeddings put
  * black keyboards and red mice close to "red keyboard", the one-word matches
- * the rule excludes. Semantic
- * evidence still reorders those hits; single-word, SKU and partial-fallback
+ * the rule excludes. Semantic evidence still reorders those hits; single-word, SKU and partial-fallback
  * requests keep the additive neighbours.
  */
 final class SearchController
@@ -60,7 +54,6 @@ final class SearchController
     private int $defaultLimit;
     private float $semanticMinScore;
     private int $suggestMinResults;
-    private bool $descOnlyNeedsSemantic;
 
     /**
      * @param callable(): Speller $spellerFactory Built lazily (a catalog scan),
@@ -83,8 +76,7 @@ final class SearchController
         int $semanticTopK = 100,
         int $defaultLimit = 20,
         float $semanticMinScore = 0.4,
-        int $suggestMinResults = 3,
-        bool $descOnlyNeedsSemantic = true
+        int $suggestMinResults = 3
     ) {
         $this->keyword = $keyword;
         $this->logger = $logger;
@@ -98,7 +90,6 @@ final class SearchController
         $this->defaultLimit = max(1, $defaultLimit);
         $this->semanticMinScore = $semanticMinScore;
         $this->suggestMinResults = max(1, $suggestMinResults);
-        $this->descOnlyNeedsSemantic = $descOnlyNeedsSemantic;
     }
 
     /**
@@ -169,18 +160,17 @@ final class SearchController
             10,
             $vps ?? VpsClient::fromConfig($config['vps'] ?? []),
             new Ranker(
-                (int) $search['rrf_k'],
                 (float) $search['stock_boost'],
                 (float) $search['popularity_boost'],
-                (float) ($search['keyword_weight'] ?? 1.0),
-                (float) ($search['semantic_weight'] ?? 1.0)
+                (float) ($search['keyword_weight'] ?? 0.4),
+                (float) ($search['semantic_weight'] ?? 0.6),
+                (float) ($search['min_relevance'] ?? 0.45)
             ),
             $signalsProvider,
             (int) $search['semantic_top_k'],
             (int) $search['default_limit'],
             (float) ($search['semantic_min_score'] ?? 0.4),
-            (int) ($search['suggest_min_results'] ?? 3),
-            (bool) ($search['desc_only_needs_semantic'] ?? true)
+            (int) ($search['suggest_min_results'] ?? 3)
         );
     }
 
@@ -233,18 +223,6 @@ final class SearchController
             && !in_array(Keyword::MATCH_PARTIAL, array_column($results, 'match_type'), true);
 
         $keywordIds = array_map(static fn (array $row): int => $row['product_id'], $results);
-        $titleIds = array_values(array_map(
-            static fn (array $row): int => $row['product_id'],
-            array_filter($results, static fn (array $row): bool => $row['title_match'])
-        ));
-        $specIds = array_values(array_map(
-            static fn (array $row): int => $row['product_id'],
-            array_filter($results, static fn (array $row): bool => $row['spec_match'] && !$row['title_match'])
-        ));
-        $partialIds = array_values(array_map(
-            static fn (array $row): int => $row['product_id'],
-            array_filter($results, static fn (array $row): bool => $row['match_type'] === Keyword::MATCH_PARTIAL)
-        ));
         $productIds = $keywordIds;
         $cosineScores = null;
 
@@ -253,11 +231,8 @@ final class SearchController
         $semantic = $this->semantic($raw, $normalized);
         if ($semantic !== null) {
             [$productIds, $cosineScores] = $this->hybrid(
-                $keywordIds,
-                $titleIds,
-                $specIds,
+                $results,
                 $skuIds,
-                $partialIds,
                 $semantic,
                 $limit,
                 !$allTermsHits
@@ -316,81 +291,63 @@ final class SearchController
     }
 
     /**
-     * Semantic neighbours fused below the keyword hits, plus each returned id's
-     * cosine (null when the VPS did not return it). Description-only keyword
-     * hits (no title or specs match) below the floor are dropped first.
-     * Semantic ids not present in the products table are dropped (the signals
-     * provider omits them), so a partial reload degrades instead of surfacing
-     * dead ids.
+     * Keyword hits and semantic neighbours ranked by the blended relevance
+     * floor (Ranker), exact-SKU hits first, plus each returned id's cosine
+     * (null when the VPS did not return it). Ids not present in the products
+     * table are dropped (the signals provider omits them), so a partial reload
+     * degrades instead of surfacing dead ids.
      *
-     * @param list<int> $keywordIds
-     * @param list<int> $titleIds keyword ids that matched in the title
-     * @param list<int> $specIds keyword ids that matched in the specs, not the title
+     * @param list<array{product_id: int, score: float, title_all: bool}> $results keyword hits
      * @param list<int> $skuIds keyword ids that matched by SKU, kept first in order
-     * @param list<int> $partialIds keyword ids missing a query word (any-terms mode)
      * @param list<array{product_id: int, score: float}> $semantic best first, all >= the floor
      * @param bool $neighbours false: semantic evidence only reorders the keyword hits
      * @return array{0: list<int>, 1: list<?float>}
      */
-    private function hybrid(
-        array $keywordIds,
-        array $titleIds,
-        array $specIds,
-        array $skuIds,
-        array $partialIds,
-        array $semantic,
-        ?int $limit,
-        bool $neighbours
-    ): array {
-        // A full top-K list may omit ids that still clear the floor further down.
-        $truncated = count($semantic) >= $this->semanticTopK;
-        if (!$neighbours) {
-            $keywordSet = array_flip($keywordIds);
-            $semantic = array_values(array_filter(
-                $semantic,
-                static fn (array $row): bool => isset($keywordSet[$row['product_id']])
-            ));
+    private function hybrid(array $results, array $skuIds, array $semantic, ?int $limit, bool $neighbours): array
+    {
+        $skuSet = array_flip($skuIds);
+        $keywordScores = [];
+        $solid = [];
+        foreach ($results as $row) {
+            // SKU scores are on their own huge scale and pinned anyway.
+            if (!isset($skuSet[$row['product_id']])) {
+                $keywordScores[$row['product_id']] = $row['score'];
+                // Every query term in the title (name) is solid: kept whatever
+                // the VPS says. Terms found only in specs / description are weak.
+                if ($row['title_all']) {
+                    $solid[] = $row['product_id'];
+                }
+            }
         }
-        $semanticIds = array_map(static fn (array $row): int => $row['product_id'], $semantic);
         $known = array_column($semantic, 'score', 'product_id');
+        $cosines = $neighbours ? $known : array_intersect_key($known, $keywordScores);
 
-        if ($this->descOnlyNeedsSemantic) {
-            $descOnly = array_flip(array_diff($keywordIds, $titleIds, $specIds));
-            $keywordIds = array_values(array_filter(
-                $keywordIds,
-                static fn (int $id): bool => !isset($descOnly[$id]) || isset($known[$id]) || $truncated
-            ));
-        }
+        $candidates = array_values(array_unique(
+            array_merge($skuIds, array_keys($keywordScores), array_keys($cosines))
+        ));
+        $signals = ($this->signalsProvider)($candidates);
+        // Existence filter: keep only ids the products table actually has.
+        $keywordScores = array_intersect_key($keywordScores, $signals);
+        $cosines = array_intersect_key($cosines, $signals);
 
-        $productIds = $keywordIds;
-        if ($semanticIds !== []) {
-            $candidates = array_values(array_unique(array_merge($keywordIds, $semanticIds)));
-            $signals = ($this->signalsProvider)($candidates);
-
-            // Existence filter: keep only ids the products table actually has.
-            $exists = static fn (int $id): bool => isset($signals[$id]);
-            $keywordIds = array_values(array_filter($keywordIds, $exists));
-            $semanticIds = array_values(array_filter($semanticIds, $exists));
-
-            $effectiveLimit = $limit !== null ? max(1, $limit) : $this->defaultLimit;
-            $fused = $this->ranker->fuse(
-                $keywordIds,
-                $semanticIds,
-                $signals,
-                $effectiveLimit,
-                $titleIds,
-                $specIds,
-                $partialIds
-            );
-            $productIds = array_map(static fn (array $row): int => $row['product_id'], $fused);
-            // Semantic evidence reorders the title band; SKU hits stay on top.
-            $pinned = array_values(array_intersect($skuIds, $keywordIds));
-            $productIds = array_slice(
-                array_values(array_unique(array_merge($pinned, $productIds))),
-                0,
-                $effectiveLimit
-            );
-        }
+        $effectiveLimit = $limit !== null ? max(1, $limit) : $this->defaultLimit;
+        $ranked = $this->ranker->blend(
+            $keywordScores,
+            $cosines,
+            $signals,
+            $effectiveLimit,
+            $solid,
+            $this->semanticMinScore
+        );
+        $pinned = array_values(array_intersect($skuIds, array_keys($signals)));
+        $productIds = array_slice(
+            array_values(array_unique(array_merge(
+                $pinned,
+                array_map(static fn (array $row): int => $row['product_id'], $ranked)
+            ))),
+            0,
+            $effectiveLimit
+        );
 
         $cosine = array_map(
             static fn (int $id): ?float => isset($known[$id]) ? round($known[$id], 4) : null,
@@ -406,7 +363,7 @@ final class SearchController
      * alternative returns more than $baseline results.
      *
      * @return array{
-     *     0: list<array{product_id: int, score: float, match_type: string, title_match: bool, spec_match: bool}>,
+     *     0: list<array{product_id: int, score: float, match_type: string}>,
      *     1: ?string
      * }
      */

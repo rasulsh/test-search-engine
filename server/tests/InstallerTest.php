@@ -167,7 +167,7 @@ final class InstallerTest extends TestCase
         // Build-time only: not asked for, not written to the server's config.
         self::assertArrayNotHasKey('build', $config);
         // Everything the form does not ask for keeps the template default.
-        self::assertSame(60, $config['search']['rrf_k']);
+        self::assertEqualsWithDelta(0.45, $config['search']['min_relevance'], 1e-9);
         self::assertSame('products', $config['db']['products_table']);
         self::assertSame($this->serverDir . '/data_incoming', $config['paths']['data_incoming']);
     }

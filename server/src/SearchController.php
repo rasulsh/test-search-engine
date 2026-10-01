@@ -21,7 +21,8 @@ use Throwable;
  * embeds it and runs the global cosine top-K) and neighbours below
  * `semanticMinScore` are dropped. Keyword hits and neighbours are then ranked
  * together by one blended relevance score and a combined floor (M20, see
- * Ranker); exact-SKU hits stay pinned on top. Tier 2 is purely additive — if
+ * Ranker); exact-SKU hits stay pinned on top and title (name) matches are
+ * never dropped by the floor, only weak spec / description hits are. Tier 2 is purely additive — if
  * the VPS is not configured, unreachable, slow (timeout) or answers badly, the
  * request returns Tier 1 results, logs the degradation and never errors
  * (CLAUDE.md sec. 5). If neither tier yields anything the response is empty —
@@ -296,7 +297,7 @@ final class SearchController
      * table are dropped (the signals provider omits them), so a partial reload
      * degrades instead of surfacing dead ids.
      *
-     * @param list<array{product_id: int, score: float, match_type: string}> $results keyword hits
+     * @param list<array{product_id: int, score: float, title_all: bool}> $results keyword hits
      * @param list<int> $skuIds keyword ids that matched by SKU, kept first in order
      * @param list<array{product_id: int, score: float}> $semantic best first, all >= the floor
      * @param bool $neighbours false: semantic evidence only reorders the keyword hits
@@ -306,10 +307,16 @@ final class SearchController
     {
         $skuSet = array_flip($skuIds);
         $keywordScores = [];
+        $solid = [];
         foreach ($results as $row) {
             // SKU scores are on their own huge scale and pinned anyway.
             if (!isset($skuSet[$row['product_id']])) {
                 $keywordScores[$row['product_id']] = $row['score'];
+                // Every query term in the title (name) is solid: kept whatever
+                // the VPS says. Terms found only in specs / description are weak.
+                if ($row['title_all']) {
+                    $solid[] = $row['product_id'];
+                }
             }
         }
         $known = array_column($semantic, 'score', 'product_id');
@@ -324,7 +331,7 @@ final class SearchController
         $cosines = array_intersect_key($cosines, $signals);
 
         $effectiveLimit = $limit !== null ? max(1, $limit) : $this->defaultLimit;
-        $ranked = $this->ranker->blend($keywordScores, $cosines, $signals, $effectiveLimit);
+        $ranked = $this->ranker->blend($keywordScores, $cosines, $signals, $effectiveLimit, $solid, $this->semanticMinScore);
         $pinned = array_values(array_intersect($skuIds, array_keys($signals)));
         $productIds = array_slice(
             array_values(array_unique(array_merge(
@@ -349,7 +356,7 @@ final class SearchController
      * alternative returns more than $baseline results.
      *
      * @return array{
-     *     0: list<array{product_id: int, score: float, match_type: string, title_match: bool, spec_match: bool}>,
+     *     0: list<array{product_id: int, score: float, match_type: string, title_match: bool, spec_match: bool, title_all: bool}>,
      *     1: ?string
      * }
      */

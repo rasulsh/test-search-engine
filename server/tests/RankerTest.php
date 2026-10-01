@@ -64,6 +64,37 @@ final class RankerTest extends TestCase
         self::assertSame([2], self::ids($out));
     }
 
+    public function testSolidHitIsExemptFromTheFloorButWeakHitIsNot(): void
+    {
+        $ranker = new Ranker(0.0, 0.0, 0.4, 0.6, 0.45);
+
+        // 1 solid, 2 weak, both keyword-only (0.4 / 0.2 < 0.45); 3 has cosine.
+        $out = $ranker->blend([1 => 10.0, 2 => 5.0], [3 => 0.8], [], 10, [1]);
+
+        self::assertSame([3, 1], self::ids($out));
+    }
+
+    public function testSolidHitWithoutAnyCosineSurvivesAnEmptySemanticList(): void
+    {
+        $ranker = new Ranker(0.0, 0.0, 0.4, 0.6, 0.45);
+
+        $out = $ranker->blend([1 => 10.0, 2 => 5.0], [], [], 10, [1, 2], 0.4);
+
+        self::assertSame([1, 2], self::ids($out)); // keyword order, nothing blanked
+    }
+
+    public function testUnreturnedSolidHitIsAssumedAtTheFloorAndLeadsPureNeighbours(): void
+    {
+        $ranker = new Ranker(0.0, 0.0, 0.4, 0.6, 0.45);
+
+        // 1: solid, not returned: 0.4 + 0.6 * (0.4 / 0.8) = 0.7; 2: pure semantic: 0.6.
+        $out = $ranker->blend([1 => 10.0], [2 => 0.8], [], 10, [1], 0.4);
+
+        self::assertSame([1, 2], self::ids($out));
+        // Not exempt: a weak hit gets no assumed cosine and no pass.
+        self::assertSame([2], self::ids($ranker->blend([1 => 10.0], [2 => 0.8], [], 10, [], 0.4)));
+    }
+
     public function testEverythingBelowTheFloorYieldsNothing(): void
     {
         $ranker = new Ranker(0.0, 0.0, 0.4, 0.6, 0.45);

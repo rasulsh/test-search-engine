@@ -19,7 +19,13 @@ namespace App;
  * dropped: a keyword-only hit tops out at keyword_weight, so with the floor
  * above keyword_weight a hit the model sees no link to (a description mention
  * such as "ball bearing" in a power supply's specs) cannot survive on keyword
- * evidence alone, with no per-tier gate. Stock and popularity are applied
+ * evidence alone. Only WEAK keyword hits are subject to the floor: solid hits
+ * (every query term matched in the product title / name; exact SKUs are pinned by the
+ * caller) are always kept and just ranked by the blend, so the semantic tier
+ * adds and reorders but never drops a solid keyword match, even one the VPS
+ * ranks outside its top-K (a solid hit the VPS did not return is assumed to sit
+ * at the VPS floor, so it leads the pure-semantic neighbours but not a hit both
+ * tiers like). Stock and popularity are applied
  * AFTER the floor as light multiplicative boosts: they nudge ordering among
  * comparably relevant items and never rescue a dropped one.
  */
@@ -49,9 +55,20 @@ final class Ranker
      * @param array<int, float> $keywordScores product_id => keyword score (keyword hits only)
      * @param array<int, float> $cosines       product_id => cosine from the VPS (semantic hits only)
      * @param array<int, array{stock: int, popularity: int}> $signals per-id business signals
+     * @param list<int> $solid keyword ids exempt from the floor
+     * @param float $solidCosine cosine assumed for a solid hit the VPS did not return: it is
+     *        absent because it scored below the VPS floor / outside its top-K, so at most this
+     *        (the floor); capped at the best returned cosine
      * @return list<array{product_id: int, score: float, keyword: bool}> best first
      */
-    public function blend(array $keywordScores, array $cosines, array $signals, int $limit): array
+    public function blend(
+        array $keywordScores,
+        array $cosines,
+        array $signals,
+        int $limit,
+        array $solid = [],
+        float $solidCosine = 0.0
+    ): array
     {
         $maxKeyword = $keywordScores === [] ? 0.0 : max($keywordScores);
         $maxCosine = $cosines === [] ? 0.0 : max($cosines);
@@ -60,12 +77,14 @@ final class Ranker
             $maxPopularity = max($maxPopularity, $signal['popularity']);
         }
 
+        $exempt = array_flip($solid);
         $rows = [];
         foreach (array_keys($keywordScores + $cosines) as $id) {
             $keyword = $maxKeyword > 0.0 ? max(0.0, $keywordScores[$id] ?? 0.0) / $maxKeyword : 0.0;
-            $semantic = $maxCosine > 0.0 ? max(0.0, $cosines[$id] ?? 0.0) / $maxCosine : 0.0;
+            $cosine = $cosines[$id] ?? (isset($exempt[$id]) ? min($solidCosine, $maxCosine) : 0.0);
+            $semantic = $maxCosine > 0.0 ? max(0.0, $cosine) / $maxCosine : 0.0;
             $relevance = $this->keywordWeight * $keyword + $this->semanticWeight * $semantic;
-            if ($relevance < $this->minRelevance) {
+            if ($relevance < $this->minRelevance && !isset($exempt[$id])) {
                 continue;
             }
             $inStock = ($signals[$id]['stock'] ?? 0) > 0 ? 1.0 : 0.0;

@@ -151,7 +151,10 @@ final class Keyword
 
     /**
      * @param bool $allTerms false searches any-terms even when require_all_terms is on
-     * @return list<array{product_id: int, score: float, match_type: string, title_match: bool, spec_match: bool}>
+     * @return list<array{
+     *     product_id: int, score: float, match_type: string,
+     *     title_match: bool, spec_match: bool, title_all: bool
+     * }>
      */
     public function search(string $query, ?int $limit = null, bool $allTerms = true): array
     {
@@ -190,7 +193,10 @@ final class Keyword
      * first.
      *
      * @param non-empty-list<list<string>> $variants
-     * @return list<array{product_id: int, score: float, match_type: string, title_match: bool, spec_match: bool}>
+     * @return list<array{
+     *     product_id: int, score: float, match_type: string,
+     *     title_match: bool, spec_match: bool, title_all: bool
+     * }>
      */
     private function variantSearch(array $variants, int $limit, bool $allTerms): array
     {
@@ -220,7 +226,10 @@ final class Keyword
 
     /**
      * @param list<string> $tokens
-     * @return list<array{product_id: int, score: float, match_type: string, title_match: bool, spec_match: bool}>
+     * @return list<array{
+     *     product_id: int, score: float, match_type: string,
+     *     title_match: bool, spec_match: bool, title_all: bool
+     * }>
      */
     private function textSearch(array $tokens, int $limit, bool $allTerms): array
     {
@@ -240,7 +249,10 @@ final class Keyword
 
     /**
      * @param list<string> $tokens
-     * @return list<array{product_id: int, score: float, match_type: string, title_match: bool, spec_match: bool}>
+     * @return list<array{
+     *     product_id: int, score: float, match_type: string,
+     *     title_match: bool, spec_match: bool, title_all: bool
+     * }>
      */
     private function textSearchOnce(array $tokens, int $limit, bool $allTerms): array
     {
@@ -258,7 +270,10 @@ final class Keyword
      * the normalized_sku index. SKU hits count as title matches, so the
      * description-only gate and the hybrid merge keep them.
      *
-     * @return list<array{product_id: int, score: float, match_type: string, title_match: bool, spec_match: bool}>
+     * @return list<array{
+     *     product_id: int, score: float, match_type: string,
+     *     title_match: bool, spec_match: bool, title_all: bool
+     * }>
      */
     private function skuSearch(string $sku, int $limit): array
     {
@@ -292,6 +307,7 @@ final class Keyword
                 'match_type'  => self::MATCH_SKU,
                 'title_match' => true,
                 'spec_match'  => false,
+                'title_all'   => true,
             ],
             $stmt->fetchAll(PDO::FETCH_ASSOC)
         );
@@ -299,7 +315,10 @@ final class Keyword
 
     /**
      * @param list<string> $tokens
-     * @return list<array{product_id: int, score: float, match_type: string, title_match: bool, spec_match: bool}>
+     * @return list<array{
+     *     product_id: int, score: float, match_type: string,
+     *     title_match: bool, spec_match: bool, title_all: bool
+     * }>
      */
     private function fulltextSearch(array $tokens, int $limit, bool $allTerms): array
     {
@@ -324,7 +343,10 @@ final class Keyword
 
     /**
      * @param list<string> $tokens
-     * @return list<array{product_id: int, score: float, match_type: string, title_match: bool, spec_match: bool}>
+     * @return list<array{
+     *     product_id: int, score: float, match_type: string,
+     *     title_match: bool, spec_match: bool, title_all: bool
+     * }>
      */
     private function likeSearch(array $tokens, int $limit, bool $allTerms): array
     {
@@ -367,7 +389,10 @@ final class Keyword
      * @param list<string> $relevanceParams
      * @param list<string> $whereParams
      * @param null|array{0: string, 1: list<string>} $termHits
-     * @return list<array{product_id: int, score: float, match_type: string, title_match: bool, spec_match: bool}>
+     * @return list<array{
+     *     product_id: int, score: float, match_type: string,
+     *     title_match: bool, spec_match: bool, title_all: bool
+     * }>
      */
     private function scoredSearch(
         array $tokens,
@@ -439,7 +464,7 @@ final class Keyword
         $stmt = $this->pdo->prepare($sql);
         $stmt->execute(array_merge($params, $whereParams));
 
-        return $this->hydrate($stmt->fetchAll(PDO::FETCH_ASSOC), $matchType);
+        return $this->hydrate($stmt->fetchAll(PDO::FETCH_ASSOC), $matchType, count($tokens));
     }
 
     /**
@@ -453,7 +478,10 @@ final class Keyword
      * live table that predates it (before the first M15 reload) gets none.
      *
      * @param list<list<string>> $variants
-     * @return list<array{product_id: int, score: float, match_type: string, title_match: bool, spec_match: bool}>
+     * @return list<array{
+     *     product_id: int, score: float, match_type: string,
+     *     title_match: bool, spec_match: bool, title_all: bool
+     * }>
      */
     private function titleSearch(array $variants, int $limit): array
     {
@@ -512,9 +540,12 @@ final class Keyword
 
     /**
      * @param list<array<string, mixed>> $rows
-     * @return list<array{product_id: int, score: float, match_type: string, title_match: bool, spec_match: bool}>
+     * @return list<array{
+     *     product_id: int, score: float, match_type: string,
+     *     title_match: bool, spec_match: bool, title_all: bool
+     * }>
      */
-    private function hydrate(array $rows, string $matchType): array
+    private function hydrate(array $rows, string $matchType, int $termCount = 1): array
     {
         return array_map(
             static fn (array $row): array => [
@@ -523,6 +554,7 @@ final class Keyword
                 'match_type'  => (int) ($row['partial'] ?? 0) === 1 ? self::MATCH_PARTIAL : $matchType,
                 'title_match' => (int) $row['title_hits'] > 0,
                 'spec_match'  => (int) $row['spec_hits'] > 0,
+                'title_all'   => (int) $row['title_hits'] >= $termCount,
             ],
             $rows
         );

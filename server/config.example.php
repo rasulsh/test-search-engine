@@ -94,7 +94,7 @@ return [
         // (candidates fused with keyword). Keep it at or below the VPS's
         // VPS_MAX_LIMIT (500): a full list tells /search that more neighbours
         // may clear the floor further down.
-        'semantic_top_k'    => (int) (getenv('SEARCH_SEMANTIC_TOP_K') ?: 100),
+        'semantic_top_k'    => (int) (getenv('SEARCH_SEMANTIC_TOP_K') ?: 300),
         // Relevance floor (cosine) for Tier 2 neighbours, sent to the VPS as
         // min_score and re-applied here. The nearest vectors of a query with no
         // relevant product are still unrelated items; below this they are
@@ -111,8 +111,10 @@ return [
         // field-weighted keyword score / the best in the result set) and
         // semantic_norm (its VPS cosine / the best cosine; 0 when the VPS did
         // not return it), and relevance = keyword_weight * keyword_norm +
-        // semantic_weight * semantic_norm. Candidates below min_relevance are
-        // dropped. A keyword-only hit tops out at keyword_weight, so a floor
+        // semantic_weight * semantic_norm. WEAK keyword hits (the query matched
+        // only in specs / description) below min_relevance are dropped; solid
+        // ones (every term in the title / name, exact SKU) are never dropped, only ranked,
+        // and semantic-only neighbours keep the floor. A keyword-only hit tops out at keyword_weight, so a floor
         // above it (0.45 > 0.4) drops hits the model sees no link to ("ball
         // bearing" in a power supply's specs) with no per-tier gate; a strong
         // semantic match with a weak keyword match survives. Exact-SKU hits are

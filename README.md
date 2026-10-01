@@ -391,17 +391,20 @@ return it), scales each to 0..1 by its maximum in the result set, and computes
 Candidates with `relevance < SEARCH_MIN_RELEVANCE` are dropped, then light
 in-stock / popularity boosts (`SEARCH_STOCK_BOOST`, `SEARCH_POPULARITY_BOOST`)
 are applied **after** the floor, so they reorder but never rescue. Starting
-points: **0.4 / 0.6 / 0.45**. A keyword-only hit is capped at 0.4, below the
-floor, so a hit with no semantic support is dropped: "بلبرینگ" no longer returns
-power supplies whose specs mention "ball bearing" (high keyword, ~zero cosine),
-and no per-tier gate is needed. A strong semantic match with a weak keyword
-match still ranks. Trade-off: with the VPS answering, a
-title keyword hit the model gives no cosine at all is dropped as well; lower
-`SEARCH_MIN_RELEVANCE` below `SEARCH_KEYWORD_WEIGHT` to let strong keyword-only
-hits through. These values are untested on the real catalog and **need tuning
-on real queries**. Unchanged: exact-SKU hits are pinned first, the
-`require_all_terms` candidate filter (this changes ranking, not the filter),
-and the VPS-down keyword-only fallback (keyword order, no floor).
+points: **0.4 / 0.6 / 0.45**. The floor never drops a **solid** keyword match:
+an exact SKU, or every query term matching in the product title / name, is
+always kept and only ranked by the blend, so a product the VPS ranks outside
+its top-K (or an empty / short VPS list) never loses its keyword results.
+Only **weak** keyword hits (the query matched only in specs / description) and
+semantic-only neighbours are subject to the floor. A weak hit is capped at 0.4,
+below the floor, so "بلبرینگ" no longer returns power supplies whose specs
+mention "ball bearing" (high keyword, ~zero cosine). Consequence: a query whose
+hits are all weak and which the VPS finds nothing close to returns nothing.
+`SEARCH_SEMANTIC_TOP_K` defaults to 300 (VPS cap 500) so fewer legitimate
+products are missed. These values are untested on the real catalog and **need
+tuning on real queries**. Unchanged: exact-SKU hits are pinned first, the
+`require_all_terms` candidate filter, and the VPS-down keyword-only fallback
+(keyword order, no floor).
 
 **Tuning.** Every knob above lives in `server/config.php` (`search` section) or
 the matching `SEARCH_*` environment variable; a `config.php` copied before M9

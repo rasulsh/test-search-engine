@@ -261,7 +261,7 @@ Content-Type: application/json
 | `SEARCH_VPS_TOKEN` | empty | The VPS's `VPS_TOKEN`. A secret: keep it in the environment or `config.php` (install.php asks for it). |
 | `SEARCH_VPS_TIMEOUT_MS` | `300` | Budget for the whole call, connect included. A slower VPS means a keyword-only answer for that search. |
 | `SEARCH_SEMANTIC_MIN_SCORE` | `0.4` | The cosine floor, sent as `min_score` and re-applied on cPanel. See below. |
-| `SEARCH_SEMANTIC_TOP_K` | `100` | How many neighbours are asked for. |
+| `SEARCH_SEMANTIC_TOP_K` | `300` | How many neighbours are asked for. |
 
 - **Fallback.** Unreachable, timed out, any non-`200` (`401` wrong token,
   `503` no vectors loaded, …) or a malformed body: the search is answered

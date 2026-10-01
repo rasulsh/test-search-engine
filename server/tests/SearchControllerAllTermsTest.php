@@ -152,7 +152,9 @@ final class SearchControllerAllTermsTest extends DatabaseTestCase
         // "قرمز" keyword hits exclude the black keyboard; it is a neighbour.
         self::assertNotContains(self::BLACK_KEYBOARD, $this->ids('قرمز', false));
         $ids = $this->ids('قرمز');
-        self::assertSame(self::BLACK_KEYBOARD, end($ids));
+        self::assertContains(self::BLACK_KEYBOARD, $ids);
+        // The headset (title match, no cosine) is solid: kept, not floored.
+        self::assertContains(self::RED_HEADSET, $ids);
         // Its description-only hit (the office keyboard) is not among the VPS's
         // neighbours above the floor: it falls below the blended floor.
         self::assertNotContains(self::DESC_RED_KEYBOARD, $ids);

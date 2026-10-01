@@ -149,7 +149,7 @@ final class VpsEndpointTest extends TestCase
         $sent = self::$vps?->lastRequest() ?? [];
         self::assertSame('/search-vectors', $sent['path']);
         self::assertSame('Bearer ' . FakeVps::TOKEN, $sent['authorization']);
-        self::assertSame(['q' => 'macbook', 'limit' => 100, 'min_score' => 0.4], $sent['body']);
+        self::assertSame(['q' => 'macbook', 'limit' => 300, 'min_score' => 0.4], $sent['body']);
     }
 
     public function testWithDetailsCarriesTheCosineOfEachResult(): void

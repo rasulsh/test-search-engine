@@ -23,6 +23,12 @@ CREATE TABLE IF NOT EXISTS products (
     -- M13: attribute pairs + feature titles (high-signal, not length-capped).
     -- Expression default: MySQL 8 rejects a literal default on TEXT columns.
     normalized_specs MEDIUMTEXT      NOT NULL DEFAULT (''),
+    -- M21: store tag names (oc_tag via oc_product_tag), brand and category,
+    -- normalized. Tags are franchise / alternate product names: weighted just
+    -- below the title; brand and category are weighted below tags (config).
+    normalized_tags     TEXT         NOT NULL DEFAULT (''),
+    normalized_brand    VARCHAR(255) NOT NULL DEFAULT '',
+    normalized_category VARCHAR(255) NOT NULL DEFAULT '',
     brand            VARCHAR(255)    NOT NULL DEFAULT '',
     category         VARCHAR(255)    NOT NULL DEFAULT '',
     model            VARCHAR(255)    NOT NULL DEFAULT '',
@@ -40,7 +46,11 @@ CREATE TABLE IF NOT EXISTS products (
     -- M15: alias variants match the title only; this covering index lets that
     -- scan read the short titles instead of every row's long text columns.
     KEY idx_title_scan (normalized_title, popularity),
-    FULLTEXT KEY ft_normalized (normalized_title, normalized_specs, normalized_desc)
+    -- Column order is the order Keyword.php lists in MATCH(): keep them in sync.
+    FULLTEXT KEY ft_normalized (
+        normalized_title, normalized_tags, normalized_brand, normalized_category,
+        normalized_specs, normalized_desc
+    )
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_unicode_ci;
 
 CREATE TABLE IF NOT EXISTS search_logs (
@@ -53,6 +63,10 @@ CREATE TABLE IF NOT EXISTS search_logs (
     top_ids      VARCHAR(1024)   NOT NULL DEFAULT '',
     customer_id  VARCHAR(64)     DEFAULT NULL,
     latency_ms   INT UNSIGNED    NOT NULL DEFAULT 0,
+    -- M21: the suggestion offered (or applied) and the tier that answered:
+    -- 'keyword_only' or 'hybrid'. Logger.php adds both to an older table.
+    did_you_mean VARCHAR(512)    DEFAULT NULL,
+    tier         VARCHAR(16)     NOT NULL DEFAULT 'keyword_only',
     PRIMARY KEY (id),
     KEY idx_ts (ts)
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_unicode_ci;

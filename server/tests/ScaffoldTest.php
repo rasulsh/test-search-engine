@@ -52,6 +52,35 @@ final class ScaffoldTest extends TestCase
         $this->assertSame('', $config['db']['password'], 'config.example must not ship a DB password');
         $this->assertSame('', $config['reload']['token'], 'config.example must not ship a reload token');
         $this->assertSame('', $config['vps']['token'], 'config.example must not ship a VPS token');
+        // M21 tooling is off until an operator sets a token.
+        $this->assertSame('', $config['debug']['token'], 'config.example must not ship a debug token');
+        $this->assertSame('', $config['logs']['token'], 'config.example must not ship a logs token');
+    }
+
+    public function testM21KnobsAreConfigDrivenAndDocumentedInTheEnvExample(): void
+    {
+        $search = $this->loadExampleConfig()['search'];
+        $env = (string) file_get_contents(dirname(__DIR__, 2) . '/.env.example');
+
+        $knobs = [
+            'tag_weight' => 'SEARCH_TAG_WEIGHT', 'brand_weight' => 'SEARCH_BRAND_WEIGHT',
+            'category_weight' => 'SEARCH_CATEGORY_WEIGHT', 'brand_match_boost' => 'SEARCH_BRAND_MATCH_BOOST',
+            'category_match_boost' => 'SEARCH_CATEGORY_MATCH_BOOST', 'tag_match_boost' => 'SEARCH_TAG_MATCH_BOOST',
+            'tag_match_min_tokens' => 'SEARCH_TAG_MATCH_MIN_TOKENS',
+        ];
+        foreach ($knobs as $key => $variable) {
+            $this->assertArrayHasKey($key, $search, "Missing search.{$key}");
+            $this->assertStringContainsString($variable . '=', $env, "{$variable} is not in .env.example");
+        }
+        // Tags just below the title, then brand, category, specs; boosts small next to the relevance range.
+        $this->assertLessThan($search['title_weight'], $search['tag_weight']);
+        $this->assertGreaterThan($search['spec_weight'], $search['tag_weight']);
+        foreach (['brand_match_boost', 'category_match_boost', 'tag_match_boost'] as $boost) {
+            $this->assertGreaterThan(0.0, $search[$boost]);
+            $this->assertLessThanOrEqual(0.2, $search[$boost]);
+        }
+        $this->assertStringContainsString('SEARCH_DEBUG_TOKEN=', $env);
+        $this->assertStringContainsString('SEARCH_LOGS_TOKEN=', $env);
     }
 
     public function testRelevanceKnobsAreConfigDrivenWithDefaults(): void

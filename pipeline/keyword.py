@@ -17,8 +17,9 @@ from normalize import normalize
 
 # High-signal fields that feed the "did you mean" dictionary. Descriptions are
 # excluded: on the real catalog they contribute rare incidental words that won
-# corrections over the product names shoppers actually type.
-SPELLCHECK_FIELDS = ("title", "brand", "category", "model")
+# corrections over the product names shoppers actually type. Tags (M21) are
+# franchise / alternate product names, so the suggester learns them too.
+SPELLCHECK_FIELDS = ("title", "brand", "category", "model", "tags")
 
 # Persian (standard) keyboard layout: the Persian letter produced by each US-QWERTY
 # key. Used to recover queries typed with the wrong keyboard layout.

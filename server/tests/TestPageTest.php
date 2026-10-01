@@ -22,4 +22,21 @@ final class TestPageTest extends TestCase
         self::assertStringContainsString("const body = { q, limit: LIMIT, with_details: true };", $html);
         self::assertStringContainsString('data.cosine_scores', $html);
     }
+
+    public function testDebugBreakdownIsOptInAndNeverBuiltFromMarkup(): void
+    {
+        $html = (string) file_get_contents(dirname(__DIR__) . '/public/test.html');
+
+        // Needs ?debug in the URL and a typed token, which goes in a header, never the URL or body.
+        self::assertStringContainsString("searchParams.has('debug')", $html);
+        self::assertStringContainsString("headers['X-Debug-Token'] = debugToken.value", $html);
+        self::assertStringContainsString('body.debug = 1', $html);
+        self::assertStringContainsString('data.debug?.results', $html);
+        // The server's text is shown as text.
+        self::assertStringNotContainsString('innerHTML', $html);
+        // The breakdown fields the server sends (see SearchController::explain()).
+        foreach (['keyword_hit', 'blend.boosts', 'blend.semantic', 'blend.keyword', 'row.pinned'] as $field) {
+            self::assertStringContainsString($field, $html);
+        }
+    }
 }

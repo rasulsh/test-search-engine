@@ -6,6 +6,7 @@ namespace App;
 
 use APCUIterator;
 use PDO;
+use PDOException;
 
 /**
  * "Did you mean" spelling correction over a token vocabulary derived from the
@@ -224,13 +225,23 @@ final class Speller
         int $minFrequency = 1
     ): self {
         $texts = [];
-        $sql = 'SELECT normalized_title, brand, category, model FROM ' . Identifier::quote($productsTable);
-        foreach ($pdo->query($sql) as $row) {
+        $table = Identifier::quote($productsTable);
+        try {
+            // M21 tags are franchise names, learned like the pipeline dictionary does.
+            $rows = $pdo->query('SELECT normalized_title, brand, category, model, normalized_tags FROM ' . $table);
+        } catch (PDOException $e) {
+            if ($e->getCode() !== '42S22') {
+                throw $e;
+            }
+            $rows = $pdo->query('SELECT normalized_title, brand, category, model FROM ' . $table);
+        }
+        foreach ($rows as $row) {
             $texts[] = implode(' ', array_unique(Tokenizer::split(implode(' ', [
                 $row['normalized_title'],
                 Normalizer::normalize((string) $row['brand']),
                 Normalizer::normalize((string) $row['category']),
                 Normalizer::normalize((string) $row['model']),
+                (string) ($row['normalized_tags'] ?? ''),
             ]))));
         }
 

@@ -6,6 +6,10 @@ Two embedders behind one interface:
   tests can run without the real model.
 - RealEmbedder: sentence-transformers on the developer's GPU machine.
 
+What is embedded is the passage composed by build.compose_passage (M21: titles,
+tags, brand, category, model, features, attributes, description); this module
+only prefixes and embeds it, for the mock and real paths alike.
+
 The same code embeds for two models: config['model'] (e5, the cPanel bundle)
 and config['vps_model'] (bge-m3, the VPS vector service, which embeds queries
 since M18; contract 2 is between this file and vps/search_vectors).

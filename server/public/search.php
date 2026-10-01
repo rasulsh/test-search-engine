@@ -4,7 +4,8 @@
  * POST /search. Reachable directly or included by the front controller.
  * Tier 1 (keyword) always; Tier 2 (semantic) is added when the request carries a
  * query vector and a bundle is loaded (see App\SearchController). With
- * `"with_details": true` the response also carries display fields per result.
+ * `"with_details": true` the response also carries display fields per result;
+ * `"debug": 1` plus the X-Debug-Token header adds a per-result score breakdown.
  */
 
 declare(strict_types=1);
@@ -33,12 +34,24 @@ if (!is_array($request)) {
     return;
 }
 
+// Opt-in score breakdown (M21): needs the configured debug token; never logged.
+$debug = false;
+if (in_array($request['debug'] ?? null, [1, true, '1'], true)) {
+    $debugToken = (string) ($config['debug']['token'] ?? '');
+    if ($debugToken === '' || !hash_equals($debugToken, (string) ($_SERVER['HTTP_X_DEBUG_TOKEN'] ?? ''))) {
+        http_response_code(403);
+        echo json_encode(['error' => 'debug_forbidden'], JSON_UNESCAPED_UNICODE);
+        return;
+    }
+    $debug = true;
+}
+
 try {
     $db = new Db($config['db']);
     $pdo = $db->pdo();
 
     $controller = SearchController::fromConfig($pdo, $config);
-    $result = $controller->search($request);
+    $result = $controller->search($request, $debug);
 
     // Opt-in display fields (e.g. the test page); the default response is unchanged.
     if (($request['with_details'] ?? false) === true) {

@@ -185,4 +185,181 @@ final class RankerTest extends TestCase
 
         self::assertSame([3, 7], self::ids($ranker->blend([], [7 => 0.5, 3 => 0.5], [], 10)));
     }
+
+    /**
+     * Ranker for the M21 match boosts alone: no stock / popularity, no floor.
+     *
+     * @return Ranker
+     */
+    private static function matchRanker(float $brand = 0.15, float $category = 0.1, float $tag = 0.1): Ranker
+    {
+        return new Ranker(0.0, 0.0, 0.4, 0.6, 0.0, $brand, $category, $tag, 2);
+    }
+
+    /** @param array<int, array<string, mixed>> $texts */
+    private static function signals(array $texts): array
+    {
+        return array_map(static fn (array $t): array => ['stock' => 0, 'popularity' => 0] + $t, $texts);
+    }
+
+    public function testBrandMatchBoostFixesBrandDrift(): void
+    {
+        // Equal cosines for three SSD brands: ties go to the lowest id, so the
+        // queried brand (the highest id) only leads because of the boost.
+        $cosines = [1 => 0.70, 2 => 0.70, 3 => 0.69];
+        $signals = self::signals([1 => ['brand' => 'wd'], 2 => ['brand' => 'kingston'], 3 => ['brand' => 'samsung']]);
+        $variants = [['اس', 'اس', 'دی', 'samsung']];
+
+        $plain = self::matchRanker(0.0)->blend([], $cosines, $signals, 10, [], 0.0, $variants);
+        $boosted = self::matchRanker()->blend([], $cosines, $signals, 10, [], 0.0, $variants);
+
+        self::assertSame([1, 2, 3], self::ids($plain));
+        self::assertSame([3, 1, 2], self::ids($boosted));
+    }
+
+    public function testBrandMatchesThroughAnAliasVariant(): void
+    {
+        // A Persian query meets a Latin brand name through its alias variant.
+        $signals = self::signals([1 => ['brand' => 'lg'], 2 => ['brand' => 'samsung']]);
+        $cosines = [1 => 0.7, 2 => 0.7];
+
+        $literal = self::matchRanker()->blend([], $cosines, $signals, 10, [], 0.0, [['سامسونگ']]);
+        $aliased = self::matchRanker()->blend([], $cosines, $signals, 10, [], 0.0, [['سامسونگ'], ['samsung']]);
+
+        self::assertSame([1, 2], self::ids($literal));
+        self::assertSame([2, 1], self::ids($aliased));
+    }
+
+    public function testBrandAndCategoryNeedEveryWordOfTheirName(): void
+    {
+        $signals = self::signals([
+            1 => ['brand' => 'sandisk', 'category' => 'flash'],
+            2 => ['brand' => 'western digital', 'category' => 'solid state drive'],
+        ]);
+        $cosines = [1 => 0.7, 2 => 0.7];
+
+        $partial = self::matchRanker()->blend([], $cosines, $signals, 10, [], 0.0, [['western', 'drive']]);
+        $full = self::matchRanker()->blend([], $cosines, $signals, 10, [], 0.0, [['western', 'digital', 'ssd']]);
+
+        self::assertEqualsWithDelta($partial[0]['score'], $partial[1]['score'], 1e-9); // no boost for half a name
+        self::assertSame(2, $full[0]['product_id']);
+        self::assertEqualsWithDelta(0.6 * 1.15, $full[0]['score'], 1e-9);
+    }
+
+    public function testCategoryMatchBoostLiftsThatCategory(): void
+    {
+        $signals = self::signals([1 => ['category' => 'cable'], 2 => ['category' => 'headphone']]);
+        $cosines = [1 => 0.7, 2 => 0.7];
+
+        $out = self::matchRanker()->blend([], $cosines, $signals, 10, [], 0.0, [['wireless', 'headphone']]);
+
+        self::assertSame([2, 1], self::ids($out));
+        self::assertEqualsWithDelta(0.6 * 1.1, $out[0]['score'], 1e-9);
+    }
+
+    public function testTagPhraseBoostNeedsAContiguousMultiWordPhrase(): void
+    {
+        $tags = 'assassins creed origins no mans sky';
+        $signals = self::signals([1 => ['tags' => 'other'], 2 => ['tags' => $tags]]);
+        $cosines = [1 => 0.7, 2 => 0.7];
+        $boost = static fn (array $variants): array => self::matchRanker(0.0, 0.0)
+            ->blend([], $cosines, $signals, 10, [], 0.0, $variants);
+
+        self::assertSame([2, 1], self::ids($boost([['assassins', 'creed', 'origins']])));
+        self::assertSame([2, 1], self::ids($boost([['creed', 'origins']]))); // phrase inside the run
+        self::assertSame([1, 2], self::ids($boost([['assassins', 'origins']]))); // not adjacent
+        self::assertSame([1, 2], self::ids($boost([['origins', 'assassins']]))); // wrong order
+        self::assertSame([1, 2], self::ids($boost([['assassins']]))); // one word: keyword tier owns it
+    }
+
+    public function testTagBoostWordCountIsConfigDriven(): void
+    {
+        $signals = self::signals([1 => ['tags' => 'other'], 2 => ['tags' => 'pubg']]);
+        $ranker = new Ranker(0.0, 0.0, 0.4, 0.6, 0.0, 0.0, 0.0, 0.1, 1);
+
+        $out = $ranker->blend([], [1 => 0.7, 2 => 0.7], $signals, 10, [], 0.0, [['pubg']]);
+
+        self::assertSame([2, 1], self::ids($out));
+    }
+
+    public function testMatchBoostsNeverRescueAnItemTheFloorDropped(): void
+    {
+        $ranker = new Ranker(0.0, 0.0, 0.4, 0.6, 0.45, 1.0, 1.0, 1.0, 1);
+        $signals = self::signals([1 => ['brand' => 'samsung', 'category' => 'ssd', 'tags' => 'samsung ssd']]);
+
+        // Keyword-only hit: 0.4 < 0.45, dropped however well brand / category / tags match.
+        $out = $ranker->blend([1 => 10.0], [], $signals, 10, [], 0.0, [['samsung', 'ssd']]);
+
+        self::assertSame([], $out);
+    }
+
+    public function testMatchBoostsReorderCloseCandidatesButDoNotDominate(): void
+    {
+        // Stacked brand + category + tag boosts (+0.35) lift 0.9 over 0.7, but not over 0.5 of 1.0.
+        $ranker = self::matchRanker();
+        $signals = self::signals([
+            1 => [],
+            2 => ['brand' => 'samsung', 'category' => 'ssd', 'tags' => 'samsung ssd'],
+            3 => ['brand' => 'samsung', 'category' => 'ssd', 'tags' => 'samsung ssd'],
+        ]);
+        $variants = [['samsung', 'ssd']];
+
+        $close = $ranker->blend([], [1 => 0.8, 2 => 0.7], $signals, 10, [], 0.0, $variants);
+        $far = $ranker->blend([], [1 => 1.0, 3 => 0.5], $signals, 10, [], 0.0, $variants);
+
+        self::assertSame([2, 1], self::ids($close)); // 0.6 * 0.875 * 1.35 = 0.709 > 0.6
+        self::assertSame([1, 3], self::ids($far)); // 0.3 * 1.35 = 0.405 < 0.6
+    }
+
+    public function testNoMatchBoostWithoutVariantsOrTexts(): void
+    {
+        $signals = self::signals([1 => ['brand' => 'samsung'], 2 => []]);
+
+        $out = self::matchRanker(1.0, 1.0, 1.0)->blend([], [1 => 0.7, 2 => 0.7], $signals, 10);
+
+        self::assertSame([1, 2], self::ids($out));
+        self::assertEqualsWithDelta($out[0]['score'], $out[1]['score'], 1e-12);
+    }
+
+    public function testExplainReportsEveryComponentOfTheScore(): void
+    {
+        $ranker = new Ranker(0.1, 0.2, 0.4, 0.6, 0.0, 0.15, 0.1, 0.1, 2);
+        $signals = [
+            1 => ['stock' => 3, 'popularity' => 10, 'brand' => 'samsung', 'category' => '', 'tags' => 'a b'],
+            2 => ['stock' => 0, 'popularity' => 5],
+        ];
+
+        $out = $ranker->blend([1 => 8.0, 2 => 4.0], [1 => 0.5], $signals, 10, [2], 0.25, [['samsung']], true);
+
+        self::assertSame([1, 2], self::ids($out));
+        $detail = $out[0]['detail'];
+        self::assertSame(['keyword', 'semantic', 'blended', 'boosts', 'score'], array_keys($detail));
+        self::assertSame(['score' => 8.0, 'normalized' => 1.0], $detail['keyword']);
+        self::assertSame(['cosine' => 0.5, 'normalized' => 1.0, 'assumed' => false], $detail['semantic']);
+        self::assertSame(1.0, $detail['blended']);
+        self::assertSame(
+            ['stock' => 0.1, 'popularity' => 0.2, 'brand' => 0.15, 'category' => 0.0, 'tag' => 0.0],
+            $detail['boosts']
+        );
+        self::assertSame(1.45, $detail['score']);
+        // Solid hit the VPS did not return: its cosine is assumed at the floor (capped at the best).
+        self::assertTrue($out[1]['detail']['semantic']['assumed']);
+        self::assertNull($out[1]['detail']['semantic']['cosine']);
+        // Without $explain the rows stay as before.
+        self::assertArrayNotHasKey('detail', $ranker->blend([1 => 8.0], [], $signals, 10)[0] ?? ['product_id' => 1]);
+    }
+
+    public function testSettingsExposeTheKnobsForTheDebugBreakdown(): void
+    {
+        $settings = (new Ranker(0.1, 0.2, 0.4, 0.6, 0.45, 0.15, 0.1, 0.05, 3))->settings();
+
+        self::assertSame(
+            [
+                'keyword_weight' => 0.4, 'semantic_weight' => 0.6, 'min_relevance' => 0.45, 'stock_boost' => 0.1,
+                'popularity_boost' => 0.2, 'brand_match_boost' => 0.15, 'category_match_boost' => 0.1,
+                'tag_match_boost' => 0.05, 'tag_match_min_tokens' => 3,
+            ],
+            $settings
+        );
+    }
 }

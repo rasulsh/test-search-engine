@@ -245,6 +245,21 @@
       "name": "roman after a spelled numeral",
       "input": "V X",
       "expected": "5 10"
+    },
+    {
+      "name": "tags: franchise names with casing",
+      "input": "Assassins  Creed Origins  No Mans Sky",
+      "expected": "assassins creed origins no mans sky"
+    },
+    {
+      "name": "tags: persian tag with zwnj and arabic yeh",
+      "input": "بازی‌های كامپيوتری Fallout 4",
+      "expected": "بازیهای کامپیوتری fallout 4"
+    },
+    {
+      "name": "tags: persian digits and english",
+      "input": "فار كرای ۵ PS5 GTA V",
+      "expected": "فار کرای 5 ps5 gta 5"
     }
   ],
   "sku_cases": [

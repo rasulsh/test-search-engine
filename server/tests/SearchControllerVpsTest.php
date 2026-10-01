@@ -72,7 +72,7 @@ final class SearchControllerVpsTest extends DatabaseTestCase
             null,
             10,
             $vps,
-            new Ranker(60, 0.1, 0.1),
+            new Ranker(0.1, 0.1),
             $signalsProvider,
             $topK,
             20,
@@ -109,22 +109,24 @@ final class SearchControllerVpsTest extends DatabaseTestCase
     public function testVpsNeighboursAddSemanticRecall(): void
     {
         // The VPS puts 1011 (not a keyword hit for "macbook") first; 1007 is
-        // a keyword hit the VPS did not return.
+        // the keyword hit, with a lower cosine.
         $calls = [];
         $result = $this->controller($this->vps([
             1011 => [1.0, 0.0, 0.0, 0.0],
+            1007 => [0.8, 0.6, 0.0, 0.0],
             1009 => [0.0, 1.0, 0.0, 0.0],
-        ], $calls), 0.82, 50)->search(['q' => ' macbook ', 'customer_id' => 'c-1']);
+        ], $calls), 0.5, 50)->search(['q' => ' macbook ', 'customer_id' => 'c-1']);
 
-        self::assertSame([1007, 1011], $result['product_ids']); // keyword hit leads, neighbour below
-        self::assertSame([null, 1.0], $result['cosine_scores']);
+        // 1007: 0.4 + 0.6 * 0.8 = 0.88 beats the neighbour's 0.6 * 1.0.
+        self::assertSame([1007, 1011], $result['product_ids']);
+        self::assertSame([0.8, 1.0], $result['cosine_scores']);
         self::assertSame(1, (int) $this->lastLog()['had_vector']);
         // What cPanel sent: the raw query text, K and the floor, to /search-vectors.
         self::assertCount(1, $calls);
         self::assertSame('http://vps.test/search-vectors', $calls[0]['url']);
         self::assertSame(' macbook ', $calls[0]['q']);
         self::assertSame(50, $calls[0]['limit']);
-        self::assertSame(0.82, $calls[0]['min_score']);
+        self::assertSame(0.5, $calls[0]['min_score']);
         self::assertArrayNotHasKey('customer_id', $calls[0]);
     }
 
@@ -180,6 +182,7 @@ final class SearchControllerVpsTest extends DatabaseTestCase
         // catalog) and is the top cosine hit; it must not surface.
         $result = $this->controller($this->vps([
             9999 => [1.0, 0.0, 0.0, 0.0],
+            1007 => [0.85, 0.52678, 0.0, 0.0],
             1011 => [0.9, 0.43589, 0.0, 0.0],
         ]))->search(['q' => 'macbook']);
 
@@ -205,7 +208,7 @@ final class SearchControllerVpsTest extends DatabaseTestCase
     {
         $products = [
             1011 => [0.9, 0.43589, 0.0, 0.0], // cosine 0.9
-            1013 => [0.6, 0.8, 0.0, 0.0],     // cosine 0.6
+            1013 => [0.8, 0.6, 0.0, 0.0],     // cosine 0.8
         ];
 
         $strict = $this->controller($this->vps($products), 0.82)->search(['q' => 'بلبرینگ']);
@@ -225,22 +228,78 @@ final class SearchControllerVpsTest extends DatabaseTestCase
         self::assertSame([1011], $this->controller($vps, 0.82)->search(['q' => 'بلبرینگ'])['product_ids']);
     }
 
-    public function testKeywordHitsOutrankAHighlyBoostedSemanticNeighbour(): void
+    public function testSemanticEvidenceDrivesOrderAndUnsupportedKeywordHitIsDropped(): void
     {
         // "sony" keyword hits: 1009, 1011. 1001 (the catalog's most popular,
-        // in stock) is the exact cosine match but not a keyword hit. Plain RRF
-        // ranked it above 1011; it must come after both keyword hits.
+        // in stock) is the exact cosine match but not a keyword hit; it
+        // outranks nothing it should not, yet ranks: 1009 0.4 + 0.6 * 0.9 vs
+        // 1001 0.6 * 1.0 (plus boosts). 1011 matches by keyword but the VPS
+        // sees no link to it (0.4 < 0.45), so it is dropped, not tiered on top.
         $result = $this->controller($this->vps([
             1001 => [1.0, 0.0, 0.0, 0.0],
             1009 => [0.9, 0.43589, 0.0, 0.0],
             1013 => [0.0, 0.0, 1.0, 0.0],
         ]))->search(['q' => 'sony']);
 
-        self::assertSame([1009, 1011, 1001], $result['product_ids']);
-        // Cosine per result, aligned with product_ids; the VPS did not return 1011.
+        self::assertSame([1009, 1001], $result['product_ids']);
         self::assertEqualsWithDelta(0.9, $result['cosine_scores'][0], 1e-4);
-        self::assertNull($result['cosine_scores'][1]);
-        self::assertEqualsWithDelta(1.0, $result['cosine_scores'][2], 1e-4);
+        self::assertEqualsWithDelta(1.0, $result['cosine_scores'][1], 1e-4);
+    }
+
+    public function testStrongSemanticWeakKeywordMatchRanksAboveStrongKeywordWeakSemantic(): void
+    {
+        // 5001 is named by the query (title hit, max keyword score) but the
+        // model only mildly links it (0.45); 5002 matches only in its specs
+        // (weaker keyword) yet is the nearest vector (0.95). Semantic drives.
+        (new ProductLoader($this->pdo, 'products'))->load([
+            ['product_id' => 5001, 'title' => 'Gaming chair', 'description' => 'Comfortable'],
+            ['product_id' => 5002, 'title' => 'Ergonomic seat', 'specs' => 'Type: gaming chair', 'description' => ''],
+        ]);
+
+        $result = $this->controller($this->vps([
+            5001 => [0.45, 0.89303, 0.0, 0.0],
+            5002 => [0.95, 0.31225, 0.0, 0.0],
+        ]), 0.4)->search(['q' => 'gaming chair']);
+
+        self::assertSame([5002, 5001], $result['product_ids']);
+    }
+
+    public function testBlendedFloorDropsATermOnlyInSpecsWithLowCosine(): void
+    {
+        // "بلبرینگ"-style: the term sits deep in the specs of products that
+        // are not bearings (power supplies) -> high keyword, ~zero cosine ->
+        // blend below the floor; the real bearing (title + cosine) stays.
+        (new ProductLoader($this->pdo, 'products'))->load([
+            ['product_id' => 6001, 'title' => 'ایمپلتی بلبرینگ ۶۲۰۲', 'description' => 'یاتاقان'],
+            ['product_id' => 6002, 'title' => 'پاور ۷۵۰ وات', 'specs' => 'فن: بلبرینگ', 'description' => ''],
+            ['product_id' => 6003, 'title' => 'پاور ۶۵۰ وات', 'specs' => 'خنک کننده: بلبرینگ', 'description' => ''],
+        ]);
+        $vectors = [
+            6001 => [0.8, 0.6, 0.0, 0.0],
+            6002 => [0.05, 0.99875, 0.0, 0.0], // below the VPS floor too
+        ];
+
+        $blended = $this->controller($this->vps($vectors), 0.4)->search(['q' => 'بلبرینگ']);
+        self::assertSame([6001], $blended['product_ids']);
+
+        // Same catalog, VPS down: keyword-only fallback still serves all three.
+        $fallback = $this->controller(null)->search(['q' => 'بلبرینگ']);
+        self::assertEqualsCanonicalizing([6001, 6002, 6003], $fallback['product_ids']);
+    }
+
+    public function testExactSkuHitStaysPinnedFirstWithoutAnyCosine(): void
+    {
+        (new ProductLoader($this->pdo, 'products'))->load([
+            ['product_id' => 7001, 'title' => 'Mystery part', 'sku' => 'ZX-9000', 'description' => ''],
+        ]);
+
+        $result = $this->controller($this->vps([
+            1011 => [1.0, 0.0, 0.0, 0.0],
+            1009 => [0.9, 0.43589, 0.0, 0.0],
+        ]), 0.4)->search(['q' => 'ZX-9000']);
+
+        self::assertSame(7001, $result['product_ids'][0]);
+        self::assertContains(1011, $result['product_ids']);
     }
 
     public function testFromConfigBuildsTheVpsClientAndDefaultsTheFloorForBgeM3(): void
@@ -251,7 +310,7 @@ final class SearchControllerVpsTest extends DatabaseTestCase
             'db'     => ['products_table' => 'products', 'search_logs_table' => 'search_logs'],
             'search' => [
                 'default_limit' => 20, 'min_token_size' => 3, 'semantic_top_k' => 100,
-                'rrf_k' => 60, 'stock_boost' => 0.1, 'popularity_boost' => 0.1,
+                'stock_boost' => 0.1, 'popularity_boost' => 0.1,
             ],
             'paths'  => ['data' => sys_get_temp_dir() . '/no-bundle'],
         ];
@@ -329,44 +388,14 @@ final class SearchControllerVpsTest extends DatabaseTestCase
         ];
     }
 
-    public function testDescriptionOnlyMatchesTheVpsDidNotReturnAreDropped(): void
+    public function testKeywordHitsTheVpsDoesNotSupportAreDropped(): void
     {
+        // 3001 names "bearing" in its title but the model sees no link (cosine
+        // 0.1, below the VPS floor); 3002 / 3004 mention it only in the
+        // description with no cosine; 3003 is the only supported hit.
         $result = $this->controller($this->vps($this->seedBearingCatalog()))->search(['q' => 'bearing']);
 
-        // The VPS list is shorter than K, so everything it left out (3002 at
-        // 0.75, 3004) is below the floor.
-        self::assertSame(3001, $result['product_ids'][0]); // title match, low cosine: kept, first
-        self::assertEqualsCanonicalizing([3001, 3003], $result['product_ids']);
-    }
-
-    public function testDescriptionOnlyMatchesAreKeptWhenTheVpsListIsFull(): void
-    {
-        // K = 1: the VPS returns only 3003; 3002 and 3004 may still clear the
-        // floor further down, so there is no evidence against them.
-        $result = $this->controller($this->vps($this->seedBearingCatalog()), 0.82, 1)
-            ->search(['q' => 'bearing']);
-
-        self::assertEqualsCanonicalizing([3001, 3002, 3003, 3004], $result['product_ids']);
-    }
-
-    public function testLowCosineSpecMatchIsKeptAboveDescriptionOnly(): void
-    {
-        // M13: a spec (attribute / feature title) match is high-signal, so the
-        // description-only gate does not apply to it, and it leads the
-        // description-only hits even when they are closer in vector space.
-        $vectors = $this->seedBearingCatalog();
-        (new ProductLoader($this->pdo, 'products'))->load([[
-            'product_id'  => 3005,
-            'title'       => 'Wheel hub kit',
-            'description' => 'Steel hub',
-            'specs'       => 'Type: bearing | Size: 6202',
-        ]]);
-        $vectors[3005] = [0.1, 0.99499, 0.0, 0.0]; // spec match, far below the floor
-
-        $result = $this->controller($this->vps($vectors))->search(['q' => 'bearing']);
-
-        self::assertSame([3001, 3005], array_slice($result['product_ids'], 0, 2));
-        self::assertEqualsCanonicalizing([3001, 3005, 3003], $result['product_ids']);
+        self::assertSame([3003], $result['product_ids']);
     }
 
     public function testDescriptionOnlyMatchesAreKeptWithoutTheSemanticTier(): void
@@ -405,25 +434,32 @@ final class SearchControllerVpsTest extends DatabaseTestCase
         self::assertSame([], $result['product_ids']);
     }
 
-    public function testDescriptionOnlyGateCanBeDisabledInConfig(): void
+    public function testMinRelevanceIsConfigDriven(): void
     {
         $vectors = $this->seedBearingCatalog();
         $config = [
             'db'     => ['products_table' => 'products', 'search_logs_table' => 'search_logs'],
             'search' => [
                 'default_limit' => 20, 'min_token_size' => 3, 'semantic_top_k' => 100,
-                'rrf_k' => 60, 'stock_boost' => 0.1, 'popularity_boost' => 0.1,
-                'semantic_min_score' => 0.82, 'desc_only_needs_semantic' => false,
+                'stock_boost' => 0.1, 'popularity_boost' => 0.1,
+                'semantic_min_score' => 0.82, 'min_relevance' => 0.0,
             ],
             'paths'  => ['data' => sys_get_temp_dir() . '/no-bundle'],
         ];
         $search = fn (array $config): array =>
             SearchController::fromConfig($this->pdo, $config, $this->vps($vectors))->search(['q' => 'bearing']);
 
-        self::assertContains(3002, $search($config)['product_ids']);
+        // No floor: the unsupported keyword hits are served, below 3003.
+        $open = $search($config)['product_ids'];
+        self::assertEqualsCanonicalizing([3001, 3002, 3003, 3004], $open);
 
-        unset($config['search']['desc_only_needs_semantic']); // older config.php: gate on by default
-        self::assertNotContains(3002, $search($config)['product_ids']);
+        unset($config['search']['min_relevance']); // older config.php: 0.45 default
+        self::assertSame([3003], $search($config)['product_ids']);
+
+        // Weights come from config too: keyword-only weighting + a floor of 0.5
+        // keeps the best keyword hit (3001 = title match) and drops the rest.
+        $config['search'] += ['keyword_weight' => 1.0, 'semantic_weight' => 0.0, 'min_relevance' => 0.5];
+        self::assertSame([3001], $search($config)['product_ids']);
     }
 
     public function testQVectorFromAnOldClientIsIgnored(): void
@@ -431,7 +467,7 @@ final class SearchControllerVpsTest extends DatabaseTestCase
         // Browsers no longer embed (M18); a stale storefront still sending
         // q_vector gets the same answer, and the VPS is asked as usual.
         $calls = [];
-        $result = $this->controller($this->vps([1011 => self::QUERY], $calls))
+        $result = $this->controller($this->vps([1011 => self::QUERY, 1007 => [0.85, 0.52678, 0.0, 0.0]], $calls))
             ->search(['q' => 'macbook', 'q_vector' => [0.0, 1.0, 0.0, 0.0]]);
 
         self::assertSame([1007, 1011], $result['product_ids']);

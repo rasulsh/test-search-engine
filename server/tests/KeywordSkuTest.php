@@ -156,7 +156,7 @@ final class KeywordSkuTest extends DatabaseTestCase
             null,
             10,
             FakeVps::client(['products' => $vectors, 'queries' => ['AB-1234' => [1.0, 0.0, 0.0, 0.0]]]),
-            new Ranker(60, 0.1, 0.1),
+            new Ranker(0.1, 0.1),
             $signals,
             100,
             20,

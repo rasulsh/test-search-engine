@@ -5,131 +5,85 @@ declare(strict_types=1);
 namespace App;
 
 /**
- * Hybrid ranking (CLAUDE.md sec. 5.5).
+ * Blended hybrid ranking (M20, CLAUDE.md sec. 5.5).
  *
- * Keyword (FULLTEXT) scores and cosine similarity live on different, incomparable
- * scales, so they are NOT added raw. Instead they are merged by weighted
- * Reciprocal Rank Fusion (RRF): each result contributes weight/(k + rank) from
- * every list it appears in, using only its rank position.
+ * Every candidate carries two relevance signals: the field-weighted keyword
+ * score (title > specs > description, phrase, SKU; Keyword) and the cosine from
+ * the VPS top-K (0 when the VPS did not return it). Each is scaled to 0..1 by
+ * its maximum within the candidate set, then
  *
- * Keyword hits lead: every keyword match ranks above every semantic-only
- * neighbour. On the real catalog the nearest vectors of a query with no truly
- * relevant product are unrelated items, and plain RRF let them interleave with
- * (and outrank) exact keyword matches. Semantic evidence still reorders keyword
- * hits among themselves, and semantic-only results augment below them.
+ *   relevance = keyword_weight * keyword_norm + semantic_weight * semantic_norm
  *
- * Within the keyword band, hits that matched in the product title lead those
- * that matched only in the description (M10), so semantic evidence and boosts
- * cannot lift a description-only mention above a product named by the query.
- * Hits that matched in the specs (attributes, feature titles; M13) but not the
- * title sit between the two.
- *
- * Partial keyword hits (M16: any-terms mode, missing a query word) rank below
- * every hit holding all the words, in the same three bands, and above the
- * semantic-only neighbours.
- *
- * Business signals (in-stock, popularity) are applied AFTER fusion as light
- * multiplicative boosts, so they nudge ordering among comparably-relevant items
- * without overriding relevance. Weights are configurable and default to small.
+ * Semantic evidence therefore drives the order instead of sitting under a
+ * keyword tier. Candidates whose relevance is below `min_relevance` are
+ * dropped: a keyword-only hit tops out at keyword_weight, so with the floor
+ * above keyword_weight a hit the model sees no link to (a description mention
+ * such as "ball bearing" in a power supply's specs) cannot survive on keyword
+ * evidence alone, with no per-tier gate. Stock and popularity are applied
+ * AFTER the floor as light multiplicative boosts: they nudge ordering among
+ * comparably relevant items and never rescue a dropped one.
  */
 final class Ranker
 {
-    private int $rrfK;
     private float $stockBoost;
     private float $popularityBoost;
     private float $keywordWeight;
     private float $semanticWeight;
+    private float $minRelevance;
 
     public function __construct(
-        int $rrfK = 60,
         float $stockBoost = 0.1,
         float $popularityBoost = 0.1,
-        float $keywordWeight = 1.0,
-        float $semanticWeight = 1.0
+        float $keywordWeight = 0.4,
+        float $semanticWeight = 0.6,
+        float $minRelevance = 0.45
     ) {
-        $this->rrfK = max(1, $rrfK);
         $this->stockBoost = max(0.0, $stockBoost);
         $this->popularityBoost = max(0.0, $popularityBoost);
         $this->keywordWeight = max(0.0, $keywordWeight);
         $this->semanticWeight = max(0.0, $semanticWeight);
+        $this->minRelevance = $minRelevance;
     }
 
     /**
-     * Fuse two ranked id lists and return ids ordered title keyword hits
-     * first, then spec keyword hits, then description-only keyword hits, then
-     * semantic-only ids, each band by fused-and-boosted score.
-     *
-     * @param list<int> $keywordOrder  product_ids in keyword rank order (best first)
-     * @param list<int> $semanticOrder product_ids in semantic rank order (best first)
+     * @param array<int, float> $keywordScores product_id => keyword score (keyword hits only)
+     * @param array<int, float> $cosines       product_id => cosine from the VPS (semantic hits only)
      * @param array<int, array{stock: int, popularity: int}> $signals per-id business signals
-     * @param list<int> $titleMatches  keyword ids that matched in the title
-     * @param list<int> $specMatches   keyword ids that matched in the specs
-     * @param list<int> $partialMatches keyword ids missing a query word
-     * @return list<array{product_id: int, score: float, keyword: bool}>
+     * @return list<array{product_id: int, score: float, keyword: bool}> best first
      */
-    public function fuse(
-        array $keywordOrder,
-        array $semanticOrder,
-        array $signals,
-        int $limit,
-        array $titleMatches = [],
-        array $specMatches = [],
-        array $partialMatches = []
-    ): array {
-        $rrf = [];
-        foreach ($keywordOrder as $i => $id) {
-            $rrf[$id] = ($rrf[$id] ?? 0.0) + $this->keywordWeight / ($this->rrfK + $i + 1);
-        }
-        $isKeyword = $rrf;
-        $inTitle = array_intersect_key(array_flip($titleMatches), $isKeyword);
-        $inSpecs = array_intersect_key(array_flip($specMatches), $isKeyword);
-        $partial = array_flip($partialMatches);
-        foreach ($semanticOrder as $i => $id) {
-            $rrf[$id] = ($rrf[$id] ?? 0.0) + $this->semanticWeight / ($this->rrfK + $i + 1);
-        }
-
-        // Normalize popularity across the candidate set so the boost is bounded
-        // regardless of absolute view counts.
+    public function blend(array $keywordScores, array $cosines, array $signals, int $limit): array
+    {
+        $maxKeyword = $keywordScores === [] ? 0.0 : max($keywordScores);
+        $maxCosine = $cosines === [] ? 0.0 : max($cosines);
         $maxPopularity = 0;
-        foreach (array_keys($rrf) as $id) {
-            $maxPopularity = max($maxPopularity, $signals[$id]['popularity'] ?? 0);
+        foreach ($signals as $signal) {
+            $maxPopularity = max($maxPopularity, $signal['popularity']);
         }
 
         $rows = [];
-        foreach ($rrf as $id => $base) {
+        foreach (array_keys($keywordScores + $cosines) as $id) {
+            $keyword = $maxKeyword > 0.0 ? max(0.0, $keywordScores[$id] ?? 0.0) / $maxKeyword : 0.0;
+            $semantic = $maxCosine > 0.0 ? max(0.0, $cosines[$id] ?? 0.0) / $maxCosine : 0.0;
+            $relevance = $this->keywordWeight * $keyword + $this->semanticWeight * $semantic;
+            if ($relevance < $this->minRelevance) {
+                continue;
+            }
             $inStock = ($signals[$id]['stock'] ?? 0) > 0 ? 1.0 : 0.0;
-            $popularity = $maxPopularity > 0
-                ? ($signals[$id]['popularity'] ?? 0) / $maxPopularity
-                : 0.0;
-            $boost = 1.0 + $this->stockBoost * $inStock + $this->popularityBoost * $popularity;
+            $popularity = $maxPopularity > 0 ? ($signals[$id]['popularity'] ?? 0) / $maxPopularity : 0.0;
             $rows[] = [
                 'product_id' => $id,
-                'score'      => $base * $boost,
-                'keyword'    => isset($isKeyword[$id]),
-                'band'       => match (true) {
-                    isset($inTitle[$id]) => 3,
-                    isset($inSpecs[$id]) => 2,
-                    isset($isKeyword[$id]) => 1,
-                    default => 0,
-                } + (isset($isKeyword[$id]) && !isset($partial[$id]) ? 3 : 0),
+                'score'      => $relevance
+                    * (1.0 + $this->stockBoost * $inStock + $this->popularityBoost * $popularity),
+                'keyword'    => isset($keywordScores[$id]),
             ];
         }
 
         usort(
             $rows,
             static fn (array $a, array $b): int =>
-                ($b['band'] <=> $a['band'])
-                ?: ($b['score'] <=> $a['score'])
-                ?: ($a['product_id'] <=> $b['product_id'])
+                ($b['score'] <=> $a['score']) ?: ($a['product_id'] <=> $b['product_id'])
         );
 
-        return array_map(
-            static fn (array $row): array => [
-                'product_id' => $row['product_id'],
-                'score'      => $row['score'],
-                'keyword'    => $row['keyword'],
-            ],
-            array_slice($rows, 0, max(1, $limit))
-        );
+        return array_slice($rows, 0, max(1, $limit));
     }
 }

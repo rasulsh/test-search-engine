@@ -312,7 +312,7 @@ passages; bge-m3's scale is lower but the proximity is the same), so without
 that the one-word matches came back through the semantic tier. Single-word queries, SKU hits and the
 partial fallback keep the additive neighbours. `SEARCH_REQUIRE_ALL_TERMS=0`
 always serves partial matches (products holding every word still rank first,
-also in the hybrid merge) with the additive neighbours. Server-only: no
+also in the hybrid ranking, by their higher keyword score) with the additive neighbours. Server-only: no
 bundle rebuild or schema change.
 
 **Relevance floor.** The nearest vectors of a query with no relevant product
@@ -326,12 +326,8 @@ turning the VPS on. 0.4 is a starting point that **needs tuning on the real
 catalog** (eval harness + search logs): on the 6-product fixture, right
 one-word hits scored 0.42–0.49 and wrong ones up to 0.43, so no floor
 separates short queries. One-word precision comes from the keyword tier (all
-terms, aliases, synonyms) fused by RRF, which always ranks keyword hits above
-semantic-only neighbours; the floor mainly keeps far neighbours out. With the
-description-only gate below, a description-only keyword hit the VPS did not
-return is dropped when the VPS list is shorter than `SEARCH_SEMANTIC_TOP_K`
-(everything else is below the floor) and kept when the list is full (it may
-still clear the floor further down). Hybrid responses carry `cosine_scores`
+terms, aliases, synonyms) blended with the cosine (below); the floor mainly
+keeps far neighbours out. Hybrid responses carry `cosine_scores`
 (`null` for a product the VPS did not return) so the test page can show each
 result's similarity while tuning.
 
@@ -364,8 +360,8 @@ product ids. Each query token not in the title but in the specs earns
 `SEARCH_SPEC_WEIGHT` (default 6; title 10, description 1): `score =
 (title_weight × title hits + spec_weight × spec hits + desc_weight × other
 hits) / tokens`. Every spec match ranks above every description-only match and
-below every title match, whatever the weights, also in the hybrid merge; with
-semantic results, spec matches are exempt from the description-only gate below.
+below every title match in keyword-only results, whatever the weights; in hybrid
+results this keyword score is one input of the blended relevance (M20, below).
 The weight is a starting point and needs tuning on the real catalog. Needs a
 rebuild + reload (new column and FULLTEXT index); until then the live table has
 no specs and search runs on title and description as before.
@@ -378,25 +374,34 @@ full description is still stored in `description` for display. Deep spec text
 ("ball bearing" in a case fan's specs) therefore no longer matches, and the
 FULLTEXT index over long HTML-derived descriptions shrinks. This is a
 **build-time** setting: rebuild the bundle and reload for it to take effect.
-At query time, when the VPS answered, a keyword hit that matched only
-in the description (no title match) must also reach
-`SEARCH_SEMANTIC_MIN_SCORE`, or it is dropped; title and spec matches are never
-dropped, a hit the VPS did not return is judged as described under "Relevance
-floor", and keyword-only requests are unchanged. Disable with `SEARCH_DESC_ONLY_NEEDS_SEMANTIC=0`. M15 raised the
+Since M20 there is no description-only gate: a description-only hit with no
+semantic support falls below the blended relevance floor (below). M15 raised the
 default from 400 to 800: attributes and feature titles are now indexed in full
-as specs, and the gate keeps description-only hits out of hybrid results
-unless they are semantically close. Keyword-only requests (no VPS answer)
-see more description-only matches at the bottom of the list.
+as specs. Keyword-only requests (no VPS answer) see more description-only
+matches at the bottom of the list.
 
-**Hybrid merge (`server/src/Ranker.php`).** Keyword (FULLTEXT) and cosine scores
-are on incomparable scales, so they are **not** added raw. They are merged by
-weighted **Reciprocal Rank Fusion** (rank-based, scale-free), then light business
-boosts (in-stock, popularity) are applied **after** fusion. Keyword hits always
-lead: every keyword match ranks above every semantic-only neighbour (and title
-keyword matches above spec matches, above description-only ones), the
-semantic side reorders keyword hits among themselves and augments below them.
-Weights are configurable (`SEARCH_RRF_K`, `SEARCH_KEYWORD_WEIGHT`,
-`SEARCH_SEMANTIC_WEIGHT`, `SEARCH_STOCK_BOOST`, `SEARCH_POPULARITY_BOOST`).
+**Blended hybrid ranking (`server/src/Ranker.php`, M20).** Keyword hits no
+longer form a tier above the semantic results. For every candidate (keyword
+hits, plus the VPS neighbours unless the all-terms rule applies) the ranker
+takes the field-weighted keyword score and the VPS cosine (0 if the VPS did not
+return it), scales each to 0..1 by its maximum in the result set, and computes
+
+    relevance = SEARCH_KEYWORD_WEIGHT * keyword_norm + SEARCH_SEMANTIC_WEIGHT * semantic_norm
+
+Candidates with `relevance < SEARCH_MIN_RELEVANCE` are dropped, then light
+in-stock / popularity boosts (`SEARCH_STOCK_BOOST`, `SEARCH_POPULARITY_BOOST`)
+are applied **after** the floor, so they reorder but never rescue. Starting
+points: **0.4 / 0.6 / 0.45**. A keyword-only hit is capped at 0.4, below the
+floor, so a hit with no semantic support is dropped: "بلبرینگ" no longer returns
+power supplies whose specs mention "ball bearing" (high keyword, ~zero cosine),
+and no per-tier gate is needed. A strong semantic match with a weak keyword
+match still ranks. Trade-off: with the VPS answering, a
+title keyword hit the model gives no cosine at all is dropped as well; lower
+`SEARCH_MIN_RELEVANCE` below `SEARCH_KEYWORD_WEIGHT` to let strong keyword-only
+hits through. These values are untested on the real catalog and **need tuning
+on real queries**. Unchanged: exact-SKU hits are pinned first, the
+`require_all_terms` candidate filter (this changes ranking, not the filter),
+and the VPS-down keyword-only fallback (keyword order, no floor).
 
 **Tuning.** Every knob above lives in `server/config.php` (`search` section) or
 the matching `SEARCH_*` environment variable; a `config.php` copied before M9
@@ -960,6 +965,8 @@ M0–M5. Verify each item on the production host before wide rollout.
 - [ ] **M17** — VPS vector service (`vps/`): bge-m3 (ONNX, CPU) query embedding, `POST /search-vectors` global cosine top-K with a score floor, token auth, validated atomic `POST /reload`, `GET /health`, `setup.sh` + systemd; `build.py` / `release.py --vps-out` produce its bge-m3 product vectors.
 - [ ] **M16** — Multi-word queries require every word across title, specs and description (per alias variant), ranked title band, spec band (no title match), description-only, then score; best-partial fallback when nothing holds every word; semantic neighbours not appended to all-words hits (`SEARCH_REQUIRE_ALL_TERMS`, default on).
 - [ ] **M18** — Semantic tier from the VPS: `/search` POSTs the query server-to-server to the VPS `/search-vectors` (`SEARCH_VPS_URL` / `_TOKEN` / `_TIMEOUT_MS`, `min_score` = the cPanel floor, now 0.4 for bge-m3), RRF-merges the neighbours as before, and falls back to logged keyword-only results when the VPS is off, down, slow or failing. The browser model is gone (`client/`, `fetch_web_model.py`, the model in `release.zip`, `q_vector`); the test page and storefront snippet send only `{q}`.
+- [ ] **M20** — Blended hybrid ranking: relevance = keyword_weight × keyword_norm + semantic_weight × semantic_norm with a combined floor (`SEARCH_KEYWORD_WEIGHT` / `_SEMANTIC_WEIGHT` / `_MIN_RELEVANCE`); replaces the keyword-first tiers, RRF and the description-only gate. Server-only.
+
 
 ## Contributing
 

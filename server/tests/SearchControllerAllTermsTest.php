@@ -74,7 +74,7 @@ final class SearchControllerAllTermsTest extends DatabaseTestCase
             'db'     => ['products_table' => 'products', 'search_logs_table' => 'search_logs'],
             'search' => $search + [
                 'default_limit' => 20, 'min_token_size' => 3, 'semantic_top_k' => 100,
-                'rrf_k' => 60, 'stock_boost' => 0.1, 'popularity_boost' => 0.1,
+                'stock_boost' => 0.1, 'popularity_boost' => 0.1,
                 'semantic_min_score' => 0.82,
             ],
             'paths'  => ['data' => sys_get_temp_dir() . '/no-bundle-' . uniqid()],
@@ -93,9 +93,13 @@ final class SearchControllerAllTermsTest extends DatabaseTestCase
 
         self::assertSame($expected, $this->ids('کیبورد قرمز', false));
         // The black keyboard (0.90) and the red mouse (0.88) clear the semantic
-        // floor but hold one word each: not appended.
-        // Semantic evidence may reorder them (it does: cosine 1.0 leads).
-        self::assertEqualsCanonicalizing($expected, $this->ids('کیبورد قرمز'));
+        // floor but hold one word each: not appended. Semantic evidence
+        // reorders (the title hit with cosine 0.95 leads); the office keyboard, a description-only
+        // hit the VPS did not return, falls below the blended floor.
+        self::assertSame(
+            [self::TITLE_RED_KEYBOARD, self::RED_KEYBOARD],
+            $this->ids('کیبورد قرمز')
+        );
     }
 
     public function testThreeWordQueryThroughTheController(): void
@@ -117,8 +121,13 @@ final class SearchControllerAllTermsTest extends DatabaseTestCase
 
         // The fallback holds no all-words hit: neighbours stay additive below.
         $withSemantic = $this->ids('کیبورد آبی');
-        self::assertSame(self::RED_MOUSE, end($withSemantic));
-        self::assertCount(6, $withSemantic);
+        // (blended, M20): the keyboards the VPS knows rank by cosine; the red
+        // mouse neighbour is appended by relevance; keyword hits with no
+        // cosine (office / SKU keyboards) fall below the floor.
+        self::assertSame(
+            [self::BLACK_KEYBOARD, self::RED_KEYBOARD, self::TITLE_RED_KEYBOARD, self::RED_MOUSE],
+            $withSemantic
+        );
     }
 
     public function testNoWordMatchesAtAllStaysEmpty(): void
@@ -145,7 +154,7 @@ final class SearchControllerAllTermsTest extends DatabaseTestCase
         $ids = $this->ids('قرمز');
         self::assertSame(self::BLACK_KEYBOARD, end($ids));
         // Its description-only hit (the office keyboard) is not among the VPS's
-        // neighbours above the floor, so the M11 gate drops it.
+        // neighbours above the floor: it falls below the blended floor.
         self::assertNotContains(self::DESC_RED_KEYBOARD, $ids);
     }
 
@@ -167,8 +176,8 @@ final class SearchControllerAllTermsTest extends DatabaseTestCase
         // The black keyboard's cosine (0.90) cannot lift a one-word match
         // above a product holding both words.
         self::assertEqualsCanonicalizing(
-            [self::TITLE_RED_KEYBOARD, self::RED_KEYBOARD, self::DESC_RED_KEYBOARD],
-            array_slice($ids, 0, 3)
+            [self::TITLE_RED_KEYBOARD, self::RED_KEYBOARD],
+            array_slice($ids, 0, 2)
         );
         self::assertContains(self::BLACK_KEYBOARD, $ids);
         self::assertContains(self::RED_MOUSE, $ids);

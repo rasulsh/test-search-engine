@@ -278,7 +278,7 @@ Content-Type: application/json
   tuning on the real catalog** (eval harness, search logs). No floor separates
   short queries well (on the fixture, right one-word hits scored 0.42–0.49 and
   wrong ones up to 0.43): one-word precision comes from the keyword tier (all
-  terms, aliases, synonyms) fused by RRF, and the floor mainly keeps far
+  terms, aliases, synonyms) blended with it (M20: weighted keyword + cosine relevance with its own floor, see README), and the floor mainly keeps far
   neighbours out.
 - The VPS's own `VPS_SEMANTIC_MIN_SCORE` applies only to callers that send no
   `min_score`; cPanel always sends its floor.

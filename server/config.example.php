@@ -104,25 +104,22 @@ return [
         // bge-m3 neighbour). It NEEDS TUNING on the real catalog: on the fixture,
         // right one-word hits scored 0.42-0.49 and wrong ones up to 0.43, so no
         // floor separates short queries; the keyword tier (all terms, aliases)
-        // fused by RRF carries one-word precision, and the floor mainly keeps
+        // blended with it carries one-word precision, and the floor mainly keeps
         // far neighbours out.
         'semantic_min_score' => (float) $setting('SEARCH_SEMANTIC_MIN_SCORE', '0.4'),
-        // With semantic results, keyword hits that matched only in the description
-        // (not the title) must also reach semantic_min_score, or they are
-        // dropped: spec text mentioning the query ("ball bearing" in a case
-        // fan) is not a product for it. Title matches are always kept;
-        // keyword-only requests are unaffected. Set to 0 to disable.
-        'desc_only_needs_semantic' => filter_var(
-            $setting('SEARCH_DESC_ONLY_NEEDS_SEMANTIC', '1'),
-            FILTER_VALIDATE_BOOLEAN
-        ),
-        // Reciprocal Rank Fusion constant. Keyword and cosine scores are on
-        // different scales, so they are merged by rank, not added raw. Keyword
-        // hits always rank above semantic-only neighbours; the weights set how
-        // much each list reorders items within those bands.
-        'rrf_k'             => (int) $setting('SEARCH_RRF_K', '60'),
-        'keyword_weight'    => (float) $setting('SEARCH_KEYWORD_WEIGHT', '1.0'),
-        'semantic_weight'   => (float) $setting('SEARCH_SEMANTIC_WEIGHT', '1.0'),
+        // Blended hybrid ranking (M20). Each candidate gets keyword_norm (its
+        // field-weighted keyword score / the best in the result set) and
+        // semantic_norm (its VPS cosine / the best cosine; 0 when the VPS did
+        // not return it), and relevance = keyword_weight * keyword_norm +
+        // semantic_weight * semantic_norm. Candidates below min_relevance are
+        // dropped. A keyword-only hit tops out at keyword_weight, so a floor
+        // above it (0.45 > 0.4) drops hits the model sees no link to ("ball
+        // bearing" in a power supply's specs) with no per-tier gate; a strong
+        // semantic match with a weak keyword match survives. Exact-SKU hits are
+        // pinned first regardless. STARTING POINTS: tune on real queries.
+        'keyword_weight'    => (float) $setting('SEARCH_KEYWORD_WEIGHT', '0.4'),
+        'semantic_weight'   => (float) $setting('SEARCH_SEMANTIC_WEIGHT', '0.6'),
+        'min_relevance'     => (float) $setting('SEARCH_MIN_RELEVANCE', '0.45'),
         // Light business boosts applied AFTER fusion (kept small on purpose).
         'stock_boost'       => (float) $setting('SEARCH_STOCK_BOOST', '0.1'),
         'popularity_boost'  => (float) $setting('SEARCH_POPULARITY_BOOST', '0.1'),

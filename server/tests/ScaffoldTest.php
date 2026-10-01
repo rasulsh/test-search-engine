@@ -60,8 +60,9 @@ final class ScaffoldTest extends TestCase
 
         // bge-m3 scale (M18); e5's 0.82 would drop nearly every neighbour.
         $this->assertSame(0.4, $search['semantic_min_score']);
-        $this->assertSame(1.0, $search['keyword_weight']);
-        $this->assertSame(1.0, $search['semantic_weight']);
+        $this->assertSame(0.4, $search['keyword_weight']);
+        $this->assertSame(0.6, $search['semantic_weight']);
+        $this->assertSame(0.45, $search['min_relevance']);
         $this->assertSame(3, $search['suggest_min_results']);
         $this->assertSame(2, $search['suggest_min_frequency']);
         $this->assertSame(2, $search['suggest_max_distance']);

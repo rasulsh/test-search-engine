@@ -268,6 +268,11 @@ wait for review before starting the next.
   zip and the VPS vectors in one command. `normalization_version`, model and
   dim unchanged (no rule changed).
 
+- **M22 — Offline build speed + reliable export:** `pipeline/db_export.py`
+  (direct DB -> CSV, replaces the phpMyAdmin export), GPU/fp16/batch-configured
+  `RealEmbedder`, and a mock cPanel `vectors.bin` in `release.py` (unread since
+  M18; `/reload` checks meta, size and checksum only). Contracts unchanged.
+
 **Definition of Done (per PR):** code + tests pass in CI; docs updated;
 KISS respected (no unused abstraction); PR description complete; no secrets or
 data files committed.

@@ -39,6 +39,19 @@ def load() -> dict[str, Any]:
         },
         # "mock" needs no GPU/model download; "real" loads the model.
         "embedder": os.getenv("EMBEDDER", "mock"),
+        # RealEmbedder knobs (embed.py). Defaults fit bge-m3 on a 4 GB GPU.
+        "embed": {
+            # auto = cuda when torch sees a GPU, else cpu; or cpu / cuda / cuda:N.
+            "device": os.getenv("SEARCH_EMBED_DEVICE", "auto"),
+            # auto = half precision on CUDA only; on / off force it.
+            "fp16": os.getenv("SEARCH_EMBED_FP16", "auto"),
+            "batch_size": int(os.getenv("SEARCH_EMBED_BATCH_SIZE", "16")),
+        },
+        # release.py embedder for the cPanel bundle's vectors.bin (e5). /search
+        # has not read it since M18; /reload only checks meta, size and checksum,
+        # so a deterministic mock saves a second full embedding run. "real"
+        # restores real e5 vectors. The VPS vectors are always real.
+        "bundle_embedder": os.getenv("SEARCH_BUNDLE_EMBEDDER", "mock"),
         "keyword": {
             # Tokens shorter than this are ignored when building the dictionaries.
             "min_token_length": int(os.getenv("SEARCH_MIN_TOKEN_LENGTH", "2")),

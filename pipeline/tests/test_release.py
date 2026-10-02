@@ -146,19 +146,38 @@ def test_release_rejects_a_missing_or_malformed_alias_file(
     assert not (tmp_path / "r.zip").exists()
 
 
-def test_release_defaults_to_the_real_embedder(monkeypatch: pytest.MonkeyPatch) -> None:
-    # EMBEDDER=mock in the shell must not leak mock vectors into a release.
-    monkeypatch.setenv("EMBEDDER", "mock")
+def _seen_embedders(monkeypatch: pytest.MonkeyPatch, *args: str) -> dict[str, str]:
     seen: dict[str, str] = {}
 
-    def fake_build(products, out_dir, config):  # type: ignore[no-untyped-def]
-        seen["embedder"] = config["embedder"]
-        raise SystemExit(0)
+    def fake_bundle(products, out_dir, config):  # type: ignore[no-untyped-def]
+        seen["bundle"] = config["embedder"]
+        return {"count": 0, "dim": 0, "embedder": config["embedder"]}
 
-    monkeypatch.setattr(release.build, "build_bundle", fake_build)
-    with pytest.raises(SystemExit):
-        release.main(["--sql", str(INPUT_SQL), "--out", "unused.zip", "--no-model"])
-    assert seen["embedder"] == "real"
+    def fake_vps(products, out_dir, config):  # type: ignore[no-untyped-def]
+        seen["vps"] = config["embedder"]
+        return {"count": 0, "model": "m", "dim": 0, "embedder": config["embedder"]}
+
+    monkeypatch.setattr(release.build, "build_bundle", fake_bundle)
+    monkeypatch.setattr(release.build, "build_vps_vectors", fake_vps)
+    monkeypatch.setattr(release, "release_entries", lambda *a: [])
+    monkeypatch.setattr(release, "write_zip", lambda *a: None)
+    release.main(["--sql", str(INPUT_SQL), "--out", "unused.zip", *args])
+    return seen
+
+
+def test_release_vps_vectors_are_real_and_bundle_vectors_mock(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # EMBEDDER=mock in the shell must not leak mock vectors into the VPS; the
+    # unused e5 bundle vectors default to the mock (M22).
+    monkeypatch.setenv("EMBEDDER", "mock")
+    monkeypatch.delenv("SEARCH_BUNDLE_EMBEDDER", raising=False)
+    assert _seen_embedders(monkeypatch) == {"bundle": "mock", "vps": "real"}
+
+
+def test_release_bundle_embedder_can_be_real(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("SEARCH_BUNDLE_EMBEDDER", "real")
+    assert _seen_embedders(monkeypatch) == {"bundle": "real", "vps": "real"}
 
 
 def test_real_repository_release_via_the_cli(tmp_path: Path) -> None:

@@ -104,7 +104,7 @@ def _fake_sentence_transformers(
     monkeypatch: pytest.MonkeyPatch, pooling: object
 ) -> None:
     class SentenceTransformer(list):
-        def __init__(self, name: str, revision: str) -> None:
+        def __init__(self, name: str, revision: str, device: str = "cpu") -> None:
             super().__init__([object(), pooling])
 
     module = types.ModuleType("sentence_transformers")

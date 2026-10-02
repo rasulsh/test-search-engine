@@ -3,14 +3,18 @@
     python pipeline/release.py --csv export.csv --out release.zip
         [--desc-index-chars N] [--aliases aliases.json] [--vps-out DIR | --no-vps]
 
-Builds the bundle with the real embedder and packs, relative to the host's
+Builds the bundle and packs, relative to the host's
 `server/` directory, everything the site needs:
 
     data_incoming/        the bundle (vectors, products.load.sql, meta.json, ...)
     bootstrap.php, config.example.php, src/, public/ (incl. public/install.php)
     db/schema.sql         read by install.php on the first deploy
 
-No browser model ships (M18): queries are embedded on the VPS.
+No browser model ships (M18): queries are embedded on the VPS. Since M18 /search
+does not read the bundle's vectors.bin either (/reload only checks meta, size
+and checksum), so it is built with SEARCH_BUNDLE_EMBEDDER (default "mock", no
+second model run); the VPS vectors are always embedded for real, on the GPU when
+there is one (SEARCH_EMBED_*, README "GPU setup").
 
 The same run also writes the bge-m3 product vectors for the VPS vector service
 (vps/README.md), from the same export (tags, brand and category included in the
@@ -138,8 +142,10 @@ def main(argv: list[str] | None = None) -> int:
 
     config = pipeline_config.load()
     config["model"]["normalization_version"] = NORMALIZATION_VERSION
-    # A release must carry real vectors whatever EMBEDDER says in the shell.
-    config["embedder"] = "mock" if args.mock else "real"
+    # The VPS vectors must be real whatever EMBEDDER says in the shell; the
+    # cPanel bundle's unused e5 vectors follow SEARCH_BUNDLE_EMBEDDER.
+    vps_config = {**config, "embedder": "mock" if args.mock else "real"}
+    config["embedder"] = "mock" if args.mock else config["bundle_embedder"]
     if args.desc_index_chars is not None:
         if args.desc_index_chars < 0:
             parser.error("--desc-index-chars must be 0 or more")
@@ -165,7 +171,7 @@ def main(argv: list[str] | None = None) -> int:
         write_zip(entries, out)
     vps_dir = None if args.no_vps else Path(args.vps_out or out.parent / "vps_vectors").resolve()
     if vps_dir is not None:
-        vps_meta = build.build_vps_vectors(products, vps_dir, config)
+        vps_meta = build.build_vps_vectors(products, vps_dir, vps_config)
         print(f"Built VPS vectors in {vps_dir}: {vps_meta['count']} products, "
               f"{vps_meta['model']}, dim {vps_meta['dim']}, embedder {vps_meta['embedder']}")
 

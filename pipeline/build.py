@@ -79,9 +79,29 @@ SCHEMA_PATH = Path(__file__).resolve().parents[1] / "db" / "schema.sql"
 
 def read_products(path: str | Path) -> list[dict[str, Any]]:
     path = Path(path)
-    text = path.read_text(encoding="utf-8")
-    rows = parse_csv(text) if path.suffix.lower() == ".csv" else parse_sql(text)
+    if path.suffix.lower() == ".csv":
+        # newline="" keeps embedded CR/LF as written, so `feature`'s byte counts hold.
+        with path.open(encoding="utf-8", newline="") as handle:
+            text = handle.read()
+        rows = parse_csv(text)
+        warn_low_row_count(text, len(rows))
+    else:
+        rows = parse_sql(path.read_text(encoding="utf-8"))
     return [_clean_row(row) for row in rows]
+
+
+def warn_low_row_count(text: str, parsed: int) -> bool:
+    """Silent-corruption guard for CSV: broken quoting swallows many rows into
+    one. Every well-formed row starts a line with its numeric id, so far fewer
+    parsed rows than such lines means the file is corrupt (README: use
+    db_export.py). Warns on stderr and returns True when it looks that way."""
+    lines = len(re.findall(r"(?m)^\d+,", text))
+    if lines > 10 and parsed < 0.9 * lines:
+        print(f"WARNING: the CSV parsed into {parsed} rows but holds about {lines} lines "
+              "starting with a product id; its quoting is probably corrupt (phpMyAdmin "
+              "exports do this). Re-export with pipeline/db_export.py.", file=_sys.stderr)
+        return True
+    return False
 
 
 _TEXT_COLUMNS = ("title_fa", "title_en", "desc", "brand", "category", "model", "sku", "tags")

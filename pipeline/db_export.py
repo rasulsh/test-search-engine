@@ -1,3 +1,9 @@
+# PYTHON 3.6 COMPATIBLE ON PURPOSE. This file runs on the cPanel server (system
+# Python 3.6.8) next to the OpenCart database, which is not reachable from the
+# GPU machine. Do not add `from __future__ import annotations`, `list[str]` /
+# `X | None` annotations, dataclasses, walrus or other 3.7+ features or stdlib;
+# pipeline/tests/test_db_export_py36.py enforces this. The rest of the pipeline
+# targets modern Python.
 """Export the OpenCart catalog straight from its database to build.py's CSV.
 
     python pipeline/db_export.py --out export.csv
@@ -12,14 +18,13 @@ Connection settings come from the environment (a `.env` file in the current
 directory is read first and never overrides real variables):
 OC_DB_HOST, OC_DB_PORT, OC_DB_USER, OC_DB_PASSWORD, OC_DB_NAME, plus optional
 OC_DB_PREFIX (default "oc_") and OC_LANGUAGE_ID (default 2). The password is
-never accepted on the command line. Needs `pip install pymysql`.
+never accepted on the command line. Needs `pip install "pymysql<1.1"`
+(1.1 dropped Python 3.6).
 
 Shop conventions (this store is not stock OpenCart): only Persian is installed,
 `meta_title` holds the secondary product name (title_en), and products must have
 status = 1 and accept_status = '0' in store 0.
 """
-
-from __future__ import annotations
 
 # Same stdlib `keyword` shadowing guard as build.py (this directory is
 # sys.path[0] when run as a script).
@@ -38,9 +43,8 @@ import argparse
 import csv
 import os
 import re
-from collections.abc import Iterable, Iterator, Mapping
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterable, Iterator, List, Mapping, Optional, Tuple, Union
 
 # build.py's documented input order; test_db_export asserts they stay equal.
 COLUMNS = (
@@ -59,7 +63,7 @@ PROGRESS_EVERY = 2000
 _PREFIX = re.compile(r"^[A-Za-z0-9_]*$")
 
 
-def load_dotenv(path: str | Path = ".env") -> None:
+def load_dotenv(path: Union[str, Path] = ".env") -> None:
     """Read KEY=VALUE lines into os.environ without overriding what is set."""
     file = Path(path)
     if not file.is_file():
@@ -140,7 +144,7 @@ def write_csv(rows: Iterable[Iterable[Any]], out: Any, progress: bool = True) ->
     return count
 
 
-def _stream(connection: Any, query: str) -> Iterator[tuple[Any, ...]]:
+def _stream(connection: Any, query: str) -> Iterator[Tuple[Any, ...]]:
     with connection.cursor() as cursor:
         for statement in SESSION_SETUP:
             cursor.execute(statement)
@@ -170,7 +174,7 @@ def export(settings: Mapping[str, Any], out_path: Path) -> int:
         connection.close()
 
 
-def main(argv: list[str] | None = None) -> int:
+def main(argv: Optional[List[str]] = None) -> int:
     load_dotenv()
     env = os.environ.get
     parser = argparse.ArgumentParser(description="Export the OpenCart catalog to build.py's CSV.")

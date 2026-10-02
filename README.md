@@ -70,7 +70,14 @@ never hardcoded.
   default 800; 0 = whole description), `SEARCH_ALIASES_FILE` (the shop
   owner's [alias file](#aliases), default `pipeline/aliases.json`) and
   `SEARCH_LOAD_MAX_STATEMENT_BYTES` (maximum size of one statement in
-  `products.load.sql`). See `pipeline/config.py`.
+  `products.load.sql`). Embedding (real embedder): `SEARCH_EMBED_DEVICE`
+  (`auto` = cuda when available else cpu, or `cpu` / `cuda` / `cuda:N`),
+  `SEARCH_EMBED_FP16` (`auto` = on for CUDA only, or `on` / `off`),
+  `SEARCH_EMBED_BATCH_SIZE` (default 16, fits bge-m3 on 4 GB) and
+  `SEARCH_BUNDLE_EMBEDDER` (`mock` default / `real`, release.py's cPanel
+  `vectors.bin`). Export (`db_export.py`): `OC_DB_HOST`, `OC_DB_PORT`,
+  `OC_DB_USER`, `OC_DB_PASSWORD`, `OC_DB_NAME`, `OC_DB_PREFIX`, `OC_LANGUAGE_ID`.
+  See `pipeline/config.py`.
 - VPS (semantic tier): `SEARCH_VPS_URL`, `SEARCH_VPS_TOKEN`,
   `SEARCH_VPS_TIMEOUT_MS` (`vps` section of `config.php`; install.php asks for
   them). Empty URL = keyword-only. See
@@ -188,6 +195,34 @@ way first, then the tail of the specs. With the real e5 tokenizer a
 on a digit-heavy worst case, under the model's 512. It is embedded from
 **raw** text (not the keyword-normalized text), so the VPS can embed the raw
 query without re-implementing the normalizer.
+
+### GPU setup (embedding)
+
+bge-m3 (560M parameters) takes about an hour on a CPU for this catalog, so the
+build machine needs the CUDA build of torch. A plain `pip install torch` (or the
+one pulled in by `sentence-transformers`) is often CPU-only on Windows and
+leaves the GPU idle:
+
+```bash
+pip install torch --index-url https://download.pytorch.org/whl/cu124   # cu121 if cu124 fails
+python -c "import torch; print(torch.cuda.is_available(), torch.cuda.get_device_name(0))"
+# True NVIDIA GeForce GTX 1650
+```
+
+If it prints `False`, torch is the CPU build (reinstall as above, adding
+`--force-reinstall`) or the NVIDIA driver is too old for the wheel. With `True`
+nothing else is needed: `SEARCH_EMBED_DEVICE=auto` picks `cuda`, fp16 is on for
+CUDA (it lets bge-m3 fit a 4 GB card), and the run prints
+`Embedder: BAAI/bge-m3 on cuda, fp16=on, batch_size=16` followed by a progress
+bar. Lower `SEARCH_EMBED_BATCH_SIZE` (8, 4) on an out-of-memory error; force
+`SEARCH_EMBED_DEVICE=cpu` or `SEARCH_EMBED_FP16=off` to compare. Asking for
+`cuda` when torch has none is an error, not a silent CPU run.
+
+fp16 only affects the forward pass: the vectors are cast back to float32 and
+L2-normalized exactly as before, and the model, revision, pooling and prefixes
+(contract 2) are unchanged. Half precision perturbs each unit vector by about
+1e-3; the bound is unit-tested on random vectors, but compare real results (the
+eval harness, the test page) after the first GPU build.
 
 ## Semantic tier (Tier 2)
 
@@ -667,33 +702,55 @@ unzipping on the host.
 OpenCart DB --(1) export.csv--> dev/GPU machine --(2) release.zip--> cPanel host --(3) unzip + curl reload.php?load=1
 ```
 
-**1. Export from OpenCart 2.0.3.1** to `build.py`'s input columns. Product
-names and descriptions live in `oc_product_description`, one row per
-`language_id`. Join it twice, once for Persian and once for English. Look up
-your ids with `SELECT language_id, code FROM oc_language;`, and adjust the
-`oc_` prefix if your install uses another `DB_PREFIX`.
+**1. Export from OpenCart 2.0.3.1** to `build.py`'s input columns, straight
+from the database with the repo's export tool (recommended):
+
+```bash
+pip install pymysql                       # once, on the machine that reaches the DB
+cp .env.example .env                      # then fill the OC_DB_* lines (.env is gitignored)
+python pipeline/db_export.py --out export.csv
+# Exporting shop on 127.0.0.1:3306 to export.csv ...
+#   2000 rows... (progress)
+# Wrote 24700 rows to export.csv
+```
+
+`OC_DB_HOST`, `OC_DB_PORT`, `OC_DB_USER`, `OC_DB_PASSWORD` and `OC_DB_NAME` come
+from the environment (or `.env`); `--host/--port/--user/--name/--prefix/--language-id`
+override them, and the password is never taken from the command line. It streams
+the result with a server-side cursor, runs `SET SESSION max_statement_time = 0`
+(MariaDB's statement timeout; `max_execution_time` is MySQL-only and fails on
+MariaDB) and `group_concat_max_len = 1000000`, and writes RFC 4180 UTF-8 CSV with
+Python's `csv` module, the same library `build.py` reads it with, so every
+field round-trips. `build.py` also warns when a CSV parses into far fewer rows
+than it has id-led lines.
+
+The query it runs is the one below, for **this shop** (not stock OpenCart): only
+Persian is installed (`language_id = 2`, no English language row), and the
+secondary product name `title_en` is `oc_product_description.meta_title`, which
+the shop repurposes. Adjust the `oc_` prefix (`OC_DB_PREFIX`) or language id
+(`OC_LANGUAGE_ID`) if yours differ; look the id up with
+`SELECT language_id, code FROM oc_language;`. The same SQL, for reference or for
+the phpMyAdmin fallback:
 
 ```sql
 SET SESSION group_concat_max_len = 1000000;   -- default 1024 bytes truncates attributes
-SET @fa := 2, @en := 1;   -- your Persian / English language_id
+SET @fa := 2;   -- the installed (Persian) language_id
 
 SELECT
     p.product_id                                              AS id,
-    COALESCE(d_fa.name, '')                                   AS title_fa,
-    COALESCE(d_en.name, '')                                   AS title_en,
-    CONCAT_WS(' ', d_fa.description, d_en.description)        AS `desc`,
+    COALESCE(d.name, '')                                      AS title_fa,
+    COALESCE(d.meta_title, '')                                AS title_en,
+    COALESCE(d.description, '')                               AS `desc`,
     COALESCE(m.name, '')                                      AS brand,
     COALESCE((
-        SELECT LEFT(GROUP_CONCAT(DISTINCT CONCAT_WS(' ', c_fa.name, c_en.name)
+        SELECT LEFT(GROUP_CONCAT(DISTINCT c.name
                                  ORDER BY pc.category_id SEPARATOR ' / '), 255)
         FROM oc_product_to_category pc
-        LEFT JOIN oc_category_description c_fa
-               ON c_fa.category_id = pc.category_id AND c_fa.language_id = @fa
-        LEFT JOIN oc_category_description c_en
-               ON c_en.category_id = pc.category_id AND c_en.language_id = @en
+        JOIN oc_category_description c
+          ON c.category_id = pc.category_id AND c.language_id = @fa
         WHERE pc.product_id = p.product_id
     ), '')                                                    AS category,
-    p.model                                                   AS model,
+    COALESCE(p.model, '')                                     AS model,
     COALESCE(p.sku, '')                                       AS sku,
     p.price                                                   AS price,
     p.quantity                                                AS stock,
@@ -705,7 +762,7 @@ SELECT
         FROM oc_product_attribute pa
         JOIN oc_attribute_description ad
           ON ad.attribute_id = pa.attribute_id AND ad.language_id = @fa
-        WHERE pa.product_id = p.product_id
+        WHERE pa.product_id = p.product_id AND pa.language_id = @fa
     ), '')                                                    AS attributes,
     COALESCE(p.feature, '')                                   AS feature,
     COALESCE((
@@ -716,10 +773,8 @@ SELECT
     ), '')                                                    AS tags
 FROM oc_product p
 JOIN oc_product_to_store ps ON ps.product_id = p.product_id AND ps.store_id = 0
-LEFT JOIN oc_product_description d_fa
-       ON d_fa.product_id = p.product_id AND d_fa.language_id = @fa
-LEFT JOIN oc_product_description d_en
-       ON d_en.product_id = p.product_id AND d_en.language_id = @en
+LEFT JOIN oc_product_description d
+       ON d.product_id = p.product_id AND d.language_id = @fa
 LEFT JOIN oc_manufacturer m ON m.manufacturer_id = p.manufacturer_id
 WHERE p.status = 1
   AND p.accept_status = '0'
@@ -736,8 +791,10 @@ Notes on the query:
   given, so the filter lives in this query.
 - `sku` is OpenCart's `oc_product.sku`. Empty is fine; those products just
   have no SKU match. See [SKU search](#sku-search).
-- `category` is every category the product is in (Persian and English names),
-  capped at 255 characters to fit the `products.category` column.
+- `title_en` is `meta_title` (this shop's secondary name) and `desc`,
+  `category` and `attributes` are Persian only; there is no English language row.
+  `category` is every category the product is in, capped at 255 characters to fit
+  the `products.category` column.
 - `COALESCE` keeps NULLs out of the export. phpMyAdmin writes a SQL NULL as the
   literal text `NULL` in CSV, which would otherwise be indexed as a word.
 - `popularity` uses `viewed`. Replace it with a sales count if you have a
@@ -746,8 +803,8 @@ Notes on the query:
   ` | `, with the names in Persian (`@fa`, language_id 2 here). `oc_attribute_description`
   is joined on the Persian name only; `pa.text` is whatever value is stored for
   the product. `GROUP_CONCAT` stops at `group_concat_max_len` bytes (1024 by
-  default), which is why the first line raises it; run it together with the
-  `SELECT`, like the `@fa` / `@en` line. If many `attributes` values in
+  default), which is why the first line raises it (`db_export.py` does this
+  itself); in phpMyAdmin run it together with the `SELECT`, like the `@fa` line. If many `attributes` values in
   `export.csv` end abruptly at about 1024 bytes, the `SET` was not applied.
 - `feature` is this shop's `oc_product.feature` column (not in stock OpenCart),
   exported untouched: `build.py` unserializes it (see [Specs](#specs-field)).
@@ -764,20 +821,26 @@ Notes on the query:
 - HTML escaping (`&lt;p&gt;`, `&amp;quot;`) and tags are left as stored.
   `build.py` decodes and strips them.
 
-Save the result as **CSV**: phpMyAdmin, SQL tab, run the query, then **Export**
-under "Query results operations", format CSV. Tick **"Put columns names in the
-first row"** and keep the defaults (`"` enclosure, `"` escape). Save it as
-`export.csv`, UTF-8. Use CSV, not phpMyAdmin's SQL export: `build.py`'s SQL
-reader understands `''` quoting, not the backslash escapes (`\'`) that
-phpMyAdmin and mysqldump write.
+**Fallback: phpMyAdmin CSV.** Only if `db_export.py` cannot reach the database:
+run the query above in phpMyAdmin (SQL tab), then **Export** under "Query
+results operations", format CSV, tick **"Put columns names in the first row"**,
+keep the defaults (`"` enclosure, `"` escape) and save it as `export.csv`, UTF-8.
+**Warning:** `feature` holds a serialized value with raw quotes next to
+multi-line HTML descriptions, and phpMyAdmin's CSV quoting can desync on it
+(24,700 database rows were parsed as about 7,000 on this catalog). Compare the
+row count `build.py` reports with `SELECT COUNT(*)` and treat a gap, or its
+low-row-count warning, as a corrupt file. Use CSV, not phpMyAdmin's SQL export:
+`build.py`'s SQL reader understands `''` quoting, not the backslash escapes
+(`\'`) that phpMyAdmin and mysqldump write.
 
 **2. Build the release** on the GPU machine (Python 3.11+), from the repo root:
 
 ```bash
 pip install -r pipeline/requirements.txt 'sentence-transformers>=2.2'   # once
 python pipeline/release.py --csv export.csv --out release.zip
+# -> Embedder: BAAI/bge-m3 on cuda, fp16=on, batch_size=16   (progress bar follows)
 # -> Built VPS vectors in <dir>/vps_vectors: <count> products, BAAI/bge-m3, dim 1024, embedder real
-# -> Built release.zip: <count> products, dim 384, embedder real, <n> files
+# -> Built release.zip: <count> products, dim 384, embedder mock, <n> files
 # -> (then the copy-paste deploy commands for both hosts)
 ```
 
@@ -797,8 +860,9 @@ release. `--aliases FILE` ships another [alias file](#aliases) instead of
 `pipeline/aliases.json`.
 
 On Windows: `pipeline\release.bat --csv export.csv --out release.zip`
-(same arguments). The command builds the bundle with the **real** embedder
-(whatever `EMBEDDER` says; `--mock` exists for tests only) and packs one
+(same arguments). The command embeds the VPS vectors with the **real** model
+(whatever `EMBEDDER` says; `--mock` exists for tests only), builds the cPanel
+bundle's `vectors.bin` with the mock embedder (see below) and packs one
 `release.zip`, laid out relative to the host's `server/` directory:
 
 | in the zip | what |
@@ -809,6 +873,15 @@ On Windows: `pipeline\release.bat --csv export.csv --out release.zip`
 
 `config.php` is **never** in the zip, so unzipping never overwrites the
 server's configuration. Tests, tools, and local data are not packed either.
+**The cPanel `vectors.bin` is a mock (M22).** `/search` has not read it since
+M18; `/reload` only checks `meta.json` (model, dim, normalization version),
+the file size and the checksum, and those all hold for deterministic mock vectors
+of the configured dim. Embedding 20,000 products with e5 just to produce an
+unused file doubled the build time, so `release.py` uses `SEARCH_BUNDLE_EMBEDDER`
+(default `mock`; `meta.json` says `"embedder": "mock"`). Set it to `real` to get
+real e5 vectors. The VPS vectors are always real (its `/reload` refuses mock
+ones). `build.py` run directly still follows `EMBEDDER`.
+
 `SEARCH_MODEL`, `SEARCH_MODEL_REVISION` and `SEARCH_MODEL_DIM` must match
 `server/config.php` (the reload rejects a mismatch). New config keys come with
 defaults, so an older `config.php` keeps working.
@@ -878,8 +951,10 @@ bundle passes both reloads (only `count` and `checksum` differ). The order is
 export, build, deploy both hosts:
 
 ```bash
-# 1. In phpMyAdmin run the export query of step 1 (it now ends with the `tags`
-#    column) and save export.csv. Then, on the GPU machine, one command:
+# 1. Export the catalog with the repo tool (step 1 above; it includes the `tags`
+#    column; phpMyAdmin's CSV is only a fallback and can corrupt `feature`),
+#    then, on the GPU machine, one command:
+python pipeline/db_export.py --out export.csv
 python pipeline/release.py --csv export.csv --out release.zip
 # -> release.zip and vps_vectors/ (bge-m3 vectors) from the same export
 
@@ -1140,6 +1215,7 @@ M0–M5. Verify each item on the production host before wide rollout.
 - [ ] **M18** — Semantic tier from the VPS: `/search` POSTs the query server-to-server to the VPS `/search-vectors` (`SEARCH_VPS_URL` / `_TOKEN` / `_TIMEOUT_MS`, `min_score` = the cPanel floor, now 0.4 for bge-m3), RRF-merges the neighbours as before, and falls back to logged keyword-only results when the VPS is off, down, slow or failing. The browser model is gone (`client/`, `fetch_web_model.py`, the model in `release.zip`, `q_vector`); the test page and storefront snippet send only `{q}`.
 - [ ] **M20** — Blended hybrid ranking: relevance = keyword_weight × keyword_norm + semantic_weight × semantic_norm with a combined floor (`SEARCH_KEYWORD_WEIGHT` / `_SEMANTIC_WEIGHT` / `_MIN_RELEVANCE`); replaces the keyword-first tiers, RRF and the description-only gate. Server-only.
 - [ ] **M21** — Catalog tags (`oc_tag` / `oc_product_tag`, exported as `tags`) end to end: `normalized_tags` in the FULLTEXT index (weighted just below the title) and the embedding passage, learned by "did you mean"; brand and category as searched fields (`normalized_brand`, `normalized_category`) with config-driven weights; brand / category / tag-phrase ranking boosts after the floor; `search_logs` gains `did_you_mean` and `tier`; read-only token-protected `logs.php` (recent, zero-result, slowest); token-guarded `debug` score breakdown on `/search`; `release.py` also builds the VPS vectors and prints the deploy commands for both hosts. `normalization_version`, model and dim unchanged.
+- [ ] **M22** — Offline build: `pipeline/db_export.py` exports the catalog straight from the OpenCart DB (server-side cursor, MariaDB `max_statement_time`, this shop's single-language / `meta_title` query) as the recommended step 1, phpMyAdmin CSV demoted to a warned fallback, plus a low-row-count guard in `build.py`; `RealEmbedder` picks cuda/cpu, fp16 on GPU, a configurable batch size and shows progress (`SEARCH_EMBED_*`, README "GPU setup"); `release.py` builds the unread cPanel `vectors.bin` with the mock embedder (`SEARCH_BUNDLE_EMBEDDER`). No contract, model, dim or normalization change.
 
 
 ## Contributing

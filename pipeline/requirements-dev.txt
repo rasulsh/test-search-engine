@@ -3,3 +3,4 @@
 -r requirements.txt
 pytest>=8,<10
 ruff>=0.6
+vermin>=1.6  # pipeline/tests/test_db_export_py36.py: db_export.py must stay Python 3.6

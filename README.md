@@ -706,13 +706,22 @@ OpenCart DB --(1) export.csv--> dev/GPU machine --(2) release.zip--> cPanel host
 from the database with the repo's export tool (recommended):
 
 ```bash
-pip install pymysql                       # once, on the machine that reaches the DB
+pip install "pymysql<1.1"                # once, on the machine that reaches the DB
 cp .env.example .env                      # then fill the OC_DB_* lines (.env is gitignored)
 python pipeline/db_export.py --out export.csv
 # Exporting shop on 127.0.0.1:3306 to export.csv ...
 #   2000 rows... (progress)
 # Wrote 24700 rows to export.csv
 ```
+
+**Python 3.6 constraint.** `db_export.py` runs on the cPanel server, beside the
+OpenCart database (it is not reachable from the GPU machine), and that host has
+Python 3.6.8. The file is therefore deliberately 3.6-compatible: no `from
+__future__ import annotations`, `list[str]` / `X | None` annotations or other
+3.7+ features, and `pymysql<1.1` (1.1 dropped 3.6). Keep it that way; a test
+(`test_db_export_py36.py`, using `vermin` and, when present, `python3.6`)
+fails otherwise. Copy the resulting `export.csv` to the GPU machine for step 2;
+the rest of the pipeline needs modern Python (3.11+).
 
 `OC_DB_HOST`, `OC_DB_PORT`, `OC_DB_USER`, `OC_DB_PASSWORD` and `OC_DB_NAME` come
 from the environment (or `.env`); `--host/--port/--user/--name/--prefix/--language-id`
@@ -1215,7 +1224,7 @@ M0–M5. Verify each item on the production host before wide rollout.
 - [ ] **M18** — Semantic tier from the VPS: `/search` POSTs the query server-to-server to the VPS `/search-vectors` (`SEARCH_VPS_URL` / `_TOKEN` / `_TIMEOUT_MS`, `min_score` = the cPanel floor, now 0.4 for bge-m3), RRF-merges the neighbours as before, and falls back to logged keyword-only results when the VPS is off, down, slow or failing. The browser model is gone (`client/`, `fetch_web_model.py`, the model in `release.zip`, `q_vector`); the test page and storefront snippet send only `{q}`.
 - [ ] **M20** — Blended hybrid ranking: relevance = keyword_weight × keyword_norm + semantic_weight × semantic_norm with a combined floor (`SEARCH_KEYWORD_WEIGHT` / `_SEMANTIC_WEIGHT` / `_MIN_RELEVANCE`); replaces the keyword-first tiers, RRF and the description-only gate. Server-only.
 - [ ] **M21** — Catalog tags (`oc_tag` / `oc_product_tag`, exported as `tags`) end to end: `normalized_tags` in the FULLTEXT index (weighted just below the title) and the embedding passage, learned by "did you mean"; brand and category as searched fields (`normalized_brand`, `normalized_category`) with config-driven weights; brand / category / tag-phrase ranking boosts after the floor; `search_logs` gains `did_you_mean` and `tier`; read-only token-protected `logs.php` (recent, zero-result, slowest); token-guarded `debug` score breakdown on `/search`; `release.py` also builds the VPS vectors and prints the deploy commands for both hosts. `normalization_version`, model and dim unchanged.
-- [ ] **M22** — Offline build: `pipeline/db_export.py` exports the catalog straight from the OpenCart DB (server-side cursor, MariaDB `max_statement_time`, this shop's single-language / `meta_title` query) as the recommended step 1, phpMyAdmin CSV demoted to a warned fallback, plus a low-row-count guard in `build.py`; `RealEmbedder` picks cuda/cpu, fp16 on GPU, a configurable batch size and shows progress (`SEARCH_EMBED_*`, README "GPU setup"); `release.py` builds the unread cPanel `vectors.bin` with the mock embedder (`SEARCH_BUNDLE_EMBEDDER`). No contract, model, dim or normalization change.
+- [ ] **M22** — Offline build: `pipeline/db_export.py` exports the catalog straight from the OpenCart DB (server-side cursor, MariaDB `max_statement_time`, this shop's single-language / `meta_title` query) as the recommended step 1, phpMyAdmin CSV demoted to a warned fallback, plus a low-row-count guard in `build.py`; `RealEmbedder` picks cuda/cpu, fp16 on GPU, a configurable batch size and shows progress (`SEARCH_EMBED_*`, README "GPU setup"); `db_export.py` stays Python 3.6-compatible (it runs on the cPanel server); `release.py` builds the unread cPanel `vectors.bin` with the mock embedder (`SEARCH_BUNDLE_EMBEDDER`). No contract, model, dim or normalization change.
 
 
 ## Contributing

@@ -14,7 +14,7 @@ select = ["E", "F", "I", "UP", "B"]
 # build.py fixes sys.path before its imports to avoid the stdlib `keyword` clash.
 "pipeline/build.py" = ["E402"]
 "pipeline/release.py" = ["E402"]
-"pipeline/db_export.py" = ["E402"]
+"pipeline/db_export.py" = ["E402", "UP006", "UP007", "UP035", "UP037", "UP045"]  # Python 3.6 target
 # Inline shell stubs.
 "vps/tests/test_setup_sh.py" = ["E501"]
 

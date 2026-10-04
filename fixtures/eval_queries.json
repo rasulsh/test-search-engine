@@ -1,5 +1,19 @@
 {
-  "note": "Labeled queries for the eval harness (server/tools/eval.php). expected_ids is the TRUE relevant set (bilingual) for each query, so recall exposes cross-language gaps that Tier 2 closes. Seed set against fixtures/products.sample.sql; grow it from real search logs. Set SEARCH_VPS_URL / SEARCH_VPS_TOKEN to measure the hybrid tier through the VPS.",
+  "note": "Labeled queries for the eval harness (server/tools/eval.php). expected_ids is the TRUE relevant set (bilingual) for each query, so recall exposes cross-language gaps that Tier 2 closes. Seed set against fixtures/products.sample.sql plus the seed_products / seed_aliases below (loaded only by the CI harness test: EvalHarnessTest); grow it from real search logs. An empty expected_ids is a negative query: the search must return nothing (scores 1 when it does, 0 otherwise). Set SEARCH_VPS_URL / SEARCH_VPS_TOKEN to measure the hybrid tier through the VPS.",
+  "seed_products": [
+    { "product_id": 2001, "title": "Far Cry 6 Xbox Series X", "description": "Open world shooter", "tags": "Far Cry", "popularity": 90 },
+    { "product_id": 2002, "title": "Farcry 5 PS4", "description": "Open world shooter", "popularity": 80 },
+    { "product_id": 2003, "title": "Sony DualSense Wireless Controller", "description": "Gamepad for PS5", "popularity": 70 },
+    { "product_id": 2004, "title": "Dual Sense Charging Station", "description": "Charges two gamepads", "popularity": 60 },
+    { "product_id": 2005, "title": "کیبورد گیمینگ قرمز ریزر", "description": "", "popularity": 50 },
+    { "product_id": 2006, "title": "کیبورد گیمینگ مشکی لاجیتک", "description": "", "popularity": 500 },
+    { "product_id": 2007, "title": "ماوس گیمینگ قرمز ریزر", "description": "", "popularity": 400 },
+    { "product_id": 2008, "title": "Call of Duty Modern Warfare II", "description": "First person shooter", "popularity": 40 }
+  ],
+  "seed_aliases": [
+    ["وارفار", "warfare"],
+    ["مدرن", "modern"]
+  ],
   "queries": [
     { "q": "sony headphones", "expected_ids": [1009, 1010] },
     { "q": "samsung galaxy",  "expected_ids": [1003, 1004] },
@@ -8,6 +22,14 @@
     { "q": "macbook air",     "expected_ids": [1007, 1008] },
     { "q": "iphone 15 pro",   "expected_ids": [1001, 1002] },
     { "q": "گوشی سامسونگ",    "expected_ids": [1003, 1004] },
-    { "q": "هدفون سونی",       "expected_ids": [1009, 1010] }
+    { "q": "هدفون سونی",       "expected_ids": [1009, 1010] },
+    { "q": "farcry",          "expected_ids": [2001, 2002] },
+    { "q": "far cry",         "expected_ids": [2001, 2002] },
+    { "q": "Far Cry",         "expected_ids": [2001, 2002] },
+    { "q": "dualsense",       "expected_ids": [2003, 2004] },
+    { "q": "dual sense",      "expected_ids": [2003, 2004] },
+    { "q": "کیبورد قرمز",     "expected_ids": [2005] },
+    { "q": "مدرن وارفار",     "expected_ids": [2008] },
+    { "q": "بلبرینگ",         "expected_ids": [] }
   ]
 }

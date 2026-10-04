@@ -104,7 +104,15 @@ final class SearchControllerAllTermsTest extends DatabaseTestCase
 
     public function testThreeWordQueryThroughTheController(): void
     {
-        self::assertSame([self::RED_KEYBOARD], $this->ids('کیبورد گیمینگ قرمز'));
+        $strict = ['soft_and_min_results' => 0];
+        self::assertSame([self::RED_KEYBOARD], $this->ids('کیبورد گیمینگ قرمز', true, $strict));
+        self::assertSame([self::RED_KEYBOARD], $this->ids('کیبورد گیمینگ قرمز', false, $strict));
+
+        // One full-coverage hit is fewer than soft_and_min_results (3): the
+        // two-of-three-words products follow it, never ahead (soft AND, M23).
+        $soft = $this->ids('کیبورد گیمینگ قرمز', false);
+        self::assertSame(self::RED_KEYBOARD, $soft[0]);
+        self::assertGreaterThan(1, count($soft));
     }
 
     public function testNoProductHoldsEveryWordFallsBackToPartialMatches(): void

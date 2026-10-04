@@ -132,7 +132,7 @@ Breaking any of these produces silently wrong results. Enforce each with a test.
   in `vectors.bin`.
 - `products.load.sql` — INSERT/REPLACE rows for the `products` table (normalized
   title/desc/specs/tags + brand, category, model, price, stock, url, image,
-  popularity). Tags (M21) are the store's `oc_tag` names via `oc_product_tag`
+  popularity, plus `normalized_collapsed` since M23). Tags (M21) are the store's `oc_tag` names via `oc_product_tag`
   (export column `tags`); tags, brand and category are FULLTEXT-searched fields
   with their own weights.
 - `synonyms.json`, `aliases.json` (owner-maintained, M15), `spellcheck.txt`,
@@ -267,6 +267,12 @@ wait for review before starting the next.
   `logs.php`, the `debug` breakdown, and a `release.py` that builds the cPanel
   zip and the VPS vectors in one command. `normalization_version`, model and
   dim unchanged (no rule changed).
+
+- **M23 — Recall: spacing + soft AND:** `normalized_collapsed` (collapsed title,
+  brand, tags; `Normalizer::collapse` mirrored in `normalize.py`, parity fixture
+  `collapse_cases`) so joined and separated spellings meet; soft AND (partial-
+  coverage top-up below full-coverage hits); alias variants over title, tags,
+  brand, category, specs. `normalization_version`, model and dim unchanged.
 
 - **M22 — Offline build speed + reliable export:** `pipeline/db_export.py`
   (direct DB -> CSV, replaces the phpMyAdmin export), GPU/fp16/batch-configured

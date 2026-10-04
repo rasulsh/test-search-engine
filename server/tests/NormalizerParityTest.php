@@ -19,7 +19,8 @@ final class NormalizerParityTest extends TestCase
      * @return array{
      *     normalization_version: int,
      *     cases: list<array{name: string, input: string, expected: string}>,
-     *     sku_cases: list<array{name: string, input: string, expected: string}>
+     *     sku_cases: list<array{name: string, input: string, expected: string}>,
+     *     collapse_cases: list<array{name: string, input: string, expected: string}>
      * }
      */
     private static function fixture(): array
@@ -73,6 +74,30 @@ final class NormalizerParityTest extends TestCase
     {
         self::assertSame($expected, Normalizer::normalizeSku($input));
         self::assertSame($expected, Normalizer::normalizeSku($expected));
+    }
+
+    /**
+     * @return iterable<string, array{0: string, 1: string}>
+     */
+    public static function collapseCaseProvider(): iterable
+    {
+        foreach (self::fixture()['collapse_cases'] as $case) {
+            yield $case['name'] => [$case['input'], $case['expected']];
+        }
+    }
+
+    #[DataProvider('collapseCaseProvider')]
+    public function testCollapseMatchesExpected(string $input, string $expected): void
+    {
+        self::assertSame($expected, Normalizer::collapse($input));
+        self::assertSame($expected, Normalizer::collapse($expected));
+    }
+
+    public function testCollapseLeavesNormalizeUntouched(): void
+    {
+        // Derived field: normalize() keeps its spaces, so VERSION did not move.
+        self::assertSame('far cry 5', Normalizer::normalize('Far  Cry 5'));
+        self::assertSame('', Normalizer::collapse(null));
     }
 
     public function testNullNormalizesToEmptyString(): void

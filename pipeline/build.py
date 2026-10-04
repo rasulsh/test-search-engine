@@ -42,7 +42,7 @@ import phpserialize
 
 import config as pipeline_config
 from embed import create_embedder, embed_passages
-from normalize import NORMALIZATION_VERSION, normalize, normalize_sku
+from normalize import NORMALIZATION_VERSION, collapse, normalize, normalize_sku
 
 # keyword.py shadows the stdlib `keyword` module (pre-imported under pytest), so
 # load the local file by path rather than via a plain import.
@@ -66,7 +66,7 @@ ATTRIBUTE_SEPARATOR = " | "
 _SERVER_COLUMNS = (
     "product_id", "title", "description", "normalized_title", "normalized_desc",
     "normalized_specs", "normalized_tags", "normalized_brand", "normalized_category",
-    "brand", "category", "model", "sku", "normalized_sku",
+    "normalized_collapsed", "brand", "category", "model", "sku", "normalized_sku",
     "price", "stock", "url", "image", "popularity",
 )
 
@@ -351,6 +351,19 @@ def index_description(description: str, max_chars: int) -> str:
     return head.rstrip()
 
 
+# Width of products.normalized_collapsed (db/schema.sql): bounded by the covering
+# index's key size, so a long tag list is cut rather than rejected.
+COLLAPSED_MAX_CHARS = 700
+
+
+def collapsed_identity(title: str, brand: str, tags: str) -> str:
+    """Space-collapsed identity text of a product (M23): title, brand and tags,
+    each Normalizer-collapsed and joined by a space, cut to the column width.
+    The server matches a collapsed query against it by substring."""
+    parts = (collapse(title), collapse(brand), collapse(tags))
+    return " ".join(p for p in parts if p)[:COLLAPSED_MAX_CHARS]
+
+
 def to_server_row(product: dict[str, Any], desc_index_chars: int = 0) -> dict[str, Any]:
     title = f"{product.get('title_fa') or ''} {product.get('title_en') or ''}".strip()
     description = str(product.get("desc") or "")
@@ -371,6 +384,9 @@ def to_server_row(product: dict[str, Any], desc_index_chars: int = 0) -> dict[st
         "normalized_tags": normalize(tags),
         "normalized_brand": normalize(str(product.get("brand") or "")),
         "normalized_category": normalize(str(product.get("category") or "")),
+        "normalized_collapsed": collapsed_identity(
+            title, str(product.get("brand") or ""), tags
+        ),
         # Cleaned, not normalized: feeds the spellcheck dictionary only (not a column).
         "tags": tags,
         "brand": str(product.get("brand") or ""),

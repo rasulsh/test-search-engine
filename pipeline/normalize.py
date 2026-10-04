@@ -18,6 +18,10 @@ Rules (applied in this order):
      whole token (no letter or digit on either side), and not right after a
      number token and a space, where "x" / "v" are a dimension or a unit
      ("2 x 4", "12 v"; "a7 iv" still maps). "i" is never mapped (the word).
+
+collapse() is a derived form, not a rule of normalize(): the normalized text with
+every non-letter/non-digit removed ("far cry" -> "farcry"). normalize() output,
+and so NORMALIZATION_VERSION, is unchanged by it.
 """
 
 from __future__ import annotations
@@ -114,3 +118,11 @@ def normalize_sku(sku: str | None) -> str:
     "AB-12 34", "ab.1234" and "AB1234" are one code. Mirrors
     Normalizer::normalizeSku (letters/digits as in the shared tokenizer)."""
     return "".join(ch for ch in _canonical(sku) if ch.isalnum())
+
+
+def collapse(text: str | None) -> str:
+    """Space-collapsed form: the normalized text with every non-letter/non-digit
+    removed, so "Far Cry 5", "far-cry 5" and "farcry5" are one string. Searches
+    spelling a name joined or separated meet through it. Mirrors
+    Normalizer::collapse (letters/digits as in the shared tokenizer)."""
+    return "".join(ch for ch in normalize(text) if ch.isalnum())

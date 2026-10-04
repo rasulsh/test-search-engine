@@ -19,6 +19,10 @@ namespace App;
  * numerals ii..x to digits (whole tokens only, never right after a number
  * token and a space, where "x" / "v" are a dimension or a unit: "2 x 4",
  * "12 v"; "a7 iv" still maps; "i" is never mapped).
+ *
+ * collapse() is a derived form, not a rule of normalize(): the normalized text
+ * with every non-letter/non-digit removed ("far cry" -> "farcry"). normalize()
+ * output, and so VERSION, is unchanged by it.
  */
 final class Normalizer
 {
@@ -49,6 +53,16 @@ final class Normalizer
     public static function normalizeSku(?string $sku): string
     {
         return (string) preg_replace('/[^\p{L}\p{N}]+/u', '', self::canonical($sku));
+    }
+
+    /**
+     * Space-collapsed form: the normalized text with every non-letter/non-digit
+     * removed, so "Far Cry 5", "far-cry 5" and "farcry5" are one string.
+     * Mirrors normalize.py collapse().
+     */
+    public static function collapse(?string $text): string
+    {
+        return (string) preg_replace('/[^\p{L}\p{N}]+/u', '', self::normalize($text));
     }
 
     /** Every rule but the Roman numerals, which a code never holds. */

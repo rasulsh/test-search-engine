@@ -60,7 +60,9 @@ final class KeywordStructuredFieldsTest extends DatabaseTestCase
             true,
             8.0,
             7.0,
-            5.0
+            5.0,
+            // Strict all-words matching is under test; see KeywordSoftAndTest.
+            softAndMinResults: 0
         );
     }
 

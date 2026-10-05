@@ -137,7 +137,8 @@ def test_load_aliases_rejects_malformed_files(tmp_path: Path, content: str) -> N
 
 def test_shipped_alias_file_is_valid() -> None:
     groups = kw.load_aliases(Path(config.load()["build"]["aliases_file"]))
-    assert ["gta", "grand theft auto", "جی تی ای"] in groups
+    gta = next(g for g in groups if g[0] == "gta")
+    assert {"grand theft auto", "جی تی ای"} <= set(gta)
 
 
 def test_build_keymap_round_trips() -> None:

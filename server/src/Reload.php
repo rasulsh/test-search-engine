@@ -35,10 +35,15 @@ final class Reload
     private bool $hadPreviousTable = false;
     /** @var array{name: string, dim: int, normalization_version: int} */
     private array $model;
+    private ?Cache $cache;
 
-    /** @param array<string, mixed> $config */
-    public function __construct(PDO $pdo, array $config)
+    /**
+     * @param array<string, mixed> $config
+     * @param Cache|null $cache replaces the result cache built from $config['redis'] (tests)
+     */
+    public function __construct(PDO $pdo, array $config, ?Cache $cache = null)
     {
+        $this->cache = $cache ?? Cache::fromConfig($config);
         $this->pdo = $pdo;
         $this->dataDir = rtrim((string) $config['paths']['data'], '/');
         $this->incomingDir = rtrim((string) $config['paths']['data_incoming'], '/');
@@ -53,7 +58,7 @@ final class Reload
     }
 
     /**
-     * @return array{ok: true, count: int, model: string, dim: int}
+     * @return array{ok: true, count: int, model: string, dim: int, cache_flushed?: bool}
      * @throws ReloadException when the bundle is incompatible or inconsistent.
      */
     public function run(bool $loadStaging = false): array
@@ -91,12 +96,19 @@ final class Reload
             error_log('reload: speller warm-up failed: ' . $e->getMessage());
         }
 
-        return [
+        $result = [
             'ok' => true,
             'count' => $count,
             'model' => $this->model['name'],
             'dim' => $this->model['dim'],
         ];
+        // Cached results describe the old catalog (M26). A failed flush is
+        // reported, not raised: the swap stands and entries expire with their TTL.
+        if ($this->cache !== null) {
+            $result['cache_flushed'] = $this->cache->flush();
+        }
+
+        return $result;
     }
 
     /** @return array<string, mixed> */

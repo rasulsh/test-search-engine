@@ -9,8 +9,8 @@ use PDO;
 /**
  * Read-only view of search_logs for public/logs.php (M21): recent searches
  * newest first, only the zero-result ones (the gaps worth fixing) or the
- * slowest, paginated. A table from before M21 lacks did_you_mean and tier;
- * those columns then render empty.
+ * slowest, paginated. A table from before M21 lacks did_you_mean and tier
+ * (before M26, cache_hit); those columns then render empty.
  */
 final class LogsPage
 {
@@ -24,7 +24,7 @@ final class LogsPage
         'id' => 'ID', 'ts' => 'Time', 'raw_q' => 'Query', 'normalized_q' => 'Normalized',
         'tier' => 'Tier', 'had_vector' => 'Vector', 'result_count' => 'Results',
         'top_ids' => 'Top ids', 'latency_ms' => 'ms', 'did_you_mean' => 'Did you mean',
-        'customer_id' => 'Customer',
+        'customer_id' => 'Customer', 'cache_hit' => 'Cache',
     ];
 
     private PDO $pdo;

@@ -9,7 +9,7 @@ The HTTP surface of the service and the read-only tools around it. The exact req
 | `POST /search` | `{q, customer_id?, limit?, with_details?, debug?}`, returns ordered `product_ids` + `did_you_mean` / `did_you_mean_applied` (plus `cosine_scores` on hybrid responses, and `products` display fields only with `"with_details": true`). Keyword tier always; hybrid when the configured VPS answers in time. |
 | `GET /health` | Database reachability + live product count, for monitoring. |
 | `GET /logs.php` | M21, read-only, off until `SEARCH_LOGS_TOKEN` is set. Recent searches (newest first, paginated), the zero-result ones, or the slowest; see [Search logs and ranking debug](#search-logs-and-ranking-debug). |
-| `POST /reload` | Token-protected (`X-Reload-Token`). Validates the staged bundle and swaps it in atomically. With `?load=1` it first loads `data_incoming/products.load.sql` into the staging table itself. |
+| `POST /reload` | Token-protected (`X-Reload-Token`). Validates the staged bundle and swaps it in atomically (then flushes the result cache when one is configured, reporting `cache_flushed`). With `?load=1` it first loads `data_incoming/products.load.sql` into the staging table itself. |
 
 The exact request/response JSON, headers, status codes, and every error and
 `invalid_bundle` reason are in [`INTEGRATION.md`](../INTEGRATION.md#http-contract).
@@ -21,8 +21,10 @@ and so on). The front controller's pretty paths only route at a web root.
 <a id="logs-debug"></a>**Search logs and ranking debug (M21).** Every `/search`
 writes exactly one `search_logs` row: `ts`, `raw_q`, `normalized_q`,
 `had_vector`, `result_count`, `top_ids` (the first ten), `customer_id`,
-`latency_ms`, `did_you_mean` (the suggestion offered or applied) and `tier`
-(`keyword_only` or `hybrid`; `hybrid` = the VPS answered in time). Over-long
+`latency_ms`, `did_you_mean` (the suggestion offered or applied), `tier`
+(`keyword_only` or `hybrid`; `hybrid` = the VPS answered in time) and, with the
+optional [result cache](DEPLOY.md#result-cache-optional-redis-m26) (M26), `cache_hit`
+(`1` = answered from Redis; `tier` and `had_vector` then repeat what the cached answer used). Over-long
 queries are truncated to 512 characters, and a failed write (missing table, a
 rejected value) is logged with `error_log` and **never** fails the search.
 

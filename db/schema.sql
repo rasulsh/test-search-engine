@@ -73,6 +73,8 @@ CREATE TABLE IF NOT EXISTS search_logs (
     -- 'keyword_only' or 'hybrid'. Logger.php adds both to an older table.
     did_you_mean VARCHAR(512)    DEFAULT NULL,
     tier         VARCHAR(16)     NOT NULL DEFAULT 'keyword_only',
+    -- M26: 1 when the result came from the Redis result cache (Logger.php adds it).
+    cache_hit    TINYINT(1)      NOT NULL DEFAULT 0,
     PRIMARY KEY (id),
     KEY idx_ts (ts)
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_unicode_ci;

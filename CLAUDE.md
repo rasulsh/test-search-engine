@@ -28,13 +28,18 @@ the cPanel server never runs an embedding model. The VPS holds the query model
 and the product vectors, returns `[{product_id, score}]` for a query text, and
 is reachable only from cPanel. If the VPS is not configured, unreachable, slow
 or failing, `/search` returns keyword-only results and logs the degradation.
+Since M26 an **optional Redis result cache** (on the VPS, never on cPanel) can answer
+repeated identical queries; cPanel only runs a tiny in-repo client, and any Redis
+problem is just a cache miss.
 
 ### Hard constraints (do not violate)
 - Target host is **cPanel shared hosting** (PHP 8.x + LiteSpeed + MariaDB) under
   CloudLinux LVE limits. **No long-running daemons, no root, no background
   services.** Therefore: **no Meilisearch, no Qdrant, no Redis, no Elasticsearch,
-  no Python service on the cPanel server.** (The VPS vector service is a
-  separate host, not part of the cPanel deployment.)
+  no Python service on the cPanel server.** (The VPS vector service and, since
+  M26, the optional Redis result cache are on a separate host, not part of the
+  cPanel deployment; cPanel only holds the PHP client code, no extension or
+  Composer package.)
 - Search latency budget: **under 200 ms** server-side per request.
 - The server runs **plain PHP, no framework** (no Laravel/Symfony). A tiny
   front controller only. Runtime must have **zero Composer runtime
@@ -92,6 +97,8 @@ abstraction layers.
 │   │   ├── Normalizer.php         # MUST mirror pipeline/normalize.py exactly
 │   │   ├── Keyword.php            # FULLTEXT + fuzzy + keymap + did-you-mean
 │   │   ├── VpsClient.php          # server-to-server call to the VPS /search-vectors
+│   │   ├── Cache.php              # optional Redis result cache for /search (M26)
+│   │   ├── RedisClient.php        # minimal in-repo RESP client for Cache (no Composer package)
 │   │   ├── Ranker.php             # hybrid merge + business ranking
 │   │   ├── Logger.php             # search logs (incl. did_you_mean, tier)
 │   │   ├── LogsPage.php           # read-only search_logs view for logs.php (M21)
@@ -287,6 +294,11 @@ wait for review before starting the next.
   substance, into the flat `docs/` folder; `docs/TRAINING-COLAB.md` is the
   end-to-end rebuild runbook (Colab T4 is the recommended build machine). Docs
   only, no behavior change.
+
+- **M26 — Redis result cache:** optional, off by default; `Cache.php` +
+  `RedisClient.php` (in-repo RESP client, no Composer package or extension),
+  config `redis`, flush on `/reload`, `search_logs.cache_hit`, `vps/setup.sh
+  --redis` (secured, firewalled). Any Redis error is a miss; contracts unchanged.
 
 - **M22 — Offline build speed + reliable export:** `pipeline/db_export.py`
   (direct DB -> CSV, replaces the phpMyAdmin export), GPU/fp16/batch-configured

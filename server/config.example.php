@@ -210,6 +210,25 @@ return [
         'timeout_ms' => (int) $setting('SEARCH_VPS_TIMEOUT_MS', '300'),
     ],
 
+    // Result cache (M26, docs/CONFIGURATION.md): repeated identical /search
+    // queries are served from Redis instead of recomputing keyword + VPS +
+    // ranking. Off until enabled; any Redis error is a cache miss, never a
+    // failed search. POST /reload flushes every key under `prefix` after a
+    // swap. Redis runs on the VPS (vps/setup.sh --redis), not on cPanel; the
+    // server speaks to it with the in-repo RESP client (no Composer package,
+    // no extension). `auth` is a secret: keep it in the environment or in
+    // config.php. A failure-prone Redis costs at most timeout_ms per request.
+    'redis' => [
+        'enabled'    => filter_var($setting('SEARCH_REDIS_ENABLED', '0'), FILTER_VALIDATE_BOOLEAN),
+        'host'       => $setting('SEARCH_REDIS_HOST', '127.0.0.1'),
+        'port'       => (int) $setting('SEARCH_REDIS_PORT', '6379'),
+        'auth'       => $setting('SEARCH_REDIS_AUTH', ''),
+        'db'         => (int) $setting('SEARCH_REDIS_DB', '0'),
+        'ttl'        => (int) $setting('SEARCH_REDIS_TTL', '300'),
+        'timeout_ms' => (int) $setting('SEARCH_REDIS_TIMEOUT_MS', '100'),
+        'prefix'     => $setting('SEARCH_REDIS_PREFIX', 'search:cache:'),
+    ],
+
     // Read-only tooling (M21), each off until its token is set. `debug`: a
     // /search request with "debug": 1 and this token in the X-Debug-Token header
     // gets a per-result score breakdown (never logged). `logs`: public/logs.php,

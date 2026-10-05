@@ -344,6 +344,39 @@ SFTP). A corrupted file is caught as `vectors_size_mismatch` or
 `checksum_mismatch`. `python pipeline/build.py --csv export.csv --out ./bundle`
 (with `EMBEDDER=real`) builds just the bundle.
 
+### Result cache (optional, Redis, M26)
+
+Off until configured. Redis runs on the **VPS** (cPanel cannot run daemons) and the cPanel server only
+talks to it with an in-repo RESP client: no Composer package, no PHP extension.
+
+1. **Install and secure Redis on the VPS** (`vps/setup.sh`, safe to re-run):
+
+   ```
+   sudo ./setup.sh --redis --redis-bind <VPS_ADDRESS> --redis-allow-ip <CPANEL_OUTBOUND_IP>
+   ```
+
+   It installs `redis-server`, requires a random password (printed once, kept on re-runs in
+   `/etc/redis/search-cache.conf`), turns protected mode on, disables persistence, caps memory at 128 MB
+   (LRU eviction) and, with `--redis-bind`, listens on that address as well as localhost with `ufw`
+   admitting **only** `--redis-allow-ip` on port 6379. Without `--redis-bind` it is localhost-only (useful
+   only when the search service itself runs on the VPS). `--redis-bind` without `--redis-allow-ip` is refused.
+   Redis speaks plain TCP, so the password is not encrypted on the wire: prefer a private network or a
+   tunnel (WireGuard, stunnel) between the hosts, with `--redis-bind` set to the private address. The cache
+   holds product ids only.
+2. **Point cPanel at it** (environment or `config.php`, see [CONFIGURATION.md](CONFIGURATION.md#result-cache-redis-section-m26)):
+   `SEARCH_REDIS_ENABLED=1`, `SEARCH_REDIS_HOST`, `SEARCH_REDIS_PORT`, `SEARCH_REDIS_AUTH`; add the `redis` block
+   from `config.example.php` to an older `config.php`.
+3. **Check** that it works: send the same `/search` twice and look at `logs.php`: the second row has
+   `cache_hit = 1` (and a latency near 0).
+
+`POST /reload` empties the cache (every key under `SEARCH_REDIS_PREFIX`) after a successful swap and reports
+`"cache_flushed": true` (or `false`, with the swap still done, when Redis could not be reached: entries then
+expire with their TTL). To flush by hand after a settings change:
+`redis-cli -a <password> --scan --pattern 'search:cache:*' | xargs -r redis-cli -a <password> del`.
+
+If Redis stops, searches carry on uncached (each costs at most `SEARCH_REDIS_TIMEOUT_MS` extra, logged with
+`error_log`); to turn the cache off set `SEARCH_REDIS_ENABLED=0`.
+
 ### Rollback (one step)
 
 To return to the previous catalog after a bad reload:

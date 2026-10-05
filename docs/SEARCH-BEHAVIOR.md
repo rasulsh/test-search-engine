@@ -115,7 +115,7 @@ Persian query. Keep one brand per group, and add a variant to its existing
 group rather than a second group; the same Persian word may head several
 brands (`سونی` is in both Sony groups) and each is tried as a variant. List every
 spelling shoppers type: normalization removes the half-space, so `پلی‌استیشن`
-and `پلی استیشن` are two different terms. To change the aliases: edit the
+and `پلی استیشن` are two different terms. To bulk-generate Persian spellings of English names offline, see [ALIASES.md](ALIASES.md). To change the aliases: edit the
 file, build a release, deploy and reload as for a catalog update. The build
 and the reload both reject a malformed file (`invalid_aliases`), so a typo
 never silently turns aliases off. Not solved by this: queries that describe a

@@ -52,6 +52,17 @@ def load() -> dict[str, Any]:
         # so a deterministic mock saves a second full embedding run. "real"
         # restores real e5 vectors. The VPS vectors are always real.
         "bundle_embedder": os.getenv("SEARCH_BUNDLE_EMBEDDER", "mock"),
+        # Offline alias generator (gen_aliases.py, docs/ALIASES.md): any
+        # OpenAI-compatible chat endpoint. Never read at search time.
+        "alias_llm": {
+            "base_url": os.getenv("ALIAS_LLM_BASE_URL", ""),
+            "model": os.getenv("ALIAS_LLM_MODEL", ""),
+            "api_key": os.getenv("ALIAS_LLM_API_KEY", ""),
+            "batch_size": int(os.getenv("ALIAS_LLM_BATCH_SIZE", "40")),
+            "max_variants": int(os.getenv("ALIAS_MAX_VARIANTS", "4")),
+            "max_variant_chars": int(os.getenv("ALIAS_MAX_VARIANT_CHARS", "40")),
+            "max_name_chars": int(os.getenv("ALIAS_MAX_NAME_CHARS", "60")),
+        },
         "keyword": {
             # Tokens shorter than this are ignored when building the dictionaries.
             "min_token_length": int(os.getenv("SEARCH_MIN_TOKEN_LENGTH", "2")),

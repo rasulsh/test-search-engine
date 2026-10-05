@@ -145,3 +145,7 @@ The flags `--host/--port/--user/--name/--prefix/--language-id/--out` override th
 ## Tests only
 
 `SEARCH_TEST_DB_DSN`, `SEARCH_TEST_DB_USER`, `SEARCH_TEST_DB_PASSWORD` point the database-backed PHPUnit tests at a real MySQL/MariaDB ([ARCHITECTURE.md](ARCHITECTURE.md#running-the-database-backed-tests)).
+
+## Alias generator (offline, M25)
+
+`ALIAS_LLM_BASE_URL`, `ALIAS_LLM_MODEL`, `ALIAS_LLM_API_KEY`, `ALIAS_LLM_BATCH_SIZE` (40), `ALIAS_MAX_VARIANTS` (4), `ALIAS_MAX_VARIANT_CHARS` (40), `ALIAS_MAX_NAME_CHARS` (60): used only by `pipeline/gen_aliases.py`, see [ALIASES.md](ALIASES.md).

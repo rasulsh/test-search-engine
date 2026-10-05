@@ -51,7 +51,7 @@ use ReflectionMethod;
  * disk rather than the query (a full scan of the table, after which the pages
  * stay cached, brought it back to ~80 ms). Descriptions are therefore shorter
  * here so the guard measures CPU, and "the working set must fit the host's
- * innodb_buffer_pool_size" is a production-validation item (README).
+ * innodb_buffer_pool_size" is a production-validation item (docs/DEPLOY.md, go-live checklist).
  *
  * M23: a query fewer than soft_and_min_results products fully match also runs
  * the soft-AND partial searches (the literal query in every field, each alias
@@ -435,7 +435,7 @@ final class KeywordLatencyGuardTest extends DatabaseTestCase
      * round under the budget. A shared CI runner stalls now and then; a real
      * regression is slow in every round, so the budget keeps its teeth. The
      * budget is a CI regression bar: production latency is measured on the host
-     * (README, "Needs production validation").
+     * (docs/DEPLOY.md, go-live checklist).
      *
      * @param callable(): mixed $run
      */

@@ -149,7 +149,7 @@ Semantics the storefront should know:
   franchise or alternate name), brand or category matches it, ranked just
   below a title match (tags), then brand, specs, category. In a hybrid
   response a brand, category or tag-phrase that the query names also gets a
-  small ranking boost (README, "Tags, brand and category").
+  small ranking boost ([docs/SEARCH-BEHAVIOR.md](docs/SEARCH-BEHAVIOR.md#hybrid-ranking), [docs/PIPELINE.md](docs/PIPELINE.md#searched-fields)).
 - Every request writes one row to `search_logs`: the raw and normalized query,
   `had_vector` (`1` when the VPS answered, a hybrid response), `tier`
   (`keyword_only` or `hybrid`), `result_count`, the first ten ids, the
@@ -203,7 +203,7 @@ configure the uptime monitor to use `GET`.
 ### `POST /reload`
 
 Operator-only. It validates the staged bundle and swaps it in atomically. See
-the README runbook for the steps before it.
+the [deploy runbook](docs/DEPLOY.md) for the steps before it.
 
 Query parameter `load=1` (optional): before validating, load
 `data_incoming/products.load.sql` into the `products_new` staging table from
@@ -252,8 +252,8 @@ that helps.
 | reason | fix |
 | --- | --- |
 | `missing_meta`, `invalid_meta` | `data_incoming/meta.json` is absent or not JSON. Re-upload the bundle. |
-| `model_mismatch`, `dim_mismatch`, `normalization_version_mismatch` | The bundle was built with a different model, dim, or normalization rules than `server/config.php` (contract 3). Rebuild, or change config deliberately (see [Changing the model](#changing-the-model)). `normalization_version` itself follows the deployed code, except in a `config.php` from before M15.1, which needs a one-time edit (README, [normalization version upgrades](./README.md#upgrading-to-m15)). |
-| `invalid_aliases`, `invalid_synonyms` | `data_incoming/aliases.json` or `synonyms.json` is not a JSON list of lists of strings (`details.file` names it). Fix `pipeline/aliases.json` (see README, [aliases](./README.md#aliases)) and rebuild. |
+| `model_mismatch`, `dim_mismatch`, `normalization_version_mismatch` | The bundle was built with a different model, dim, or normalization rules than `server/config.php` (contract 3). Rebuild, or change config deliberately (see [Changing the model](#changing-the-model)). `normalization_version` itself follows the deployed code, except in a `config.php` from before M15.1, which needs a one-time edit ([normalization version upgrades](docs/DEPLOY.md#upgrading-to-m15)). |
+| `invalid_aliases`, `invalid_synonyms` | `data_incoming/aliases.json` or `synonyms.json` is not a JSON list of lists of strings (`details.file` names it). Fix `pipeline/aliases.json` (see [aliases](docs/SEARCH-BEHAVIOR.md#aliases)) and rebuild. |
 | `missing_index`, `missing_vectors` | `vectors.idx` / `vectors.bin` not uploaded. |
 | `missing_staging_table` | `products_new` does not exist. Call with `?load=1`, or load `products.load.sql` into the database first. |
 | `missing_load_sql` | `?load=1` was sent but `data_incoming/products.load.sql` is absent. Re-extract `release.zip` (or upload the file). |
@@ -318,7 +318,7 @@ Content-Type: application/json
   tuning on the real catalog** (eval harness, search logs). No floor separates
   short queries well (on the fixture, right one-word hits scored 0.42–0.49 and
   wrong ones up to 0.43): one-word precision comes from the keyword tier (all
-  terms, aliases, synonyms) blended with it (M20: weighted keyword + cosine relevance with its own floor, see README), and the floor mainly keeps far
+  terms, aliases, synonyms) blended with it (M20: weighted keyword + cosine relevance with its own floor, see [docs/SEARCH-BEHAVIOR.md](docs/SEARCH-BEHAVIOR.md#hybrid-ranking)), and the floor mainly keeps far
   neighbours out.
 - The VPS's own `VPS_SEMANTIC_MIN_SCORE` applies only to callers that send no
   `min_score`; cPanel always sends its floor.

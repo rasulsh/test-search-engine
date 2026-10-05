@@ -14,7 +14,7 @@ No browser model ships (M18): queries are embedded on the VPS. Since M18 /search
 does not read the bundle's vectors.bin either (/reload only checks meta, size
 and checksum), so it is built with SEARCH_BUNDLE_EMBEDDER (default "mock", no
 second model run); the VPS vectors are always embedded for real, on the GPU when
-there is one (SEARCH_EMBED_*, README "GPU setup").
+there is one (SEARCH_EMBED_*, docs/PIPELINE.md and docs/TRAINING-COLAB.md).
 
 The same run also writes the bge-m3 product vectors for the VPS vector service
 (vps/README.md), from the same export (tags, brand and category included in the
@@ -23,7 +23,7 @@ embedded passages), to --vps-out DIR (default: vps_vectors/ next to the zip);
 
 config.php is never packed, so extracting over the server keeps its config.
 First deploy: extract, then open install.php. Updates: extract, then POST
-reload.php?load=1 (see README).
+reload.php?load=1 (see docs/DEPLOY.md).
 """
 
 from __future__ import annotations

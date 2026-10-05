@@ -10,6 +10,7 @@ A standalone two-tier product-search service for an OpenCart 2.0.3.1 storefront 
 | [docs/CONFIGURATION.md](docs/CONFIGURATION.md) | Every config key: server (`SEARCH_*`), pipeline, export (`OC_*`), VPS (`VPS_*`) |
 | [docs/PIPELINE.md](docs/PIPELINE.md) | Offline build, the bundle format, the data model (specs, tags, brand, category, normalization, the M23 space-collapse field) and the OpenCart export (`db_export.py`) |
 | [docs/SEARCH-BEHAVIOR.md](docs/SEARCH-BEHAVIOR.md) | How a query is matched, ranked and corrected: field weights, aliases, soft AND, SKU, "did you mean", the hybrid blend |
+| [docs/ALIASES.md](docs/ALIASES.md) | Offline LLM alias generator: Persian spellings of English names, review, merge, rebuild |
 | [docs/TRAINING-COLAB.md](docs/TRAINING-COLAB.md) | **Rebuild / retrain end to end on Google Colab** (export, upload, build, download), the recommended build path |
 | [docs/DEPLOY.md](docs/DEPLOY.md) | One-time cPanel setup, every catalog update, upgrade notes, fallback, rollback, go-live checklist |
 | [docs/SEARCH-API.md](docs/SEARCH-API.md) | HTTP endpoints, `logs.php`, the `debug` flag, eval harness, search test page, model-parity check |

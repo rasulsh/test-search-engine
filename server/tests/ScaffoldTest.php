@@ -118,6 +118,36 @@ final class ScaffoldTest extends TestCase
         );
     }
 
+    public function testRedisCacheIsConfigDrivenAndOffByDefault(): void
+    {
+        $defaults = $this->loadExampleConfig()['redis'];
+        $this->assertFalse($defaults['enabled']);
+        $this->assertSame(
+            ['host' => '127.0.0.1', 'port' => 6379, 'auth' => '', 'db' => 0, 'ttl' => 300, 'timeout_ms' => 100],
+            array_diff_key($defaults, ['enabled' => 0, 'prefix' => 0])
+        );
+
+        $env = [
+            'SEARCH_REDIS_ENABLED' => '1', 'SEARCH_REDIS_HOST' => '10.0.0.5', 'SEARCH_REDIS_PORT' => '6400',
+            'SEARCH_REDIS_AUTH' => 'pw-from-env', 'SEARCH_REDIS_DB' => '2', 'SEARCH_REDIS_TTL' => '60',
+        ];
+        foreach ($env as $name => $value) {
+            putenv("{$name}={$value}");
+        }
+        try {
+            $redis = $this->loadExampleConfig()['redis'];
+        } finally {
+            foreach (array_keys($env) as $name) {
+                putenv($name);
+            }
+        }
+
+        $this->assertTrue($redis['enabled']);
+        $this->assertSame(['10.0.0.5', 6400, 'pw-from-env', 2, 60], [
+            $redis['host'], $redis['port'], $redis['auth'], $redis['db'], $redis['ttl'],
+        ]);
+    }
+
     public function testExplicitZeroFromTheEnvironmentIsHonoured(): void
     {
         // `getenv() ?: default` would silently replace "0" with the default.

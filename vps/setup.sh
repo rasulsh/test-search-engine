@@ -5,6 +5,12 @@
 # deps and the proxy config; keeps the env file/token, the model and vectors).
 #
 #   sudo ./setup.sh --domain vsearch.example.com [--allow-ip <CPANEL_OUTBOUND_IP>]
+#   sudo ./setup.sh --redis [--redis-bind <VPS_ADDRESS> --redis-allow-ip <CPANEL_OUTBOUND_IP>]
+#
+# --redis (optional, M26) installs and secures Redis as the /search result cache:
+# password required, protected mode, no persistence, memory-capped, localhost only
+# unless --redis-bind opens one more address, which then needs --redis-allow-ip
+# (ufw lets only that IP reach port 6379). See docs/DEPLOY.md, "Result cache".
 #
 # Prerequisite for the proxy: a DNS A record for the domain pointing at this
 # VPS (this script cannot create DNS). Without a domain the service still comes
@@ -27,18 +33,29 @@ CADDY_BIN="$P/usr/local/bin/caddy"
 CADDY_DIR="$P/etc/caddy"
 CADDY_HOME="$P/var/lib/caddy"
 
+REDIS_CONF_DIR="$P/etc/redis"
+REDIS_PORT=6379
+
 DOMAIN="${SEARCH_VPS_DOMAIN:-}"
 ALLOW_IP="${SEARCH_VPS_ALLOW_IP:-}"
+REDIS="${SEARCH_VPS_REDIS:-0}"
+REDIS_BIND="${SEARCH_VPS_REDIS_BIND:-}"
+REDIS_ALLOW_IP="${SEARCH_VPS_REDIS_ALLOW_IP:-}"
 
 usage() {
     echo "Usage: sudo ./setup.sh [--domain <fqdn>] [--allow-ip <cpanel-outbound-ip>]"
-    echo "  env: SEARCH_VPS_DOMAIN, SEARCH_VPS_ALLOW_IP"
+    echo "                       [--redis [--redis-bind <address> --redis-allow-ip <cpanel-outbound-ip>]]"
+    echo "  env: SEARCH_VPS_DOMAIN, SEARCH_VPS_ALLOW_IP, SEARCH_VPS_REDIS=1,"
+    echo "       SEARCH_VPS_REDIS_BIND, SEARCH_VPS_REDIS_ALLOW_IP"
 }
 
 while [ $# -gt 0 ]; do
     case "$1" in
         --domain) DOMAIN="${2:-}"; shift 2 || { usage >&2; exit 2; } ;;
         --allow-ip) ALLOW_IP="${2:-}"; shift 2 || { usage >&2; exit 2; } ;;
+        --redis) REDIS=1; shift ;;
+        --redis-bind) REDIS_BIND="${2:-}"; shift 2 || { usage >&2; exit 2; } ;;
+        --redis-allow-ip) REDIS_ALLOW_IP="${2:-}"; shift 2 || { usage >&2; exit 2; } ;;
         -h|--help) usage; exit 0 ;;
         *) echo "Unknown argument: $1" >&2; usage >&2; exit 2 ;;
     esac
@@ -61,6 +78,30 @@ if [ -n "$ALLOW_IP" ] && [ -z "$DOMAIN" ]; then
     exit 2
 fi
 
+ADDRESS_RE='^[0-9A-Fa-f:.]+$'
+CIDR_RE='^[0-9A-Fa-f:.]+(/[0-9]{1,3})?$'
+if [ "$REDIS" != 1 ] && { [ -n "$REDIS_BIND" ] || [ -n "$REDIS_ALLOW_IP" ]; }; then
+    echo "--redis-bind and --redis-allow-ip only apply together with --redis." >&2
+    exit 2
+fi
+if [ -n "$REDIS_BIND" ] && ! printf '%s' "$REDIS_BIND" | grep -Eq "$ADDRESS_RE"; then
+    echo "Invalid --redis-bind '$REDIS_BIND' (an IPv4/IPv6 address)." >&2
+    exit 2
+fi
+if [ -n "$REDIS_ALLOW_IP" ] && ! printf '%s' "$REDIS_ALLOW_IP" | grep -Eq "$CIDR_RE"; then
+    echo "Invalid --redis-allow-ip '$REDIS_ALLOW_IP' (an IPv4/IPv6 address or CIDR)." >&2
+    exit 2
+fi
+case "$REDIS_BIND" in
+    ""|127.*|::1) ;;
+    *)
+        if [ -z "$REDIS_ALLOW_IP" ]; then
+            echo "--redis-bind $REDIS_BIND exposes Redis beyond localhost: also pass" >&2
+            echo "--redis-allow-ip <cpanel-outbound-ip> so the firewall admits only that address." >&2
+            exit 2
+        fi ;;
+esac
+
 if [ "$(id -u)" -ne 0 ]; then
     echo "Run as root (sudo ./setup.sh)." >&2
     exit 1
@@ -70,7 +111,9 @@ echo "==> System packages"
 # Only touch apt when something is missing, so a VPS whose distro mirror is
 # unreachable can still be provisioned.
 missing=()
-for pkg in python3 python3-venv ca-certificates curl tar ufw; do
+wanted=(python3 python3-venv ca-certificates curl tar ufw)
+[ "$REDIS" = 1 ] && wanted+=(redis-server)
+for pkg in "${wanted[@]}"; do
     dpkg -s "$pkg" >/dev/null 2>&1 || missing+=("$pkg")
 done
 if [ "${#missing[@]}" -gt 0 ]; then
@@ -122,6 +165,73 @@ systemctl daemon-reload
 systemctl enable search-vectors >/dev/null
 systemctl restart search-vectors
 
+# Allow the host's ssh port(s) so enabling ufw never locks the operator out.
+allow_ssh() {
+    local ssh_ports ssh_port
+    ssh_ports="$( (sshd -T 2>/dev/null || true) | sed -n 's/^port //p' | sort -u)"
+    for ssh_port in ${ssh_ports:-22}; do
+        ufw allow "$ssh_port/tcp" comment 'search-vectors-ssh' >/dev/null
+    done
+}
+
+if [ "$REDIS" = 1 ]; then
+    echo "==> Redis result cache (password, protected mode, no persistence)"
+    redis_conf="$REDIS_CONF_DIR/search-cache.conf"
+    install -d "$REDIS_CONF_DIR"
+    redis_pass=""
+    [ -f "$redis_conf" ] && redis_pass="$(sed -n 's/^requirepass //p' "$redis_conf")"
+    new_pass=0
+    if [ -z "$redis_pass" ]; then
+        redis_pass="$("$APP_ROOT/venv/bin/python" -c 'import secrets; print(secrets.token_hex(32))')"
+        new_pass=1
+    fi
+    bind_line="127.0.0.1 -::1"
+    [ -n "$REDIS_BIND" ] && bind_line="$bind_line $REDIS_BIND"
+    umask 077
+    cat > "$redis_conf.new" <<REDISCONF
+# Written by vps/setup.sh --redis (the /search result cache). Re-running keeps the password.
+bind $bind_line
+port $REDIS_PORT
+protected-mode yes
+requirepass $redis_pass
+# A cache: bounded memory, evict least-recently-used, nothing written to disk.
+maxmemory 128mb
+maxmemory-policy allkeys-lru
+save ""
+appendonly no
+REDISCONF
+    umask 022
+    mv -f "$redis_conf.new" "$redis_conf"
+    chown root:redis "$redis_conf"
+    chmod 0640 "$redis_conf"
+    # Later directives win, so the include goes last in the distribution's file.
+    touch "$REDIS_CONF_DIR/redis.conf"
+    grep -qxF "include $redis_conf" "$REDIS_CONF_DIR/redis.conf" \
+        || printf '\ninclude %s\n' "$redis_conf" >> "$REDIS_CONF_DIR/redis.conf"
+    systemctl enable redis-server >/dev/null
+    systemctl restart redis-server
+
+    # Our previous Redis rules go first, so a changed or dropped --redis-allow-ip takes effect.
+    while n="$(ufw status numbered | sed -n 's/^\[ *\([0-9][0-9]*\)\].*search-vectors-redis.*/\1/p' | head -n1)" && [ -n "$n" ]; do
+        ufw --force delete "$n" >/dev/null
+    done
+    if [ -n "$REDIS_ALLOW_IP" ]; then
+        allow_ssh
+        ufw allow from "$REDIS_ALLOW_IP" to any port "$REDIS_PORT" proto tcp comment 'search-vectors-redis' >/dev/null
+        ufw deny "$REDIS_PORT/tcp" comment 'search-vectors-redis-deny' >/dev/null
+        ufw --force enable >/dev/null
+        echo "    $REDIS_PORT/tcp open to $REDIS_ALLOW_IP only"
+    fi
+    if [ "$new_pass" -eq 1 ]; then
+        echo "    wrote $redis_conf with a new random password (cPanel SEARCH_REDIS_AUTH=$redis_pass)"
+    else
+        echo "    keeping the password in $redis_conf"
+    fi
+    echo "    cPanel: SEARCH_REDIS_ENABLED=1 SEARCH_REDIS_HOST=${REDIS_BIND:-<unreachable: bound to localhost>} SEARCH_REDIS_PORT=$REDIS_PORT"
+    if [ -n "$REDIS_BIND" ]; then
+        echo "    NOTE: Redis speaks plain TCP: prefer a private network or tunnel between the hosts (docs/DEPLOY.md)."
+    fi
+fi
 
 port="$(sed -n 's/^VPS_PORT=//p' "$ENV_FILE")"
 port="${port:-8600}"
@@ -209,10 +319,7 @@ else
 fi
 
 echo "==> Firewall (ufw)"
-ssh_ports="$( (sshd -T 2>/dev/null || true) | sed -n 's/^port //p' | sort -u)"
-for ssh_port in ${ssh_ports:-22}; do
-    ufw allow "$ssh_port/tcp" comment 'search-vectors-ssh' >/dev/null
-done
+allow_ssh
 ufw allow 80/tcp comment 'search-vectors-acme' >/dev/null
 # Replace our previous 443 rules so a changed or dropped --allow-ip takes effect.
 while n="$(ufw status numbered | sed -n 's/^\[ *\([0-9][0-9]*\)\].*search-vectors-https.*/\1/p' | head -n1)" && [ -n "$n" ]; do

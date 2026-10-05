@@ -80,6 +80,28 @@ The model, revision, dimension, pooling and prefixes are parameterized and share
 | `SEARCH_VPS_TOKEN` | empty | the VPS's `VPS_TOKEN` (secret) |
 | `SEARCH_VPS_TIMEOUT_MS` | 300 | whole-call budget, connect included. A slow or unreachable VPS means keyword-only results for that request, never an error. The default is sized for an external VPS; on the final LAN VM it is a safety net, keep it sane |
 
+### Result cache (`redis` section, M26)
+
+Optional and **off by default**: with `SEARCH_REDIS_ENABLED` unset nothing changes. Repeated identical
+queries are then answered from Redis instead of recomputing keyword + VPS + ranking
+([DEPLOY.md](DEPLOY.md#result-cache-optional-redis-m26)). An existing `config.php` has no `redis` section:
+copy the block from `config.example.php` (or set the variables in the environment) to enable it.
+
+| key / env | default | meaning |
+| --- | --- | --- |
+| `SEARCH_REDIS_ENABLED` | `0` | `1` turns the cache on |
+| `SEARCH_REDIS_HOST`, `SEARCH_REDIS_PORT` | `127.0.0.1`, `6379` | the Redis server (on the VPS, `vps/setup.sh --redis`; cPanel only runs the client) |
+| `SEARCH_REDIS_AUTH` | empty | Redis password (a secret: environment or `config.php`, never the repository) |
+| `SEARCH_REDIS_DB` | `0` | database number |
+| `SEARCH_REDIS_TTL` | `300` | seconds an entry lives; a catalog reload flushes it earlier |
+| `SEARCH_REDIS_TIMEOUT_MS` | `100` | connect + read budget; a slow or dead Redis costs at most this per request and means a cache miss, never an error |
+| `SEARCH_REDIS_PREFIX` | `search:cache:` | key prefix; the keyspace `POST /reload` flushes. Give each environment sharing one Redis its own prefix |
+
+Entries are keyed by the normalized query, the `limit` and whether the semantic tier is configured. Responses
+with `debug` are never cached, and neither is a result served without the semantic tier that is configured (a
+slow or failing VPS), so a degradation never outlives its request. After changing any ranking setting, flush by
+hand (see [DEPLOY.md](DEPLOY.md#result-cache-optional-redis-m26)) or wait out the TTL.
+
 ### Tooling and storefront
 
 | key / env | default | meaning |

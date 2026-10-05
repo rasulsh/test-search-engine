@@ -63,6 +63,7 @@ final class SearchController
     private int $defaultLimit;
     private float $semanticMinScore;
     private int $suggestMinResults;
+    private ?Cache $cache;
 
     /**
      * @param callable(): Speller $spellerFactory Built lazily (a catalog scan),
@@ -85,7 +86,8 @@ final class SearchController
         int $semanticTopK = 100,
         int $defaultLimit = 20,
         float $semanticMinScore = 0.4,
-        int $suggestMinResults = 3
+        int $suggestMinResults = 3,
+        ?Cache $cache = null
     ) {
         $this->keyword = $keyword;
         $this->logger = $logger;
@@ -99,6 +101,7 @@ final class SearchController
         $this->defaultLimit = max(1, $defaultLimit);
         $this->semanticMinScore = $semanticMinScore;
         $this->suggestMinResults = max(1, $suggestMinResults);
+        $this->cache = $cache;
     }
 
     /**
@@ -109,8 +112,9 @@ final class SearchController
      *
      * @param array<string, mixed> $config the server config array
      * @param VpsClient|null $vps replaces the client built from $config['vps'] (tests)
+     * @param Cache|null $cache replaces the result cache built from $config['redis'] (tests)
      */
-    public static function fromConfig(PDO $pdo, array $config, ?VpsClient $vps = null): self
+    public static function fromConfig(PDO $pdo, array $config, ?VpsClient $vps = null, ?Cache $cache = null): self
     {
         $search = $config['search'];
         $productsTable = $config['db']['products_table'];
@@ -209,7 +213,8 @@ final class SearchController
             (int) $search['semantic_top_k'],
             (int) $search['default_limit'],
             (float) ($search['semantic_min_score'] ?? 0.4),
-            (int) ($search['suggest_min_results'] ?? 3)
+            (int) ($search['suggest_min_results'] ?? 3),
+            $cache ?? Cache::fromConfig($config)
         );
     }
 
@@ -236,6 +241,19 @@ final class SearchController
 
         $start = microtime(true);
         $normalized = ($this->normalize)($raw);
+
+        // Result cache (M26): the debug breakdown is never cached or served from it.
+        $semanticOn = $this->semanticEnabled();
+        $cacheKey = $this->cache !== null && !$debug && $normalized !== ''
+            ? $this->cache->key($normalized, $limit, $semanticOn)
+            : null;
+        if ($cacheKey !== null) {
+            $hit = $this->cache->get($cacheKey);
+            if ($hit !== null && $this->isCachedResponse($hit)) {
+                return $this->serveCached($hit, $raw, $customerId, $start);
+            }
+        }
+
         $multiTerm = count(Tokenizer::split($normalized)) > 1;
         $results = $this->keyword->search($raw, $limit);
         $didYouMean = null;
@@ -305,6 +323,7 @@ final class SearchController
                 'latency_ms'   => $latencyMs,
                 'did_you_mean' => $didYouMean,
                 'tier'         => $semantic !== null ? Logger::TIER_HYBRID : Logger::TIER_KEYWORD_ONLY,
+                'cache_hit'    => false,
             ]);
         } catch (Throwable $e) {
             error_log('search: log write failed: ' . $e->getMessage());
@@ -324,6 +343,64 @@ final class SearchController
             $response['debug'] = $this->explain($results, $productIds, $semantic !== null, $explanation);
         }
 
+        // A result served without the semantic tier that is configured (VPS down,
+        // slow) is a degradation: caching it would pin it for the whole TTL.
+        if ($cacheKey !== null && (!$semanticOn || $semantic !== null)) {
+            $this->cache->set($cacheKey, [
+                'response'   => $response,
+                'had_vector' => $semantic !== null,
+            ]);
+        }
+
+        return $response;
+    }
+
+    private function semanticEnabled(): bool
+    {
+        return $this->vps !== null && $this->ranker !== null && $this->signalsProvider !== null;
+    }
+
+    /** @param array<string, mixed> $hit */
+    private function isCachedResponse(array $hit): bool
+    {
+        $response = $hit['response'] ?? null;
+
+        return is_array($response)
+            && is_array($response['query'] ?? null)
+            && is_array($response['product_ids'] ?? null)
+            && array_key_exists('did_you_mean', $response);
+    }
+
+    /**
+     * The stored response for this request, logged like any other search (flagged
+     * as a cache hit). The raw text is the caller's own; the rest is as computed.
+     *
+     * @param array<string, mixed> $hit
+     * @return array<string, mixed>
+     */
+    private function serveCached(array $hit, string $raw, ?string $customerId, float $start): array
+    {
+        $response = $hit['response'];
+        $response['query']['raw'] = $raw;
+        $hadVector = (bool) ($hit['had_vector'] ?? false);
+
+        try {
+            $this->logger->log([
+                'raw_q'        => $raw,
+                'normalized_q' => (string) ($response['query']['normalized'] ?? ''),
+                'had_vector'   => $hadVector,
+                'result_count' => count($response['product_ids']),
+                'top_ids'      => array_slice(array_map('intval', $response['product_ids']), 0, $this->topIdsLimit),
+                'customer_id'  => $customerId,
+                'latency_ms'   => (int) round((microtime(true) - $start) * 1000),
+                'did_you_mean' => is_string($response['did_you_mean']) ? $response['did_you_mean'] : null,
+                'tier'         => $hadVector ? Logger::TIER_HYBRID : Logger::TIER_KEYWORD_ONLY,
+                'cache_hit'    => true,
+            ]);
+        } catch (Throwable $e) {
+            error_log('search: log write failed: ' . $e->getMessage());
+        }
+
         return $response;
     }
 
@@ -335,7 +412,7 @@ final class SearchController
      */
     private function semantic(string $raw, string $normalized): ?array
     {
-        if ($this->vps === null || $this->ranker === null || $this->signalsProvider === null || $normalized === '') {
+        if (!$this->semanticEnabled() || $normalized === '') {
             return null;
         }
         $semantic = $this->vps->search($raw, $this->semanticTopK, $this->semanticMinScore);

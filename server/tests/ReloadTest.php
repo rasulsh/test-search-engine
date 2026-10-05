@@ -153,6 +153,71 @@ final class ReloadTest extends DatabaseTestCase
         $this->tempDirs[] = $dataDir . '_old';
     }
 
+    public function testSuccessfulSwapFlushesTheResultCache(): void
+    {
+        $redis = new FakeRedis();
+        $cache = new \App\Cache($redis, 'search:cache:', 60);
+        $cache->set('search:cache:a', ['a' => 1]);
+        $redis->data['other:x'] = 'keep';
+        $this->createStaging(2);
+        $dataDir = $this->newTempDir('_data');
+        $this->tempDirs[] = $dataDir . '_old';
+
+        $result = (new Reload($this->pdo, $this->config($dataDir, $this->makeIncoming(2)), $cache))->run();
+
+        self::assertTrue($result['ok']);
+        self::assertTrue($result['cache_flushed']);
+        self::assertSame(['other:x' => 'keep'], $redis->data);
+    }
+
+    public function testRejectedBundleLeavesTheResultCacheAlone(): void
+    {
+        $redis = new FakeRedis();
+        $cache = new \App\Cache($redis, 'search:cache:', 60);
+        $cache->set('search:cache:a', ['a' => 1]);
+        $this->createStaging(2);
+        $incomingDir = $this->makeIncoming(2, self::DIM, ['model' => 'other/model']);
+
+        try {
+            (new Reload($this->pdo, $this->config($this->newTempDir('_data'), $incomingDir), $cache))->run();
+            self::fail('expected a ReloadException');
+        } catch (ReloadException) {
+            self::assertCount(1, $redis->data);
+        }
+    }
+
+    public function testRedisDownDuringReloadDoesNotFailTheSwap(): void
+    {
+        $redis = new FakeRedis();
+        $redis->down = true;
+        $this->createStaging(2);
+        $dataDir = $this->newTempDir('_data');
+        $this->tempDirs[] = $dataDir . '_old';
+        $previous = ini_set('error_log', '/dev/null');
+
+        $result = (new Reload(
+            $this->pdo,
+            $this->config($dataDir, $this->makeIncoming(2)),
+            new \App\Cache($redis, 'search:cache:', 60)
+        ))->run();
+        ini_set('error_log', (string) $previous);
+
+        self::assertTrue($result['ok']);
+        self::assertFalse($result['cache_flushed']);
+        self::assertSame(2, $this->rowCount('products'));
+    }
+
+    public function testReloadWithoutACacheReportsNoCacheField(): void
+    {
+        $this->createStaging(2);
+        $dataDir = $this->newTempDir('_data');
+        $this->tempDirs[] = $dataDir . '_old';
+
+        $result = (new Reload($this->pdo, $this->config($dataDir, $this->makeIncoming(2))))->run();
+
+        self::assertArrayNotHasKey('cache_flushed', $result);
+    }
+
     public function testReloadServesTheNewSpellcheckDictionary(): void
     {
         $this->createStaging(2);

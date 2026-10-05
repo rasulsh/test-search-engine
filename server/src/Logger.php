@@ -10,11 +10,12 @@ use PDOException;
 /**
  * Writes one row per search to search_logs. `ts` defaults in the schema.
  *
- * M21 adds did_you_mean and tier. search_logs is not swapped by /reload, so an
- * install from before M21 lacks them: the first write that finds them missing
- * adds them (one ALTER), and when the database user may not alter, that write
- * and the following ones fall back to the original columns. The caller treats
- * any exception as a failed log write, never a failed search.
+ * M21 adds did_you_mean and tier, M26 adds cache_hit. search_logs is not swapped
+ * by /reload, so an install from before them lacks the columns: the first write
+ * that finds one missing adds what is missing (ALTER .. IF NOT EXISTS), and when
+ * the database user may not alter, that write and the following ones fall back
+ * to the columns the table has. The caller treats any exception as a failed log
+ * write, never a failed search.
  */
 final class Logger
 {
@@ -43,7 +44,8 @@ final class Logger
      *     customer_id?: ?string,
      *     latency_ms?: int,
      *     did_you_mean?: ?string,
-     *     tier?: string
+     *     tier?: string,
+     *     cache_hit?: bool
      * } $entry
      */
     public function log(array $entry): void
@@ -68,22 +70,29 @@ final class Logger
             'tier'         => $entry['tier'] ?? self::TIER_KEYWORD_ONLY,
         ];
 
+        $cache = ['cache_hit' => ($entry['cache_hit'] ?? false) ? 1 : 0];
+
         try {
-            $this->insert($values + $extra);
+            $this->insert($values + $extra + $cache);
         } catch (PDOException $e) {
-            // 42S22: unknown column, a table from before M21.
+            // 42S22: unknown column, a table from before M21 / M26.
             if ($e->getCode() !== '42S22') {
                 throw $e;
             }
             $this->addColumns();
-            try {
-                $this->insert($values + $extra);
-            } catch (PDOException $retry) {
-                if ($retry->getCode() !== '42S22') {
-                    throw $retry;
+            // Fewest columns last: the full row, then without M26, then the original.
+            foreach ([$values + $extra + $cache, $values + $extra] as $row) {
+                try {
+                    $this->insert($row);
+
+                    return;
+                } catch (PDOException $retry) {
+                    if ($retry->getCode() !== '42S22') {
+                        throw $retry;
+                    }
                 }
-                $this->insert($values);
             }
+            $this->insert($values);
         }
     }
 
@@ -104,8 +113,9 @@ final class Logger
         try {
             $this->pdo->exec(
                 "ALTER TABLE {$this->table}
-                    ADD COLUMN did_you_mean VARCHAR(512) DEFAULT NULL,
-                    ADD COLUMN tier VARCHAR(16) NOT NULL DEFAULT 'keyword_only'"
+                    ADD COLUMN IF NOT EXISTS did_you_mean VARCHAR(512) DEFAULT NULL,
+                    ADD COLUMN IF NOT EXISTS tier VARCHAR(16) NOT NULL DEFAULT 'keyword_only',
+                    ADD COLUMN IF NOT EXISTS cache_hit TINYINT(1) NOT NULL DEFAULT 0"
             );
         } catch (PDOException) {
             // Another request added them first, or the user cannot alter.

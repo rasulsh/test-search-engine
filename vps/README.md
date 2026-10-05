@@ -21,7 +21,7 @@ vps/
     embedder.py        ONNX (bge-m3) query embedder, deterministic mock for tests
     config.py          settings from the environment
     fetch_model.py     pinned + checksummed model download
-  setup.sh             provisioning (Debian/Ubuntu, systemd, Caddy TLS proxy, ufw)
+  setup.sh             provisioning (Debian/Ubuntu, systemd, Caddy TLS proxy, ufw; --redis: the optional /search result cache, see ../docs/DEPLOY.md)
   search-vectors.service
   caddy.service        systemd unit for the pinned Caddy binary
   search-vectors.env.example

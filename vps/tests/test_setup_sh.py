@@ -266,3 +266,95 @@ def test_apt_installs_only_missing_packages(sandbox: Path) -> None:
     dpkg.write_text('#!/usr/bin/env bash\n[ "$2" != ufw ]\n')
     run_setup(sandbox, "--domain", DOMAIN)
     assert any(c.startswith("apt-get install") and c.endswith(" ufw") for c in calls(sandbox))
+
+
+# --- Redis result cache (M26, --redis) ---------------------------------------
+
+
+def redis_conf(sandbox: Path) -> str:
+    return (sandbox / "root/etc/redis/search-cache.conf").read_text()
+
+
+def test_without_redis_flag_nothing_redis_is_touched(sandbox: Path) -> None:
+    result = run_setup(sandbox)
+    assert result.returncode == 0, result.stderr
+    assert not (sandbox / "root/etc/redis").exists()
+    assert not any("redis" in c for c in calls(sandbox))
+
+
+def test_redis_is_secured_and_local_by_default(sandbox: Path) -> None:
+    result = run_setup(sandbox, "--redis")
+    assert result.returncode == 0, result.stderr
+    conf = redis_conf(sandbox)
+    assert "bind 127.0.0.1 -::1\n" in conf
+    assert "protected-mode yes" in conf
+    assert f"requirepass {'ab' * 32}\n" in conf
+    assert "maxmemory 128mb" in conf and "maxmemory-policy allkeys-lru" in conf
+    assert 'save ""' in conf and "appendonly no" in conf
+    assert (sandbox / "root/etc/redis/search-cache.conf").stat().st_mode & 0o777 == 0o640
+    assert (sandbox / "root/etc/redis/redis.conf").read_text().count("search-cache.conf") == 1
+    assert "systemctl restart redis-server" in calls(sandbox)
+    assert rules(sandbox) == []  # loopback only: no firewall rule needed
+    assert f"SEARCH_REDIS_AUTH={'ab' * 32}" in result.stdout
+
+
+def test_redis_bind_opens_only_to_the_allowed_ip(sandbox: Path) -> None:
+    result = run_setup(
+        sandbox, "--redis", "--redis-bind", "203.0.113.5", "--redis-allow-ip", "198.51.100.9"
+    )
+    assert result.returncode == 0, result.stderr
+    assert "bind 127.0.0.1 -::1 203.0.113.5\n" in redis_conf(sandbox)
+    assert rules(sandbox) == [
+        "allow 22/tcp # search-vectors-ssh",
+        "allow from 198.51.100.9 to any port 6379 proto tcp # search-vectors-redis",
+        "deny 6379/tcp # search-vectors-redis-deny",
+    ]
+    assert "ENABLED" in (sandbox / "ufw.state").read_text()
+    assert "SEARCH_REDIS_HOST=203.0.113.5" in result.stdout
+
+
+def test_redis_rerun_keeps_the_password_and_replaces_the_firewall_rule(sandbox: Path) -> None:
+    args = ("--redis", "--redis-bind", "203.0.113.5")
+    run_setup(sandbox, *args, "--redis-allow-ip", "198.51.100.9")
+    conf_path = sandbox / "root/etc/redis/search-cache.conf"
+    conf_path.write_text(conf_path.read_text().replace("ab" * 32, "keep-this-password"))
+
+    result = run_setup(sandbox, *args, "--redis-allow-ip", "198.51.100.10")
+    assert result.returncode == 0, result.stderr
+
+    assert "requirepass keep-this-password\n" in redis_conf(sandbox)
+    assert "keeping the password" in result.stdout
+    assert (sandbox / "root/etc/redis/redis.conf").read_text().count("search-cache.conf") == 1
+    redis_rules = [r for r in rules(sandbox) if "search-vectors-redis" in r]
+    assert redis_rules == [
+        "allow from 198.51.100.10 to any port 6379 proto tcp # search-vectors-redis",
+        "deny 6379/tcp # search-vectors-redis-deny",
+    ]
+
+
+@pytest.mark.parametrize(
+    "args",
+    [
+        ("--redis-bind", "203.0.113.5"),  # without --redis
+        ("--redis-allow-ip", "198.51.100.9"),  # without --redis
+        ("--redis", "--redis-bind", "203.0.113.5"),  # public bind without an allowed IP
+        ("--redis", "--redis-bind", "0.0.0.0"),
+        ("--redis", "--redis-bind", "1.2.3.4; rm -rf /", "--redis-allow-ip", "198.51.100.9"),
+        ("--redis", "--redis-bind", "203.0.113.5", "--redis-allow-ip", "x; y"),
+    ],
+)
+def test_unsafe_redis_options_are_rejected_before_any_change(
+    sandbox: Path, args: tuple[str, ...]
+) -> None:
+    result = run_setup(sandbox, *args)
+    assert result.returncode == 2
+    assert not (sandbox / "root/opt").exists()
+    assert not (sandbox / "root/etc/redis").exists()
+
+
+def test_redis_package_is_installed_only_when_missing(sandbox: Path) -> None:
+    stub = sandbox / "bin" / "dpkg"
+    stub.write_text('#!/usr/bin/env bash\n[ "$2" != redis-server ]\n')
+    result = run_setup(sandbox, "--redis")
+    assert result.returncode == 0, result.stderr
+    assert "apt-get install -y -qq redis-server" in calls(sandbox)

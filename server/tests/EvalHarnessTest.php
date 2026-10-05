@@ -107,9 +107,16 @@ final class EvalHarnessTest extends DatabaseTestCase
         // The negative query scores 1 / 1 because nothing came back.
         self::assertEqualsWithDelta(1.0, $byQuery['بلبرینگ']['recall'], 1e-9);
 
-        // Deterministic on this seed (16 queries).
-        self::assertEqualsWithDelta(0.75, $report['recall_at_k'], 1e-9);
-        self::assertEqualsWithDelta(0.3125, $report['precision_at_k'], 1e-9);
+        // Facet queries (M28): a genre value shared by 22 products' specs is returned
+        // in full (top 5 all relevant), where a rare spec mention ("بلبرینگ") is not.
+        foreach (['شوتر', 'اکشن'] as $query) {
+            self::assertEqualsWithDelta(1.0, $byQuery[$query]['precision'], 1e-9, $query);
+            self::assertEqualsWithDelta(5 / 22, $byQuery[$query]['recall'], 1e-9, $query);
+        }
+
+        // Deterministic on this seed (18 queries).
+        self::assertEqualsWithDelta((12 + 10 / 22) / 18, $report['recall_at_k'], 1e-9);
+        self::assertEqualsWithDelta(7 / 18, $report['precision_at_k'], 1e-9);
     }
 
     public function testFullCoverageLeadsThePartialMatches(): void

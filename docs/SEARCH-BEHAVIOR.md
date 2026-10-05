@@ -183,6 +183,18 @@ hits are all weak and which the VPS finds nothing close to returns nothing.
 Since M21 the same call also applies the brand / category / tag match boosts
 (see [Tags, brand and category](PIPELINE.md#tags-brand-category)) and a hit with every term
 in the title **or tags** counts as solid.
+
+**Facet queries (M28).** A genre / feature word such as "شوتر" is neither a
+category nor a tag but an attribute *value* in the specs of hundreds of
+products; as a spec-only match it would be weak and floored down to a handful.
+A spec-only term therefore also counts toward solidity when it is **common**: at
+least `SEARCH_FACET_MIN_PRODUCTS` (default 20) products carry it in their specs
+(a bounded `COUNT` per query term, cached for the request; no rebuild). A hit
+whose every term is a name match or a common spec value is floor-exempt and
+ranked by the blend plus the stock / popularity boosts, capped at `limit`.
+A rare spec mention ("بلبرینگ", ~1 product) stays weak and is still floored, and
+all-terms matching still applies ("کیبورد قرمز" returns only products holding
+both words).
 `SEARCH_SEMANTIC_TOP_K` defaults to 300 (VPS cap 500) so fewer legitimate
 products are missed. These values are untested on the real catalog and **need
 tuning on real queries**. Unchanged: exact-SKU hits are pinned first, the

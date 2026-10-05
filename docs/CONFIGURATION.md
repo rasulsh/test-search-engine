@@ -54,6 +54,7 @@ The model, revision, dimension, pooling and prefixes are parameterized and share
 | `SEARCH_SOFT_AND_MIN_COVERAGE` | 0.5 | share of a variant's words a partial hit must hold |
 | `SEARCH_SOFT_AND_PARTIAL_PENALTY` | 0.5 | scale on a partial hit's keyword score |
 | `SEARCH_SOFT_AND_CANDIDATE_CAP` | 100 | rows scored per alias-variant top-up (0 = no cap) |
+| `SEARCH_FACET_MIN_PRODUCTS` | 20 | a spec-only query term held by at least this many products' specs is a facet (genre/feature): its hits are floor-exempt like title matches (M28; 0 = off) |
 | `SEARCH_COLLAPSE_WEIGHT` | 9 | M23: score of a collapsed-name hit (0 = off) |
 | `SEARCH_COLLAPSE_MIN_LENGTH` | 5 | shortest collapsed query tried |
 | `SEARCH_SUGGEST_MIN_RESULTS` | 3 | "did you mean" runs below this many keyword hits |

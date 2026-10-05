@@ -177,3 +177,4 @@ vendor/bin/phpunit
 - Conventional Commits; PSR-12 (PHP) and ruff-clean (Python); English only.
 
 See `CLAUDE.md` §9–§11 for the full workflow and coding standards.
+- [ ] **M28** — Facet queries: a spec-only query term held by at least `SEARCH_FACET_MIN_PRODUCTS` products' specs (a genre / feature value, e.g. "شوتر") counts as solid, so its hits skip the relevance floor; rarer spec mentions stay weak. Query-time count, server-only, no rebuild.

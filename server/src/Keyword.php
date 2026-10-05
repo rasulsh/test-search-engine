@@ -171,6 +171,10 @@ final class Keyword
      */
     private const WORD_START = '(?<![\\p{L}\\p{N}])';
 
+    /** @var array<string, int> token => 1 when it is a common spec value (M28) */
+    private array $facetTerms = [];
+    private int $facetMinProducts;
+
     public function __construct(
         PDO $pdo,
         string $productsTable,
@@ -193,7 +197,8 @@ final class Keyword
         int $softAndMinResults = 3,
         float $softAndMinCoverage = 0.5,
         float $softAndPartialPenalty = 0.5,
-        int $softAndCandidateCap = 100
+        int $softAndCandidateCap = 100,
+        int $facetMinProducts = 20
     ) {
         $this->pdo = $pdo;
         $this->table = Identifier::quote($productsTable);
@@ -221,6 +226,45 @@ final class Keyword
         $this->softAndMinCoverage = min(1.0, max(0.0, $softAndMinCoverage));
         $this->softAndPartialPenalty = max(0.0, $softAndPartialPenalty);
         $this->softAndCandidateCap = max(0, $softAndCandidateCap);
+        $this->facetMinProducts = max(0, $facetMinProducts);
+    }
+
+    /**
+     * True when $token is a COMMON attribute value: at least facet_min_products
+     * products carry it in their specs (a genre / feature shared by many, M28),
+     * as opposed to an incidental spec mention. The count stops at the
+     * threshold (bounded LIMIT), so it stays cheap for a word held by thousands;
+     * cached for the life of the instance (one request).
+     */
+    private function isFacetTerm(string $token): bool
+    {
+        if ($this->facetMinProducts === 0) {
+            return false;
+        }
+        if (isset($this->facetTerms[$token])) {
+            return $this->facetTerms[$token] === 1;
+        }
+        $sized = mb_strlen($token) >= $this->minTokenSize;
+        $where = 'normalized_specs REGEXP ?';
+        $params = [self::WORD_START . $token];
+        if ($sized) {
+            $match = 'MATCH(' . implode(', ', $this->searchedColumns()) . ') AGAINST(? IN BOOLEAN MODE)';
+            $where = "{$match} AND {$where}";
+            array_unshift($params, $token . '*');
+        }
+        try {
+            $stmt = $this->pdo->prepare(
+                "SELECT COUNT(*) FROM (SELECT 1 FROM {$this->table} WHERE {$where} LIMIT {$this->facetMinProducts}) f"
+            );
+            $stmt->execute($params);
+            $common = (int) $stmt->fetchColumn() >= $this->facetMinProducts;
+        } catch (\PDOException) {
+            // Older table without the column: no facets, never an error.
+            $common = false;
+        }
+        $this->facetTerms[$token] = $common ? 1 : 0;
+
+        return $common;
     }
 
     /**
@@ -249,7 +293,7 @@ final class Keyword
      * @param bool $allTerms false searches any-terms even when require_all_terms is on
      * @return list<array{
      *     product_id: int, score: float, match_type: string,
-     *     title_match: bool, spec_match: bool, title_all: bool, name_all: bool, coverage: float
+     *     title_match: bool, spec_match: bool, title_all: bool, name_all: bool, facet_all?: bool, coverage: float
      * }>
      */
     public function search(string $query, ?int $limit = null, bool $allTerms = true): array
@@ -307,7 +351,7 @@ final class Keyword
      * @param non-empty-list<list<string>> $variants
      * @return list<array{
      *     product_id: int, score: float, match_type: string,
-     *     title_match: bool, spec_match: bool, title_all: bool, name_all: bool, coverage: float
+     *     title_match: bool, spec_match: bool, title_all: bool, name_all: bool, facet_all?: bool, coverage: float
      * }>
      */
     private function variantSearch(array $variants, int $limit, bool $allTerms): array
@@ -331,7 +375,7 @@ final class Keyword
      * @param list<list<string>> $variants
      * @return list<array{
      *     product_id: int, score: float, match_type: string,
-     *     title_match: bool, spec_match: bool, title_all: bool, name_all: bool, coverage: float
+     *     title_match: bool, spec_match: bool, title_all: bool, name_all: bool, facet_all?: bool, coverage: float
      * }>
      */
     private function aliasHits(array $variants, int $limit): array
@@ -359,7 +403,7 @@ final class Keyword
      * @param non-empty-list<list<string>> $variants
      * @return list<array{
      *     product_id: int, score: float, match_type: string,
-     *     title_match: bool, spec_match: bool, title_all: bool, name_all: bool, coverage: float
+     *     title_match: bool, spec_match: bool, title_all: bool, name_all: bool, facet_all?: bool, coverage: float
      * }>
      */
     private function softHits(array $variants, int $limit): array
@@ -403,11 +447,11 @@ final class Keyword
      *
      * @param list<array{
      *     product_id: int, score: float, match_type: string,
-     *     title_match: bool, spec_match: bool, title_all: bool, name_all: bool, coverage: float
+     *     title_match: bool, spec_match: bool, title_all: bool, name_all: bool, facet_all?: bool, coverage: float
      * }> $hits
      * @return list<array{
      *     product_id: int, score: float, match_type: string,
-     *     title_match: bool, spec_match: bool, title_all: bool, name_all: bool, coverage: float
+     *     title_match: bool, spec_match: bool, title_all: bool, name_all: bool, facet_all?: bool, coverage: float
      * }>
      */
     private function mergeBest(array $hits, int $limit): array
@@ -456,7 +500,7 @@ final class Keyword
      *        best first (0 = every matching row)
      * @return list<array{
      *     product_id: int, score: float, match_type: string,
-     *     title_match: bool, spec_match: bool, title_all: bool, name_all: bool, coverage: float
+     *     title_match: bool, spec_match: bool, title_all: bool, name_all: bool, facet_all?: bool, coverage: float
      * }>
      */
     private function textSearch(
@@ -518,7 +562,7 @@ final class Keyword
      * @param list<string> $tokens
      * @return list<array{
      *     product_id: int, score: float, match_type: string,
-     *     title_match: bool, spec_match: bool, title_all: bool, name_all: bool, coverage: float
+     *     title_match: bool, spec_match: bool, title_all: bool, name_all: bool, facet_all?: bool, coverage: float
      * }>
      */
     private function textSearchOnce(
@@ -552,7 +596,7 @@ final class Keyword
      *
      * @return list<array{
      *     product_id: int, score: float, match_type: string,
-     *     title_match: bool, spec_match: bool, title_all: bool, name_all: bool, coverage: float
+     *     title_match: bool, spec_match: bool, title_all: bool, name_all: bool, facet_all?: bool, coverage: float
      * }>
      */
     private function skuSearch(string $sku, int $limit): array
@@ -599,7 +643,7 @@ final class Keyword
      * @param list<string> $tokens
      * @return list<array{
      *     product_id: int, score: float, match_type: string,
-     *     title_match: bool, spec_match: bool, title_all: bool, name_all: bool, coverage: float
+     *     title_match: bool, spec_match: bool, title_all: bool, name_all: bool, facet_all?: bool, coverage: float
      * }>
      */
     private function fulltextSearch(
@@ -648,7 +692,7 @@ final class Keyword
      * @param list<string> $tokens
      * @return list<array{
      *     product_id: int, score: float, match_type: string,
-     *     title_match: bool, spec_match: bool, title_all: bool, name_all: bool, coverage: float
+     *     title_match: bool, spec_match: bool, title_all: bool, name_all: bool, facet_all?: bool, coverage: float
      * }>
      */
     private function likeSearch(array $tokens, int $limit, bool $allTerms, int $minTerms = 0): array
@@ -699,7 +743,7 @@ final class Keyword
      *        description: alias variants must not match on a mere mention
      * @return list<array{
      *     product_id: int, score: float, match_type: string,
-     *     title_match: bool, spec_match: bool, title_all: bool, name_all: bool, coverage: float
+     *     title_match: bool, spec_match: bool, title_all: bool, name_all: bool, facet_all?: bool, coverage: float
      * }>
      */
     private function scoredSearch(
@@ -747,9 +791,11 @@ final class Keyword
         $weight = static fn (float $w): string => sprintf('%.6F', $w);
         $levelWeights = [1 => $this->titleWeight];
         $tagsLevel = null;
+        $specsLevel = null;
         foreach ($this->fields as $n => [$column, $fieldWeight]) {
             $levelWeights[$n + 2] = $fieldWeight;
             $tagsLevel = $column === self::TAGS_COLUMN ? $n + 2 : $tagsLevel;
+            $specsLevel = $column === self::SPECS_COLUMN ? $n + 2 : $specsLevel;
         }
         $sum = static function (callable $term) use ($count): string {
             $parts = [];
@@ -764,6 +810,14 @@ final class Keyword
         // Title or tags: the product's names, solid evidence (see title_all).
         $nameHits = $sum(static fn (int $i): string => "(lv{$i} = 1"
             . ($tagsLevel === null ? '' : " OR lv{$i} = {$tagsLevel}") . ')');
+        // M28: a name match, or a spec-only term that is a common attribute value
+        // (a facet such as a genre): solid like a name match, see facet_all.
+        $facetHits = $nameHits;
+        if ($specsLevel !== null && $this->facetMinProducts > 0) {
+            $facetHits = $sum(fn (int $i): string => "(lv{$i} = 1"
+                . ($tagsLevel === null ? '' : " OR lv{$i} = {$tagsLevel}")
+                . ($this->isFacetTerm($tokens[$i]) ? " OR lv{$i} = {$specsLevel}" : '') . ')');
+        }
         $credit = $sum(static function (int $i) use ($levelWeights, $weight): string {
             $cases = '';
             foreach ($levelWeights as $level => $w) {
@@ -793,7 +847,8 @@ final class Keyword
         // a LIMIT); merged, every use of a level in the score and ORDER BY
         // re-ran its REGEXPs, 3x slower with the specs.
         $sql = "SELECT product_id, {$titleHits} AS title_hits, {$fieldHits} AS spec_hits,
-                       {$nameHits} AS name_hits, {$held} < {$count} AS partial, {$held} AS held,
+                       {$nameHits} AS name_hits, {$facetHits} AS facet_hits,
+                       {$held} < {$count} AS partial, {$held} AS held,
                        {$score} AS score
                 FROM (
                     " . ($capped
@@ -865,7 +920,7 @@ final class Keyword
      * @param list<string> $tokens
      * @return list<array{
      *     product_id: int, score: float, match_type: string,
-     *     title_match: bool, spec_match: bool, title_all: bool, name_all: bool, coverage: float
+     *     title_match: bool, spec_match: bool, title_all: bool, name_all: bool, facet_all?: bool, coverage: float
      * }>
      */
     private function collapsedSearch(array $tokens, int $limit): array
@@ -955,7 +1010,7 @@ final class Keyword
      * @param list<list<string>> $variants
      * @return list<array{
      *     product_id: int, score: float, match_type: string,
-     *     title_match: bool, spec_match: bool, title_all: bool, name_all: bool, coverage: float
+     *     title_match: bool, spec_match: bool, title_all: bool, name_all: bool, facet_all?: bool, coverage: float
      * }>
      */
     private function titleSearch(array $variants, int $limit): array
@@ -1017,7 +1072,7 @@ final class Keyword
      * @param list<array<string, mixed>> $rows
      * @return list<array{
      *     product_id: int, score: float, match_type: string,
-     *     title_match: bool, spec_match: bool, title_all: bool, name_all: bool, coverage: float
+     *     title_match: bool, spec_match: bool, title_all: bool, name_all: bool, facet_all?: bool, coverage: float
      * }>
      */
     private function hydrate(array $rows, string $matchType, int $termCount = 1): array
@@ -1031,6 +1086,7 @@ final class Keyword
                 'spec_match'  => (int) $row['spec_hits'] > 0,
                 'title_all'   => (int) $row['title_hits'] >= $termCount,
                 'name_all'    => (int) ($row['name_hits'] ?? $row['title_hits']) >= $termCount,
+                'facet_all'   => (int) ($row['facet_hits'] ?? $row['name_hits'] ?? $row['title_hits']) >= $termCount,
                 'coverage'    => min(1.0, (int) ($row['held'] ?? $termCount) / max(1, $termCount)),
             ],
             $rows

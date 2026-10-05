@@ -114,7 +114,7 @@ The test page's `PRICE_SUFFIX` is a constant in `server/public/test.html`, not a
 | `SEARCH_MIN_TOKEN_LENGTH` | 2 | tokens shorter than this are ignored when building the dictionaries |
 | `SEARCH_PRODUCTS_TABLE` | `products` | table whose definition seeds the staging DDL |
 
-> `.env.example` still shows `SEARCH_DESC_INDEX_CHARS=400`, the pre-M15 default; the code default, used when the variable is unset, is 800.
+> `.env.example` sets `SEARCH_DESC_INDEX_CHARS=800`, the same as the code default used when the variable is unset (an older example showed 400, the pre-M15 default), so copying it to `.env` does not change behavior.
 
 ### Export (`db_export.py`)
 

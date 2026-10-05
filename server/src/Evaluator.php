@@ -14,6 +14,11 @@ namespace App;
  *   recall@k    = |relevant ∩ top-k| / |relevant|
  * Aggregates are the unweighted mean across queries.
  *
+ * A query labeled with no relevant products (`expected_ids: []`, M23: "بلبرینگ"
+ * must return nothing) scores 1 / 1 when the search returns nothing and 0 / 0
+ * when it returns anything: the harness then tracks the false positives soft
+ * matching could introduce, not only the recall it adds.
+ *
  * The search function is injected, so the harness measures whatever tier is
  * wired: keyword-only (deterministic, CI-runnable) or the full hybrid when a
  * VPS vector service is configured (offline, real model).
@@ -56,8 +61,12 @@ final class Evaluator
             $retrieved = array_slice(($this->search)($case), 0, $k);
             $hits = count(array_intersect($retrieved, $expected));
 
-            $precision = $hits / $k;
-            $recall = $expected === [] ? 0.0 : $hits / count($expected);
+            if ($expected === []) {
+                $precision = $recall = $retrieved === [] ? 1.0 : 0.0;
+            } else {
+                $precision = $hits / $k;
+                $recall = $hits / count($expected);
+            }
             $precisionSum += $precision;
             $recallSum += $recall;
 

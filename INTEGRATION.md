@@ -118,6 +118,13 @@ Semantics the storefront should know:
   keyboards plus all red products. When no product holds every word, the
   products holding the most words are returned instead. Set
   `SEARCH_REQUIRE_ALL_TERMS=0` to always return partial matches.
+- Soft AND (M23): when fewer than `SEARCH_SOFT_AND_MIN_RESULTS` (3) products hold
+  every word, partial-coverage matches (half the words by default) are added
+  *below* every full-coverage product, so a word nothing matches no longer empties
+  the result. The response shape is unchanged (`product_ids` stay ordered).
+- Joined and separated spellings of a name find the same products (`farcry` =
+  `far cry`, `dualsense` = `dual sense`; M23, after the catalog is rebuilt and
+  reloaded).
 - Only the first `SEARCH_DESC_INDEX_CHARS` (default 800) characters of each
   description are keyword-indexed; a word that appears only deeper in the
   description does not match.

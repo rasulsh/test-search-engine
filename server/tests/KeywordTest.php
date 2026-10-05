@@ -52,8 +52,11 @@ final class KeywordTest extends DatabaseTestCase
 
     public function testFulltextRequiresAllTerms(): void
     {
-        self::assertSame([1011], $this->ids($this->keyword->search('sony camera')));
-        self::assertSame([1009], $this->ids($this->keyword->search('sony headphones')));
+        // Strict all-words (soft AND off): see KeywordSoftAndTest for the default.
+        $strict = new Keyword($this->pdo, 'products', 3, 20, softAndMinResults: 0);
+
+        self::assertSame([1011], $this->ids($strict->search('sony camera')));
+        self::assertSame([1009], $this->ids($strict->search('sony headphones')));
     }
 
     public function testLikeFallbackForShortEnglishToken(): void

@@ -99,6 +99,34 @@ return [
             $setting('SEARCH_REQUIRE_ALL_TERMS', '1'),
             FILTER_VALIDATE_BOOLEAN
         ),
+        // Soft AND (M23): strict all-words matching empties a query when one word
+        // matches nothing (a transliteration the catalog does not hold). When fewer
+        // than soft_and_min_results products hold every word (the literal query and
+        // its alias variants together), a multi-word query is topped up with
+        // partial matches: products holding at least soft_and_min_coverage of a
+        // variant's words (0.5 = half; 1 = none). They always rank below every
+        // full-coverage hit (most words first); soft_and_partial_penalty scales their
+        // keyword score for the hybrid blend (1 = no penalty, 0 = ranked by the
+        // semantic score alone), where they stay subject to the relevance floor.
+        // 0 results = strict all-words only. One-word queries are never affected.
+        // soft_and_candidate_cap bounds the work per alias variant: only rows holding a
+        // word the variant swapped in are looked at, and at most this many are scored
+        // (the engine's best matches first), so a swapped-in word that is nearly
+        // everywhere cannot cost a catalog scan per variant (0 = no cap).
+        'soft_and_min_results'     => (int) $setting('SEARCH_SOFT_AND_MIN_RESULTS', '3'),
+        'soft_and_min_coverage'    => (float) $setting('SEARCH_SOFT_AND_MIN_COVERAGE', '0.5'),
+        'soft_and_partial_penalty' => (float) $setting('SEARCH_SOFT_AND_PARTIAL_PENALTY', '0.5'),
+        'soft_and_candidate_cap'   => (int) $setting('SEARCH_SOFT_AND_CANDIDATE_CAP', '100'),
+        // Collapsed names (M23): "farcry" = "far cry", "dualsense" = "dual sense".
+        // The query with its spaces removed is also matched, as a substring, against
+        // the collapsed title, brand and tags (products.normalized_collapsed: needs
+        // the M23 rebuild + reload) and verified to start at a word. A hit is a name
+        // match scored collapse_weight: below title_weight, so a regular title
+        // match outranks it. Collapsed queries shorter than collapse_min_length
+        // characters are not tried (a short run of letters matches inside many
+        // names); 0 weight turns the feature off.
+        'collapse_weight'      => (float) $setting('SEARCH_COLLAPSE_WEIGHT', '9.0'),
+        'collapse_min_length'  => (int) $setting('SEARCH_COLLAPSE_MIN_LENGTH', '5'),
         // Global cosine top-K width for Tier 2: the `limit` asked of the VPS
         // (candidates fused with keyword). Keep it at or below the VPS's
         // VPS_MAX_LIMIT (500): a full list tells /search that more neighbours

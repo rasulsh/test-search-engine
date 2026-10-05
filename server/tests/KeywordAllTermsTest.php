@@ -107,7 +107,9 @@ final class KeywordAllTermsTest extends DatabaseTestCase
             6.0,
             $synonyms,
             6,
-            $requireAllTerms
+            $requireAllTerms,
+            // These tests are about the strict all-terms match; see KeywordSoftAndTest.
+            softAndMinResults: 0
         );
     }
 

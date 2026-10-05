@@ -82,7 +82,32 @@ final class SynonymsTest extends TestCase
 
         self::assertSame([['a1', 'x2']], $synonyms->variants(['a1', 'x2'], 1));
         self::assertSame([['a1', 'x2'], ['b1', 'x2']], $synonyms->variants(['a1', 'x2'], 2));
-        self::assertCount(5, $synonyms->variants(['a1', 'x2'], 10));
+        // The literal query, 3 + 1 single swaps, then the 3 x 1 both-swapped variants.
+        self::assertCount(8, $synonyms->variants(['a1', 'x2'], 10));
+    }
+
+    public function testEverySpanSwappedVariantFollowsTheSingleSwaps(): void
+    {
+        $synonyms = new Synonyms([['مدرن', 'modern'], ['وارفار', 'warfare']]);
+
+        self::assertSame(
+            [['مدرن', 'وارفار'], ['modern', 'وارفار'], ['مدرن', 'warfare'], ['modern', 'warfare']],
+            $synonyms->variants(['مدرن', 'وارفار'], 10)
+        );
+        // The cap keeps the legacy single swaps first; the combined one is only an extra.
+        self::assertSame(
+            [['مدرن', 'وارفار'], ['modern', 'وارفار'], ['مدرن', 'warfare']],
+            $synonyms->variants(['مدرن', 'وارفار'], 3)
+        );
+        // Words between the spans and phrase spans keep their place.
+        self::assertSame(
+            ['gta', 'x', 'ps5'],
+            (new Synonyms([['gta', 'grand theft auto'], ['ps5', 'playstation 5']]))->variants(['gta', 'x', 'ps5'], 1)[0]
+        );
+        self::assertContains(
+            ['grand', 'theft', 'auto', 'x', 'playstation', '5'],
+            (new Synonyms([['gta', 'grand theft auto'], ['ps5', 'playstation 5']]))->variants(['gta', 'x', 'ps5'], 10)
+        );
     }
 
     public function testNoMatchReturnsOnlyTheQuery(): void

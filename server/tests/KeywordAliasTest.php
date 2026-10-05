@@ -80,7 +80,9 @@ final class KeywordAliasTest extends DatabaseTestCase
             4,
             6.0,
             $expand ? Synonyms::fromDirectory($this->dataDir, 4) : null,
-            $maxVariants
+            $maxVariants,
+            // These tests are about the strict all-terms match; see KeywordSoftAndTest.
+            softAndMinResults: 0
         );
     }
 
@@ -166,11 +168,14 @@ final class KeywordAliasTest extends DatabaseTestCase
         $this->pdo->exec('ALTER TABLE products DROP INDEX idx_title_scan');
         $keyword = $this->keyword();
 
+        // "5" is shorter than a FULLTEXT token, so every variant of these queries is
+        // the title-only covering-index scan (variants of FULLTEXT-sized tokens, M23,
+        // use the FULLTEXT index instead and never need it).
         self::assertSame(
-            $this->ids('grand theft auto', $this->keyword(false)),
-            $this->ids('grand theft auto', $keyword)
+            $this->ids('grand theft auto 5', $this->keyword(false)),
+            $this->ids('grand theft auto 5', $keyword)
         );
-        self::assertContains(self::GTA_EN, $this->ids('grand theft auto', $keyword));
+        self::assertContains(self::GTA_EN, $this->ids('grand theft auto 5', $keyword));
         self::assertSame([], $this->ids('gta 5', $keyword));
     }
 

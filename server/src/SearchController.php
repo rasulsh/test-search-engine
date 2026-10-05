@@ -38,6 +38,11 @@ use Throwable;
  * the rule excludes. Semantic evidence still reorders those hits; single-word, SKU and partial-fallback
  * requests keep the additive neighbours.
  *
+ * Soft AND and collapsed names (M23, Keyword): fewer than soft_and_min_results
+ * full-coverage hits are topped up with partial-coverage ones, ranked below
+ * them; they do not count as matches for the typo / layout recovery, so that
+ * still runs, and an applied suggestion replaces them.
+ *
  * M21: every request logs its suggestion and tier; `debug` (see search()) adds
  * a per-result score breakdown to the response, never to the log.
  */
@@ -128,7 +133,13 @@ final class SearchController
             (bool) ($search['require_all_terms'] ?? true),
             (float) ($search['tag_weight'] ?? 8.0),
             (float) ($search['brand_weight'] ?? 7.0),
-            (float) ($search['category_weight'] ?? 5.0)
+            (float) ($search['category_weight'] ?? 5.0),
+            (float) ($search['collapse_weight'] ?? 9.0),
+            (int) ($search['collapse_min_length'] ?? 5),
+            (int) ($search['soft_and_min_results'] ?? 3),
+            (float) ($search['soft_and_min_coverage'] ?? 0.5),
+            (float) ($search['soft_and_partial_penalty'] ?? 0.5),
+            (int) ($search['soft_and_candidate_cap'] ?? 100)
         );
         // The bundle dictionary is cached per worker (and in APCu); the table scan
         // is only a fallback for a data directory without spellcheck.txt.
@@ -236,11 +247,15 @@ final class SearchController
         ));
 
         // A SKU hit is the product the shopper asked for by code: no suggestion.
-        if ($skuIds === [] && count($results) < $this->suggestMinResults && $normalized !== '') {
-            [$alternative, $didYouMean] = $this->recover($raw, $normalized, $limit, count($results));
+        // Soft-AND partial matches (M23) are not matches for this purpose: a typo
+        // whose other word matches plenty still deserves its correction.
+        $literal = $this->fullCoverageCount($results);
+        if ($skuIds === [] && $literal < $this->suggestMinResults && $normalized !== '') {
+            [$alternative, $didYouMean] = $this->recover($raw, $normalized, $limit, $literal);
             // A literal match, however thin, is what the shopper typed: keep it
-            // and only offer the suggestion. With no literal match, serve it.
-            if ($didYouMean !== null && $results === []) {
+            // and only offer the suggestion. With no literal match (partial
+            // ones aside), serve it.
+            if ($didYouMean !== null && $literal === 0) {
                 $results = $alternative;
                 $applied = true;
             }
@@ -442,6 +457,7 @@ final class SearchController
                     'title_match' => $hit['title_match'],
                     'field_match' => $hit['spec_match'],
                     'name_all'    => $hit['name_all'],
+                    'coverage'    => round($hit['coverage'], 4),
                 ],
                 // Exact-SKU hits are pinned above the blend and carry no blend detail.
                 'pinned'     => $hit !== null && $hit['match_type'] === Keyword::MATCH_SKU,
@@ -454,6 +470,15 @@ final class SearchController
             'settings' => $this->ranker?->settings(),
             'results'  => $rows,
         ];
+    }
+
+    /** @param list<array{match_type: string}> $rows keyword hits */
+    private function fullCoverageCount(array $rows): int
+    {
+        return count(array_filter(
+            $rows,
+            static fn (array $row): bool => $row['match_type'] !== Keyword::MATCH_PARTIAL
+        ));
     }
 
     /**
@@ -474,7 +499,7 @@ final class SearchController
                 continue;
             }
             $alternative = $this->keyword->search($candidate, $limit);
-            if (count($alternative) > $baseline) {
+            if ($this->fullCoverageCount($alternative) > $baseline) {
                 return [$alternative, $candidateNormalized];
             }
         }
@@ -482,7 +507,7 @@ final class SearchController
         $suggestion = ($this->spellerFactory)()->suggest($normalized);
         if ($suggestion !== null && $suggestion !== $normalized) {
             $alternative = $this->keyword->search($suggestion, $limit);
-            if (count($alternative) > $baseline) {
+            if ($this->fullCoverageCount($alternative) > $baseline) {
                 return [$alternative, $suggestion];
             }
         }

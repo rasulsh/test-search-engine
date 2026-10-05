@@ -29,6 +29,11 @@ CREATE TABLE IF NOT EXISTS products (
     normalized_tags     TEXT         NOT NULL DEFAULT (''),
     normalized_brand    VARCHAR(255) NOT NULL DEFAULT '',
     normalized_category VARCHAR(255) NOT NULL DEFAULT '',
+    -- M23: Normalizer::collapse of the identity fields (title, brand, tags, space-
+    -- separated, cut to 700 characters), so "farcry" meets "Far Cry 5" and
+    -- "far cry" meets "FarCry". Only substring-scanned (LIKE), via the covering
+    -- index below; 700 characters keeps that index under InnoDB's 3072-byte key limit.
+    normalized_collapsed VARCHAR(700) NOT NULL DEFAULT '',
     brand            VARCHAR(255)    NOT NULL DEFAULT '',
     category         VARCHAR(255)    NOT NULL DEFAULT '',
     model            VARCHAR(255)    NOT NULL DEFAULT '',
@@ -46,6 +51,7 @@ CREATE TABLE IF NOT EXISTS products (
     -- M15: alias variants match the title only; this covering index lets that
     -- scan read the short titles instead of every row's long text columns.
     KEY idx_title_scan (normalized_title, popularity),
+    KEY idx_collapsed_scan (normalized_collapsed, popularity),
     -- Column order is the order Keyword.php lists in MATCH(): keep them in sync.
     FULLTEXT KEY ft_normalized (
         normalized_title, normalized_tags, normalized_brand, normalized_category,

@@ -319,12 +319,19 @@ Persian or ASCII digits. Every term of a group finds the products named by any
 other: "GTA V" (→ `gta 5`) is also searched as `grand theft auto 5` and
 `جی تی ای 5`. Terms are matched as **whole words / whole phrases**, never
 inside a word (`gta` does not touch `gtax`, and `auto` alone is not `grand
-theft auto`), and a variant is matched in the product **title only**, so a
-description that merely mentions an alias never pulls that product in. The
-literal query still searches title, specs and description as before; the
-variants' hits merge into it by the same title / spec / description bands.
-All variants share one extra scan of a covering title index
-(`idx_title_scan`), whatever their number; `SEARCH_ALIAS_MAX_VARIANTS`
+theft auto`), and a variant is matched in the product **title, tags, brand,
+category and specs** (since M23; before, the title only), never the
+description, so a description that merely mentions an alias never pulls that
+product in, while a transliteration that sits in a tag or an attribute is
+found. The literal query still searches title, specs and description as before;
+the variants' hits merge into it by the same title / spec / description bands.
+A query naming **several** aliased terms is also searched with all of them
+swapped at once (M23: `مدرن وارفار` with `["مدرن", "modern"]` and
+`["وارفار", "warfare"]` also searches `modern warfare`), after the
+one-swap variants. A variant with a token shorter than a FULLTEXT token
+(`ps 5`, a digit) cannot use the FULLTEXT index and keeps the **title-only**
+scan of a covering title index (`idx_title_scan`), shared by all such variants;
+`SEARCH_ALIAS_MAX_VARIANTS`
 (default 6, the literal query included; 1 turns expansion off) caps how many
 are tried. Brands go
 in the same file, one group per brand: the **exact `oc_manufacturer.name`**
@@ -362,6 +369,52 @@ partial fallback keep the additive neighbours. `SEARCH_REQUIRE_ALL_TERMS=0`
 always serves partial matches (products holding every word still rank first,
 also in the hybrid ranking, by their higher keyword score) with the additive neighbours. Server-only: no
 bundle rebuild or schema change.
+
+<a id="soft-and"></a>**Soft AND (M23).** Strict all-words returned nothing as
+soon as one word matched no field: `مدرن وارفار` for the product titled `Call of
+Duty Modern Warfare` (the transliteration `وارفار` is nowhere in the catalog).
+Now, when fewer than `SEARCH_SOFT_AND_MIN_RESULTS` (default 3) products hold every
+word (the literal query and its alias variants together), a multi-word query is
+**topped up** with partial matches: products holding at least
+`SEARCH_SOFT_AND_MIN_COVERAGE` (default 0.5) of a variant's words. Full-coverage
+hits always come first (the ranking key is full coverage, then the share of words
+held, then the usual title / spec bands), partial ones are tagged
+`match_type: partial`, and their keyword score is scaled by
+`SEARCH_SOFT_AND_PARTIAL_PENALTY` (default 0.5) so that in the hybrid blend they
+stay weak: they need semantic support to clear `min_relevance`. With an alias
+`["وارفار", "warfare"]` the variant `مدرن warfare` finds the Latin title by its
+one word; with both words aliased the product is a **full**-coverage hit through
+the variant `modern warfare`. Unchanged: queries with enough full-coverage hits
+(`کیبورد قرمز` with three red keyboards gets no partial at all), one-word queries
+(`بلبرینگ` with no match is still empty), and the "did you mean" recovery, which
+counts only full-coverage hits (a typo whose other word matches plenty still gets
+its correction, and an applied suggestion replaces the partial hits). The last
+resort is unchanged too: when even the partial top-up finds nothing, products
+holding any word are served (above). An alias variant's top-up only looks at the
+rows holding a word it swapped in and scores at most
+`SEARCH_SOFT_AND_CANDIDATE_CAP` (default 100) of them, the engine's best first, so
+a swapped-in word that is nearly everywhere cannot cost a catalog scan per
+variant; its swapped-in words and the variant itself must be FULLTEXT-sized (a
+`ps 5`-style variant is not topped up). `SEARCH_SOFT_AND_MIN_RESULTS=0` turns
+soft AND off (strict all-words). Server-only: no bundle rebuild or schema change.
+
+<a id="collapsed-names"></a>**Collapsed names (M23).** `farcry` and `far cry`,
+`dualsense` and `dual sense`, `پلی استیشن` and `پلی‌استیشن` are one name, but
+token matching splits them. `normalized_collapsed` holds the title, brand and
+tags with every non-letter / non-digit removed (`Normalizer::collapse`, parity
+tested; the normalized text itself, and so `normalization_version`, is
+unchanged), and the query with its spaces removed is substring-matched against
+it, then verified to start at a word of the spaced fields (so `far cry` does not
+match `sofar crystal`). A hit is a name match scored `SEARCH_COLLAPSE_WEIGHT`
+(default 9, just under `title_weight`): in the title band when the name is in the
+title, in the tag / brand band otherwise. It is an **additional candidate
+source**: a product the token match already found keeps its own hit, and the
+scan is skipped when the page is already full of title hits that outrank it (a
+broad word). Collapsed queries shorter than `SEARCH_COLLAPSE_MIN_LENGTH` (default
+5) characters are not tried, `SEARCH_COLLAPSE_WEIGHT=0` turns it off. **Needs a
+rebuild + reload** (new column `normalized_collapsed VARCHAR(700)` and covering
+index `idx_collapsed_scan`); until then the live table has no column and `/search`
+runs without it.
 
 **Relevance floor.** The nearest vectors of a query with no relevant product
 are still unrelated items (on the real catalog, "ball bearing" returned case
@@ -1032,6 +1085,28 @@ Deploy the code and reload together: until the reload the new code normalizes
 queries with the new rules against the old table (for M15, only queries
 containing a standalone Roman numeral are affected, and no aliases are served).
 
+<a id="upgrading-to-m23"></a>**Upgrading to M23 (spacing + soft AND).** Two parts with
+different deploy needs; `normalization_version`, the models and the dimensions
+are unchanged, so the bundle passes both reloads:
+
+- **Soft AND, alias variants over tags / specs, combined-alias variants**: server
+  code only. Upload the new `server/` (it reads the new keys from `config.php`
+  with the documented defaults, so no config edit is required) and it is live;
+  nothing to rebuild.
+- **Collapsed names** (`farcry` = `far cry`): a **schema change, so a rebuild +
+  reload**. The `products` table gets `normalized_collapsed` and the covering index
+  `idx_collapsed_scan`; `products.load.sql` carries the new DDL, so the reload swap
+  creates them (no `ALTER`). Run the export / `release.py` / reload steps of the
+  M21 upgrade above. Until the reload the new code searches the old table without
+  the column, with no error. The VPS vectors do not change (the column is not part
+  of the embedded text), so the VPS step may be skipped.
+
+Settings added (all optional): `SEARCH_SOFT_AND_MIN_RESULTS` (3),
+`SEARCH_SOFT_AND_MIN_COVERAGE` (0.5), `SEARCH_SOFT_AND_PARTIAL_PENALTY` (0.5),
+`SEARCH_SOFT_AND_CANDIDATE_CAP` (100), `SEARCH_COLLAPSE_WEIGHT` (9),
+`SEARCH_COLLAPSE_MIN_LENGTH` (5). A `config.php` written before M23 lacks them and
+falls back on those defaults; copy them from `config.example.php` to change them.
+
 #### Fallback: manual staging load
 
 The in-PHP load for 20k products (about 46 MB of SQL) runs inside one web
@@ -1224,6 +1299,7 @@ M0–M5. Verify each item on the production host before wide rollout.
 - [ ] **M18** — Semantic tier from the VPS: `/search` POSTs the query server-to-server to the VPS `/search-vectors` (`SEARCH_VPS_URL` / `_TOKEN` / `_TIMEOUT_MS`, `min_score` = the cPanel floor, now 0.4 for bge-m3), RRF-merges the neighbours as before, and falls back to logged keyword-only results when the VPS is off, down, slow or failing. The browser model is gone (`client/`, `fetch_web_model.py`, the model in `release.zip`, `q_vector`); the test page and storefront snippet send only `{q}`.
 - [ ] **M20** — Blended hybrid ranking: relevance = keyword_weight × keyword_norm + semantic_weight × semantic_norm with a combined floor (`SEARCH_KEYWORD_WEIGHT` / `_SEMANTIC_WEIGHT` / `_MIN_RELEVANCE`); replaces the keyword-first tiers, RRF and the description-only gate. Server-only.
 - [ ] **M21** — Catalog tags (`oc_tag` / `oc_product_tag`, exported as `tags`) end to end: `normalized_tags` in the FULLTEXT index (weighted just below the title) and the embedding passage, learned by "did you mean"; brand and category as searched fields (`normalized_brand`, `normalized_category`) with config-driven weights; brand / category / tag-phrase ranking boosts after the floor; `search_logs` gains `did_you_mean` and `tier`; read-only token-protected `logs.php` (recent, zero-result, slowest); token-guarded `debug` score breakdown on `/search`; `release.py` also builds the VPS vectors and prints the deploy commands for both hosts. `normalization_version`, model and dim unchanged.
+- [ ] **M23** — Recall: collapsed names (`normalized_collapsed`, `Normalizer::collapse` / `normalize.collapse` with a shared parity fixture; a schema change, rebuild + reload) so `farcry` = `far cry` = `Far Cry`, `dualsense` = `dual sense`; soft AND (full-coverage hits first, partial-coverage top-up when fewer than `SEARCH_SOFT_AND_MIN_RESULTS`, penalized, server-only); alias variants matched in title, tags, brand, category and specs (FULLTEXT-sized tokens) and an all-terms-swapped variant for multi-alias queries; eval cases (negative queries supported).
 - [ ] **M22** — Offline build: `pipeline/db_export.py` exports the catalog straight from the OpenCart DB (server-side cursor, MariaDB `max_statement_time`, this shop's single-language / `meta_title` query) as the recommended step 1, phpMyAdmin CSV demoted to a warned fallback, plus a low-row-count guard in `build.py`; `RealEmbedder` picks cuda/cpu, fp16 on GPU, a configurable batch size and shows progress (`SEARCH_EMBED_*`, README "GPU setup"); `db_export.py` stays Python 3.6-compatible (it runs on the cPanel server); `release.py` builds the unread cPanel `vectors.bin` with the mock embedder (`SEARCH_BUNDLE_EMBEDDER`). No contract, model, dim or normalization change.
 
 

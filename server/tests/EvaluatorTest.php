@@ -49,5 +49,14 @@ final class EvaluatorTest extends TestCase
         $report = $this->evaluator(['a' => [1, 2, 3]])->run([['q' => 'a', 'expected_ids' => []]], 5);
 
         self::assertEqualsWithDelta(0.0, $report['recall_at_k'], 1e-9);
+        self::assertEqualsWithDelta(0.0, $report['precision_at_k'], 1e-9);
+    }
+
+    public function testEmptyExpectedSetWithNoResultsIsACorrectAnswer(): void
+    {
+        $report = $this->evaluator(['a' => []])->run([['q' => 'a', 'expected_ids' => []]], 5);
+
+        self::assertEqualsWithDelta(1.0, $report['recall_at_k'], 1e-9);
+        self::assertEqualsWithDelta(1.0, $report['precision_at_k'], 1e-9);
     }
 }

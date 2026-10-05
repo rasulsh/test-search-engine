@@ -119,7 +119,7 @@ final class SearchControllerStructuredTest extends DatabaseTestCase
         self::assertSame(1, $first['rank']);
         self::assertSame(['product_id', 'rank', 'keyword_hit', 'pinned', 'blend'], array_keys($first));
         self::assertSame(
-            ['match_type', 'score', 'title_match', 'field_match', 'name_all'],
+            ['match_type', 'score', 'title_match', 'field_match', 'name_all', 'coverage'],
             array_keys($first['keyword_hit'])
         );
         self::assertFalse($first['pinned']);

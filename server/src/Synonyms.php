@@ -117,17 +117,20 @@ final class Synonyms
 
     /**
      * The query's tokens first, then one variant per (matched span, other term
-     * of its group), at most $max in total. Spans are found left to right,
-     * longest phrase first, and never overlap.
+     * of its group), then, when several spans matched, the variants with every
+     * matched span swapped at once (a query naming two aliased terms is only
+     * found whole in a product listed under both other names), at most $max in
+     * total. Spans are found left to right, longest phrase first, and never
+     * overlap.
      *
      * @param list<string> $tokens normalized query tokens
      * @return non-empty-list<list<string>>
      */
     public function variants(array $tokens, int $max): array
     {
-        $variants = [$tokens];
+        $spans = [];
         $count = count($tokens);
-        for ($start = 0; $start < $count && count($variants) < $max;) {
+        for ($start = 0; $start < $count;) {
             $length = min($this->longestPhrase, $count - $start);
             for (; $length > 0; $length--) {
                 $phrase = implode(' ', array_slice($tokens, $start, $length));
@@ -139,23 +142,59 @@ final class Synonyms
                 $start++;
                 continue;
             }
-            foreach ($this->alternatives[$phrase] as $alternative) {
-                $variant = array_merge(
-                    array_slice($tokens, 0, $start),
-                    $alternative,
-                    array_slice($tokens, $start + $length)
-                );
-                if (!in_array($variant, $variants, true)) {
-                    $variants[] = $variant;
-                }
-                if (count($variants) >= $max) {
-                    break;
-                }
-            }
+            $spans[] = [$start, $length, $this->alternatives[$phrase]];
             $start += $length;
         }
 
+        $variants = [$tokens];
+        $add = static function (array $variant) use (&$variants, $max): void {
+            if (count($variants) < $max && !in_array($variant, $variants, true)) {
+                $variants[] = $variant;
+            }
+        };
+        foreach ($spans as [$start, $length, $alternatives]) {
+            foreach ($alternatives as $alternative) {
+                $add(self::swap($tokens, [[$start, $length, $alternative]]));
+            }
+        }
+        if (count($spans) > 1) {
+            // Every span swapped: the cross product of the groups' other terms,
+            // enumerated like an odometer (last span fastest) until the cap.
+            $choice = array_fill(0, count($spans), 0);
+            for (; count($variants) < $max;) {
+                $swaps = [];
+                foreach ($spans as $i => [$start, $length, $alternatives]) {
+                    $swaps[] = [$start, $length, $alternatives[$choice[$i]]];
+                }
+                $add(self::swap($tokens, $swaps));
+                for ($i = count($spans) - 1; $i >= 0 && ++$choice[$i] === count($spans[$i][2]); $i--) {
+                    $choice[$i] = 0;
+                }
+                if ($i < 0) {
+                    break;
+                }
+            }
+        }
+
         return $variants;
+    }
+
+    /**
+     * @param list<string> $tokens
+     * @param list<array{0: int, 1: int, 2: list<string>}> $swaps [start, length, replacement], ascending
+     * @return list<string>
+     */
+    private static function swap(array $tokens, array $swaps): array
+    {
+        $result = [];
+        $position = 0;
+        foreach ($swaps as [$start, $length, $replacement]) {
+            array_push($result, ...array_slice($tokens, $position, $start - $position), ...$replacement);
+            $position = $start + $length;
+        }
+        array_push($result, ...array_slice($tokens, $position));
+
+        return $result;
     }
 
     /** @return list<list<string>>|null */

@@ -17,6 +17,9 @@ use PDO;
  */
 final class ProductLoader
 {
+    /** Width of products.normalized_collapsed. */
+    private const COLLAPSED_MAX_CHARS = 700;
+
     private PDO $pdo;
     private string $table;
     /** @var callable(string): string */
@@ -40,11 +43,11 @@ final class ProductLoader
         $stmt = $this->pdo->prepare(
             "REPLACE INTO {$this->table}
                 (product_id, title, description, normalized_title, normalized_desc, normalized_specs,
-                 normalized_tags, normalized_brand, normalized_category,
+                 normalized_tags, normalized_brand, normalized_category, normalized_collapsed,
                  brand, category, model, sku, normalized_sku, price, stock, url, image, popularity)
              VALUES
                 (:product_id, :title, :description, :normalized_title, :normalized_desc, :normalized_specs,
-                 :normalized_tags, :normalized_brand, :normalized_category,
+                 :normalized_tags, :normalized_brand, :normalized_category, :normalized_collapsed,
                  :brand, :category, :model, :sku, :normalized_sku, :price, :stock, :url, :image, :popularity)"
         );
 
@@ -69,6 +72,12 @@ final class ProductLoader
                 'normalized_tags'     => ($this->normalize)((string) ($row['tags'] ?? '')),
                 'normalized_brand'    => ($this->normalize)((string) ($row['brand'] ?? '')),
                 'normalized_category' => ($this->normalize)((string) ($row['category'] ?? '')),
+                // M23: same composition as pipeline/build.py collapsed_identity().
+                'normalized_collapsed' => self::collapsedIdentity(
+                    $title,
+                    (string) ($row['brand'] ?? ''),
+                    (string) ($row['tags'] ?? '')
+                ),
                 'brand'            => (string) ($row['brand'] ?? ''),
                 'category'         => (string) ($row['category'] ?? ''),
                 'model'            => (string) ($row['model'] ?? ''),
@@ -84,5 +93,19 @@ final class ProductLoader
         }
 
         return $count;
+    }
+
+    /**
+     * Collapsed title, brand and tags joined by a space, cut to the column's
+     * width (db/schema.sql); mirrors build.py collapsed_identity().
+     */
+    public static function collapsedIdentity(string $title, string $brand, string $tags): string
+    {
+        $parts = array_filter(
+            [Normalizer::collapse($title), Normalizer::collapse($brand), Normalizer::collapse($tags)],
+            static fn (string $part): bool => $part !== ''
+        );
+
+        return mb_substr(implode(' ', $parts), 0, self::COLLAPSED_MAX_CHARS, 'UTF-8');
     }
 }

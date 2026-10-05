@@ -5,10 +5,12 @@ declare(strict_types=1);
 namespace App\Tests;
 
 use App\Keyword;
+use App\ProductLoader;
 use App\SearchController;
 use App\Synonyms;
 use App\VpsClient;
 use PHPUnit\Framework\Attributes\DataProvider;
+use ReflectionMethod;
 
 /**
  * Latency guard for the field-weighted keyword score (M10).
@@ -50,6 +52,14 @@ use PHPUnit\Framework\Attributes\DataProvider;
  * stay cached, brought it back to ~80 ms). Descriptions are therefore shorter
  * here so the guard measures CPU, and "the working set must fit the host's
  * innodb_buffer_pool_size" is a production-validation item (README).
+ *
+ * M23: a query fewer than soft_and_min_results products fully match also runs
+ * the soft-AND partial searches (the literal query in every field, each alias
+ * variant in the structured fields), and every strict query runs the collapsed
+ * scan (covering index, then the word-start regex on the survivors); both are
+ * timed with the variants at alias_max_variants (rare swapped-in words asserted;
+ * words in ~7% of the catalog only reported), the collapsed one also in its
+ * worst case, a one-word query whose letters sit in every title.
  *
  * M18: the whole /search hybrid path on cPanel (keyword search, parsing the
  * VPS's 100 neighbours, the existence/signals query, RRF fusion, logging) on
@@ -138,7 +148,7 @@ final class KeywordLatencyGuardTest extends DatabaseTestCase
         $config = require self::repoRoot() . '/server/config.example.php';
         $budgetMs = (float) $config['search']['latency_budget_ms'];
         $this->seedCatalog(self::DESC_INDEX_CHARS, true);
-        $keyword = new Keyword($this->pdo, 'products', 3, 20, null, 10.0, 1.0, 5.0, 4, 6.0);
+        $keyword = new Keyword($this->pdo, 'products', 3, 20, null, 10.0, 1.0, 5.0, 4, 6.0, softAndMinResults: 0);
         $query = 'دسته بازی ناموجود';
 
         self::assertSame([], $keyword->search($query));
@@ -166,6 +176,132 @@ final class KeywordLatencyGuardTest extends DatabaseTestCase
             (int) $budgetMs
         ));
         self::assertLessThan($budgetMs, $median, 'strict + any-terms fallback exceeded the latency budget');
+    }
+
+    /** @return array<string, array{list<list<string>>, bool}> alias groups, whether they are broad words */
+    public static function softAndShapes(): array
+    {
+        return [
+            // Transliteration / franchise-name aliases: the swapped-in words are rare.
+            'rare alias words' => [[
+                ['دسته', 'کنترلر', 'جوی استیک', 'gamepad', 'joypad'],
+                ['بازی', 'game', 'گیم', 'play'],
+            ], false],
+            // The commonest words of the catalog (each in ~1400 rows): the adversarial case,
+            // measured and reported but not asserted (260-440 ms from run to run here).
+            'broad alias words' => [[
+                ['دسته', 'واژه1005', 'واژه1006', 'واژه1007'],
+                ['بازی', 'واژه1008', 'واژه1009'],
+            ], true],
+        ];
+    }
+
+    /** @param list<list<string>> $groups */
+    #[DataProvider('softAndShapes')]
+    public function testSoftAndTopUpStaysWithinBudget(array $groups, bool $broad): void
+    {
+        $config = require self::repoRoot() . '/server/config.example.php';
+        $budgetMs = (float) $config['search']['latency_budget_ms'];
+        $maxVariants = (int) $config['search']['alias_max_variants'];
+        $this->seedCatalog(self::DESC_INDEX_CHARS, true);
+        // The strict query finds nothing ("ناموجود" is nowhere): the top-up is the whole
+        // cost. Every variant holds FULLTEXT-sized words, so each (single swaps and
+        // both-swapped) gets its own partial search, the swapped-in words as its
+        // prefilter and soft_and_candidate_cap bounding the rows it scores.
+        $synonyms = new Synonyms($groups);
+        $query = 'دسته بازی ناموجود';
+        $tokens = ['دسته', 'بازی', 'ناموجود'];
+        self::assertCount($maxVariants, $synonyms->variants($tokens, $maxVariants));
+        $cap = (int) $config['search']['soft_and_candidate_cap'];
+        $make = fn (int $minResults) => new Keyword(
+            $this->pdo,
+            'products',
+            3,
+            20,
+            null,
+            10.0,
+            1.0,
+            5.0,
+            4,
+            6.0,
+            $synonyms,
+            $maxVariants,
+            softAndMinResults: $minResults,
+            softAndCandidateCap: $cap
+        );
+        $strict = $make(0);
+        $soft = $make((int) $config['search']['soft_and_min_results']);
+
+        self::assertSame([], $strict->search($query));
+        $results = $soft->search($query); // warm the buffer pool
+        self::assertCount(20, $results);
+        self::assertSame(Keyword::MATCH_PARTIAL, $results[0]['match_type']);
+        self::assertTrue($results[0]['title_match']);
+
+        $this->warmBufferPool();
+        $median = $this->steadyMedian(static fn () => $soft->search($query), $budgetMs);
+        $plain = $this->median(static fn () => $strict->search($query));
+        fwrite(STDERR, sprintf(
+            "\n[keyword guard] %d products, capped + specs, soft-AND top-up of a zero-hit query with %d alias "
+            . "variants of %s words (cap %d): median %.1f ms (strict alone %.1f ms, budget %d ms)\n",
+            self::PRODUCTS,
+            $maxVariants,
+            $broad ? 'broad' : 'rare',
+            $cap,
+            $median,
+            $plain,
+            (int) $budgetMs
+        ));
+        if (!$broad) {
+            self::assertLessThan($budgetMs, $median, 'soft-AND top-up exceeded the latency budget');
+        }
+    }
+
+    public function testCollapsedQueryStaysWithinBudget(): void
+    {
+        $config = require self::repoRoot() . '/server/config.example.php';
+        $budgetMs = (float) $config['search']['latency_budget_ms'];
+        $this->seedCatalog(self::DESC_INDEX_CHARS, true);
+        $on = new Keyword($this->pdo, 'products', 3, 20);
+        $off = new Keyword($this->pdo, 'products', 3, 20, collapseWeight: 0.0);
+
+        // "دسته بازی" is in 800 titles; the joined form finds them through the collapsed column only.
+        self::assertSame([], $off->search('دستهبازی'));
+        $joined = $on->search('دستهبازی');
+        self::assertCount(20, $joined);
+        self::assertSame(Keyword::MATCH_COLLAPSED, $joined[0]['match_type']);
+        // ... and adds nothing to a query the token match already answers.
+        self::assertSame(
+            array_column($off->search('دسته بازی'), 'product_id'),
+            array_column($on->search('دسته بازی'), 'product_id')
+        );
+
+        $this->warmBufferPool();
+        $joinedMedian = $this->steadyMedian(static fn () => $on->search('دستهبازی'), $budgetMs);
+        $spacedMedian = $this->steadyMedian(static fn () => $on->search('دسته بازی'), $budgetMs);
+        $spacedOff = $this->median(static fn () => $off->search('دسته بازی'));
+        // The scan alone on a word in every title: the substring scan keeps all 20000
+        // rows and the NOT LIKE exclusion discards them. A query like that is never
+        // scanned (the page is already full of title matches, see collapsedCanRank()),
+        // so this bounds a word held by far more titles than any real one is.
+        $scan = new ReflectionMethod(Keyword::class, 'collapsedSearch');
+        $worst = $this->steadyMedian(static fn () => $scan->invoke($on, ['محصول'], 20), $budgetMs);
+        self::assertSame([], $scan->invoke($on, ['محصول'], 20));
+
+        fwrite(STDERR, sprintf(
+            "\n[keyword guard] %d products, collapsed scan: joined query on 800 spaced titles median %.1f ms; "
+            . "spaced query %.1f ms (%.1f ms with the collapsed match off); scan alone, one word in all %d "
+            . "titles %.1f ms; budget %d ms\n",
+            self::PRODUCTS,
+            $joinedMedian,
+            $spacedMedian,
+            $spacedOff,
+            self::PRODUCTS,
+            $worst,
+            (int) $budgetMs
+        ));
+        self::assertLessThan($budgetMs, $joinedMedian, 'collapsed query exceeded the latency budget');
+        self::assertLessThan($budgetMs, $spacedMedian, 'a spaced query with the collapsed scan exceeded the budget');
     }
 
     public function testHybridSearchWithVpsNeighboursStaysWithinBudget(): void
@@ -365,7 +501,8 @@ final class KeywordLatencyGuardTest extends DatabaseTestCase
                 $tags .= ' دسته بازی';
             }
 
-            $batch[] = '(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)';
+            $brand = $structured ? 'برند' . ($id % 40) : '';
+            $batch[] = '(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)';
             array_push(
                 $params,
                 $id,
@@ -375,8 +512,9 @@ final class KeywordLatencyGuardTest extends DatabaseTestCase
                 self::indexed($desc, $descIndexChars),
                 implode(' | ', $specs),
                 $tags,
-                $structured ? 'برند' . ($id % 40) : '',
+                $brand,
                 $structured ? 'گروه' . ($id % 200) : '',
+                ProductLoader::collapsedIdentity($title, $brand, $tags),
                 $id % 1000
             );
             if (count($batch) === 500) {
@@ -413,7 +551,7 @@ final class KeywordLatencyGuardTest extends DatabaseTestCase
         $this->pdo->prepare(
             'INSERT INTO products (product_id, title, description, normalized_title, normalized_desc,
                                    normalized_specs, normalized_tags, normalized_brand, normalized_category,
-                                   popularity)
+                                   normalized_collapsed, popularity)
              VALUES ' . implode(',', $batch)
         )->execute($params);
     }

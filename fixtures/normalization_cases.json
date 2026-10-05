@@ -313,5 +313,87 @@
       "input": "X 12-V",
       "expected": "x12v"
     }
+  ],
+  "collapse_cases": [
+    {
+      "name": "farcry joined",
+      "input": "FarCry",
+      "expected": "farcry"
+    },
+    {
+      "name": "far cry separated",
+      "input": "Far Cry",
+      "expected": "farcry"
+    },
+    {
+      "name": "far cry with digit",
+      "input": "Far Cry 5",
+      "expected": "farcry5"
+    },
+    {
+      "name": "dual sense",
+      "input": "dual  sense",
+      "expected": "dualsense"
+    },
+    {
+      "name": "hyphen and punctuation",
+      "input": "Spider-Man: Miles Morales",
+      "expected": "spidermanmilesmorales"
+    },
+    {
+      "name": "zwnj persian",
+      "input": "بی‌سیم سونی",
+      "expected": "بیسیمسونی"
+    },
+    {
+      "name": "persian digits and arabic letters",
+      "input": "كنسول ۵ ي",
+      "expected": "کنسول5ی"
+    },
+    {
+      "name": "roman numeral applies before collapse",
+      "input": "Modern Warfare II",
+      "expected": "modernwarfare2"
+    },
+    {
+      "name": "empty",
+      "input": "",
+      "expected": ""
+    },
+    {
+      "name": "only punctuation",
+      "input": "-- / ..",
+      "expected": ""
+    }
+  ],
+  "identity_cases": [
+    {
+      "name": "title brand tags",
+      "title": "Far Cry 6",
+      "brand": "Ubi Soft",
+      "tags": "Far Cry Primal",
+      "expected": "farcry6 ubisoft farcryprimal"
+    },
+    {
+      "name": "persian parts",
+      "title": "کنسول پلی‌استیشن ۵",
+      "brand": "سونی",
+      "tags": "",
+      "expected": "کنسولپلیاستیشن5 سونی"
+    },
+    {
+      "name": "empty brand and tags",
+      "title": "Plain",
+      "brand": "",
+      "tags": "",
+      "expected": "plain"
+    },
+    {
+      "name": "everything empty",
+      "title": "",
+      "brand": "",
+      "tags": "",
+      "expected": ""
+    }
   ]
 }

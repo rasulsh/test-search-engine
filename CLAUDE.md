@@ -59,8 +59,16 @@ abstraction layers.
 ```
 .
 ├── CLAUDE.md
-├── README.md
+├── README.md                     # short onboarding + the documentation index
 ├── INTEGRATION.md                # HTTP contract + storefront wiring
+├── docs/                         # topic docs (flat), M24
+│   ├── ARCHITECTURE.md           # tiers, layout, contracts, semantic tier, dev, milestones
+│   ├── CONFIGURATION.md          # every config key (server, pipeline, export, VPS)
+│   ├── PIPELINE.md               # offline build, bundle, data model, db_export
+│   ├── SEARCH-BEHAVIOR.md        # matching, ranking, aliases, soft AND, hybrid blend
+│   ├── TRAINING-COLAB.md         # rebuild / retrain runbook on Google Colab
+│   ├── DEPLOY.md                 # deploy, updates, upgrades, rollback, go-live checklist
+│   └── SEARCH-API.md             # endpoints, logs, debug, eval harness, test page
 ├── .gitignore
 ├── .github/workflows/ci.yml
 ├── db/
@@ -175,7 +183,7 @@ because Tier 2 is unavailable.
 
 ---
 
-## 6. Update / deploy flow (documented in README, not automated on server)
+## 6. Update / deploy flow (documented in docs/DEPLOY.md, not automated on server)
 
 1. Export products from OpenCart DB to `export.sql`.
 2. `python pipeline/build.py --sql export.sql --out ./bundle`
@@ -274,6 +282,12 @@ wait for review before starting the next.
   coverage top-up below full-coverage hits); alias variants over title, tags,
   brand, category, specs. `normalization_version`, model and dim unchanged.
 
+- **M24 — Documentation restructure + Colab guide:** the README becomes a short
+  onboarding with a documentation index; the technical detail moves, unchanged in
+  substance, into the flat `docs/` folder; `docs/TRAINING-COLAB.md` is the
+  end-to-end rebuild runbook (Colab T4 is the recommended build machine). Docs
+  only, no behavior change.
+
 - **M22 — Offline build speed + reliable export:** `pipeline/db_export.py`
   (direct DB -> CSV, replaces the phpMyAdmin export), GPU/fp16/batch-configured
   `RealEmbedder`, and a mock cPanel `vectors.bin` in `release.py` (unread since
@@ -313,7 +327,7 @@ data files committed.
 
 ## Checklist
 - [ ] Tests added and passing in CI
-- [ ] Docs updated (README / INTEGRATION / CLAUDE if needed)
+- [ ] Docs updated (README / docs/ / INTEGRATION / CLAUDE if needed)
 - [ ] No secrets, data files, or model binaries committed
 - [ ] KISS: no unnecessary files or abstraction
 - [ ] Targets master from a feature branch; not merged

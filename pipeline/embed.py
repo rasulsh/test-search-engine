@@ -76,7 +76,7 @@ def resolve_device(setting: str, cuda: bool) -> str:
     if setting.startswith("cuda") and not cuda:
         raise ValueError(
             f"SEARCH_EMBED_DEVICE={setting!r} but torch.cuda.is_available() is False "
-            "(install the CUDA build of torch, see README 'GPU setup')"
+            "(install the CUDA build of torch, see docs/PIPELINE.md 'Where to build (GPU)')"
         )
     return setting
 

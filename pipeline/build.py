@@ -4,7 +4,7 @@
     python pipeline/build.py --csv export.csv --out ./bundle
     python pipeline/build.py --csv export.csv --vps-out ./vps_vectors
 
-Input is a simple, documented shape (NOT the raw OpenCart export); see README for
+Input is a simple, documented shape (NOT the raw OpenCart export); see docs/PIPELINE.md for
 the columns and how to derive them from OpenCart. Output is the bundle the server
 consumes (CLAUDE.md sec. 4): vectors.bin, vectors.idx, products.load.sql,
 synonyms.json, aliases.json, spellcheck.txt, keymap.json, meta.json.
@@ -60,7 +60,7 @@ INPUT_COLUMNS = (
     "attributes", "feature", "tags",
 )
 
-# GROUP_CONCAT separator of the `attributes` export column (README, step 1).
+# GROUP_CONCAT separator of the `attributes` export column (docs/PIPELINE.md, export).
 ATTRIBUTE_SEPARATOR = " | "
 
 _SERVER_COLUMNS = (
@@ -93,7 +93,7 @@ def read_products(path: str | Path) -> list[dict[str, Any]]:
 def warn_low_row_count(text: str, parsed: int) -> bool:
     """Silent-corruption guard for CSV: broken quoting swallows many rows into
     one. Every well-formed row starts a line with its numeric id, so far fewer
-    parsed rows than such lines means the file is corrupt (README: use
+    parsed rows than such lines means the file is corrupt (docs/PIPELINE.md: use
     db_export.py). Warns on stderr and returns True when it looks that way."""
     lines = len(re.findall(r"(?m)^\d+,", text))
     if lines > 10 and parsed < 0.9 * lines:
@@ -178,7 +178,7 @@ def _titles(data: Any) -> list[str]:
 
 def clean_tags(raw: str | None) -> str:
     """Tag names of a product as one space-joined string (the `tags` export
-    column: DISTINCT oc_tag.name values, README step 1).
+    column: DISTINCT oc_tag.name values, docs/PIPELINE.md export).
 
     Trims, collapses whitespace and drops empties and 1-character tokens. The
     export joins names with a space, so tag boundaries are gone: a digit stays

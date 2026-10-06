@@ -234,6 +234,8 @@ final class KeywordCollapsedTest extends DatabaseTestCase
             return $count() - $before;
         };
 
+        $keyword->search('zetaquark', 20); // warm the per-instance facet count (M28)
+
         // 20 title hits scoring 10 fill the page: nothing collapsed (9) can enter it.
         $full = $selects(static fn () => $keyword->search('zetaquark', 20));
         // A page with room left runs the scan: exactly one more SELECT.

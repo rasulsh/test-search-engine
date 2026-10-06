@@ -8,7 +8,29 @@
     { "product_id": 2005, "title": "کیبورد گیمینگ قرمز ریزر", "description": "", "popularity": 50 },
     { "product_id": 2006, "title": "کیبورد گیمینگ مشکی لاجیتک", "description": "", "popularity": 500 },
     { "product_id": 2007, "title": "ماوس گیمینگ قرمز ریزر", "description": "", "popularity": 400 },
-    { "product_id": 2008, "title": "Call of Duty Modern Warfare II", "description": "First person shooter", "popularity": 40 }
+    { "product_id": 2008, "title": "Call of Duty Modern Warfare II", "description": "First person shooter", "popularity": 40 },
+    { "product_id": 3001, "title": "Game Title 1", "description": "", "specs": "ژانر: شوتر | اکشن", "popularity": 1 },
+    { "product_id": 3002, "title": "Game Title 2", "description": "", "specs": "ژانر: شوتر | اکشن", "popularity": 2 },
+    { "product_id": 3003, "title": "Game Title 3", "description": "", "specs": "ژانر: شوتر | اکشن", "popularity": 3 },
+    { "product_id": 3004, "title": "Game Title 4", "description": "", "specs": "ژانر: شوتر | اکشن", "popularity": 4 },
+    { "product_id": 3005, "title": "Game Title 5", "description": "", "specs": "ژانر: شوتر | اکشن", "popularity": 5 },
+    { "product_id": 3006, "title": "Game Title 6", "description": "", "specs": "ژانر: شوتر | اکشن", "popularity": 6 },
+    { "product_id": 3007, "title": "Game Title 7", "description": "", "specs": "ژانر: شوتر | اکشن", "popularity": 7 },
+    { "product_id": 3008, "title": "Game Title 8", "description": "", "specs": "ژانر: شوتر | اکشن", "popularity": 8 },
+    { "product_id": 3009, "title": "Game Title 9", "description": "", "specs": "ژانر: شوتر | اکشن", "popularity": 9 },
+    { "product_id": 3010, "title": "Game Title 10", "description": "", "specs": "ژانر: شوتر | اکشن", "popularity": 10 },
+    { "product_id": 3011, "title": "Game Title 11", "description": "", "specs": "ژانر: شوتر | اکشن", "popularity": 11 },
+    { "product_id": 3012, "title": "Game Title 12", "description": "", "specs": "ژانر: شوتر | اکشن", "popularity": 12 },
+    { "product_id": 3013, "title": "Game Title 13", "description": "", "specs": "ژانر: شوتر | اکشن", "popularity": 13 },
+    { "product_id": 3014, "title": "Game Title 14", "description": "", "specs": "ژانر: شوتر | اکشن", "popularity": 14 },
+    { "product_id": 3015, "title": "Game Title 15", "description": "", "specs": "ژانر: شوتر | اکشن", "popularity": 15 },
+    { "product_id": 3016, "title": "Game Title 16", "description": "", "specs": "ژانر: شوتر | اکشن", "popularity": 16 },
+    { "product_id": 3017, "title": "Game Title 17", "description": "", "specs": "ژانر: شوتر | اکشن", "popularity": 17 },
+    { "product_id": 3018, "title": "Game Title 18", "description": "", "specs": "ژانر: شوتر | اکشن", "popularity": 18 },
+    { "product_id": 3019, "title": "Game Title 19", "description": "", "specs": "ژانر: شوتر | اکشن", "popularity": 19 },
+    { "product_id": 3020, "title": "Game Title 20", "description": "", "specs": "ژانر: شوتر | اکشن", "popularity": 20 },
+    { "product_id": 3021, "title": "Game Title 21", "description": "", "specs": "ژانر: شوتر | اکشن", "popularity": 21 },
+    { "product_id": 3022, "title": "Game Title 22", "description": "", "specs": "ژانر: شوتر | اکشن", "popularity": 22 }
   ],
   "seed_aliases": [
     ["وارفار", "warfare"],
@@ -30,6 +52,8 @@
     { "q": "dual sense",      "expected_ids": [2003, 2004] },
     { "q": "کیبورد قرمز",     "expected_ids": [2005] },
     { "q": "مدرن وارفار",     "expected_ids": [2008] },
-    { "q": "بلبرینگ",         "expected_ids": [] }
+    { "q": "بلبرینگ",         "expected_ids": [] },
+    { "q": "شوتر",            "expected_ids": [3001, 3002, 3003, 3004, 3005, 3006, 3007, 3008, 3009, 3010, 3011, 3012, 3013, 3014, 3015, 3016, 3017, 3018, 3019, 3020, 3021, 3022] },
+    { "q": "اکشن",            "expected_ids": [3001, 3002, 3003, 3004, 3005, 3006, 3007, 3008, 3009, 3010, 3011, 3012, 3013, 3014, 3015, 3016, 3017, 3018, 3019, 3020, 3021, 3022] }
   ]
 }

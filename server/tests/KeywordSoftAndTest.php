@@ -208,6 +208,8 @@ final class KeywordSoftAndTest extends DatabaseTestCase
             return $count() - $before;
         };
         $strict = $this->keyword([], 0);
+        // Warm the per-instance facet counts (M28) so only the top-up differs.
+        $strict->search('کیبورد قرمز', 2);
         self::assertSame(
             $selects(static fn () => $strict->search('کیبورد قرمز', 2)),
             $selects(static fn () => $keyword->search('کیبورد قرمز', 2))

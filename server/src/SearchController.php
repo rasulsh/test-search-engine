@@ -143,7 +143,8 @@ final class SearchController
             (int) ($search['soft_and_min_results'] ?? 3),
             (float) ($search['soft_and_min_coverage'] ?? 0.5),
             (float) ($search['soft_and_partial_penalty'] ?? 0.5),
-            (int) ($search['soft_and_candidate_cap'] ?? 100)
+            (int) ($search['soft_and_candidate_cap'] ?? 100),
+            (int) ($search['facet_min_products'] ?? 20)
         );
         // The bundle dictionary is cached per worker (and in APCu); the table scan
         // is only a fallback for a data directory without spellcheck.txt.
@@ -454,10 +455,11 @@ final class SearchController
             // SKU scores are on their own huge scale and pinned anyway.
             if (!isset($skuSet[$row['product_id']])) {
                 $keywordScores[$row['product_id']] = $row['score'];
-                // Every query term in the title or tags (the product's names) is
-                // solid: kept whatever the VPS says. Terms found only in specs /
+                // Every query term in the title or tags (the product's names), or
+                // in a COMMON spec value (a facet / genre, M28), is solid: kept
+                // whatever the VPS says. Terms found only in rare specs /
                 // description / brand / category are weak.
-                if ($row['name_all']) {
+                if ($row['name_all'] || ($row['facet_all'] ?? false)) {
                     $solid[] = $row['product_id'];
                 }
             }

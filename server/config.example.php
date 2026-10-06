@@ -117,6 +117,14 @@ return [
         'soft_and_min_coverage'    => (float) $setting('SEARCH_SOFT_AND_MIN_COVERAGE', '0.5'),
         'soft_and_partial_penalty' => (float) $setting('SEARCH_SOFT_AND_PARTIAL_PENALTY', '0.5'),
         'soft_and_candidate_cap'   => (int) $setting('SEARCH_SOFT_AND_CANDIDATE_CAP', '100'),
+        // Facet queries (M28): a genre / feature word ("shooter") lives as an attribute
+        // VALUE in products' specs, shared by many products. A spec-only term counts as
+        // solid (exempt from the relevance floor, like a title match) when at least
+        // facet_min_products products carry it in their specs; a rarer one is an
+        // incidental mention ("ball bearing" in a power supply) and stays weak.
+        // Counted per query term at query time (bounded, cached per request).
+        // 0 = off (spec-only hits are always weak).
+        'facet_min_products'       => (int) $setting('SEARCH_FACET_MIN_PRODUCTS', '20'),
         // Collapsed names (M23): "farcry" = "far cry", "dualsense" = "dual sense".
         // The query with its spaces removed is also matched, as a substring, against
         // the collapsed title, brand and tags (products.normalized_collapsed: needs

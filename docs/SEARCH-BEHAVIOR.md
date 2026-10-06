@@ -2,6 +2,8 @@
 
 How the keyword tier finds, ranks and corrects, and how the hybrid blend combines it with the semantic tier. Every knob named here is listed in [CONFIGURATION.md](CONFIGURATION.md). Data-side details (columns, normalization, the export) are in [PIPELINE.md](PIPELINE.md); the HTTP surface is in [SEARCH-API.md](SEARCH-API.md); the big picture is in [ARCHITECTURE.md](ARCHITECTURE.md).
 
+The order these stages run in `POST /search`: [RUNTIME-FLOW.md](RUNTIME-FLOW.md).
+
 ## Keyword tier
 
 **Keyword field weighting (`server/src/Keyword.php`).** Title and description

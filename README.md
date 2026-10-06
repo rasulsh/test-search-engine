@@ -9,6 +9,7 @@ A standalone two-tier product-search service for an OpenCart 2.0.3.1 storefront 
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | The two tiers, repository layout, the three hard contracts, the semantic tier, development and tests, milestone status |
 | [docs/CONFIGURATION.md](docs/CONFIGURATION.md) | Every config key: server (`SEARCH_*`), pipeline, export (`OC_*`), VPS (`VPS_*`) |
 | [docs/PIPELINE.md](docs/PIPELINE.md) | Offline build, the bundle format, the data model (specs, tags, brand, category, normalization, the M23 space-collapse field) and the OpenCart export (`db_export.py`) |
+| [docs/RUNTIME-FLOW.md](docs/RUNTIME-FLOW.md) | The actual end-to-end runtime of `POST /search`, stage by stage (cache, keyword, did-you-mean, VPS, hybrid ranking, log), the component / data map and the degradation ladder |
 | [docs/SEARCH-BEHAVIOR.md](docs/SEARCH-BEHAVIOR.md) | How a query is matched, ranked and corrected: field weights, aliases, soft AND, SKU, "did you mean", the hybrid blend |
 | [docs/ALIASES.md](docs/ALIASES.md) | Offline LLM alias generator: Persian spellings of English names, review, merge, rebuild |
 | [docs/TRAINING-COLAB.md](docs/TRAINING-COLAB.md) | **Rebuild / retrain end to end on Google Colab** (export, upload, build, download), the recommended build path |

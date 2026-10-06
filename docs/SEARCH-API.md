@@ -2,6 +2,8 @@
 
 The HTTP surface of the service and the read-only tools around it. The exact request and response JSON, status codes and error reasons are in [`INTEGRATION.md`](../INTEGRATION.md#http-contract). How results are ranked is in [SEARCH-BEHAVIOR.md](SEARCH-BEHAVIOR.md).
 
+The full request path behind `POST /search`: [RUNTIME-FLOW.md](RUNTIME-FLOW.md).
+
 ## HTTP endpoints
 
 | endpoint | purpose |

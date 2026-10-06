@@ -2,6 +2,8 @@
 
 Every model name, dimension, threshold, table name and credential is read from configuration, never hardcoded. This file lists every key for the three places that have their own settings: the **server** (cPanel), the **pipeline** (the build machine, e.g. Colab) and the **VPS vector service**. What a ranking knob does is explained in [SEARCH-BEHAVIOR.md](SEARCH-BEHAVIOR.md); where the build keys act is in [PIPELINE.md](PIPELINE.md).
 
+Where each search knob acts in the request path: [RUNTIME-FLOW.md](RUNTIME-FLOW.md).
+
 Never commit secrets, `server/data/`, bundles or model files.
 
 ## How the settings are supplied

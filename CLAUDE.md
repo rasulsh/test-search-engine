@@ -71,6 +71,7 @@ abstraction layers.
 │   ├── CONFIGURATION.md          # every config key (server, pipeline, export, VPS)
 │   ├── PIPELINE.md               # offline build, bundle, data model, db_export
 │   ├── SEARCH-BEHAVIOR.md        # matching, ranking, aliases, soft AND, hybrid blend
+│   ├── RUNTIME-FLOW.md           # POST /search stage by stage, components, degradation (M32)
 │   ├── TRAINING-COLAB.md         # rebuild / retrain runbook on Google Colab
 │   ├── DEPLOY.md                 # deploy, updates, upgrades, rollback, go-live checklist
 │   └── SEARCH-API.md             # endpoints, logs, debug, eval harness, test page
@@ -328,6 +329,10 @@ wait for review before starting the next.
   did-you-mean share, volume) over the existing `search_logs`, `AnalyticsPage` +
   `public/analytics.php` (reuses `logs.token`, same headers as `logs.php`, `?window=`,
   `?format=json`), one new index `idx_ts_result`, retention documented not automated.
+
+- **M32 — Runtime flow doc:** `docs/RUNTIME-FLOW.md` documents the actual
+  `SearchController::search()` pipeline (after M29-M31); docs only. Keep it in sync
+  whenever `search()` changes.
 
 - **M22 — Offline build speed + reliable export:** `pipeline/db_export.py`
   (direct DB -> CSV, replaces the phpMyAdmin export), GPU/fp16/batch-configured

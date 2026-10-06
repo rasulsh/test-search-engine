@@ -2,6 +2,8 @@
 
 Authoritative design, contracts and the milestone plan for implementers live in [`CLAUDE.md`](../CLAUDE.md). This file is the human-readable overview. Search behavior is in [SEARCH-BEHAVIOR.md](SEARCH-BEHAVIOR.md), the data side in [PIPELINE.md](PIPELINE.md), keys in [CONFIGURATION.md](CONFIGURATION.md).
 
+The request path stage by stage, with the component map and degradation ladder: [RUNTIME-FLOW.md](RUNTIME-FLOW.md).
+
 ## Overview
 
 Two tiers, degrading gracefully:
@@ -179,3 +181,6 @@ vendor/bin/phpunit
 See `CLAUDE.md` §9–§11 for the full workflow and coding standards.
 - [ ] **M28** — Facet queries: a spec-only query term held by at least `search.facet_min_products` products' specs (a genre / feature value, e.g. "شوتر") counts as solid, so its hits skip the relevance floor; rarer spec mentions stay weak. Query-time count, server-only, no rebuild.
 - [ ] **M29** — Config layering + doctor: `App\Config` owns the schema, types and every default; `config.php` holds only overrides (deep-merged over them), so code reads keys without a fallback. `App\ConfigDoctor`, `server/tools/config-check.php` and the `/health` `config` section report missing required keys, bad types, unknown keys and half-configured features by key path only. No search behavior change.
+- [ ] **M30** — cPanel deployment layout: `server/public/` is the document root and a child of `server/`; `public/app_base.php` resolves the app base (`SEARCH_APP_BASE` else the parent of `public/`); deny-all `.htaccess` safety nets and `public/.htaccess`; documented in [DEPLOY.md](DEPLOY.md#layout).
+- [ ] **M31** — Search analytics: `App\Analytics` / `analytics.php` (read-only aggregates over `search_logs`, `logs.token`, `?format=json`), the `idx_ts_result` index; see [SEARCH-API.md](SEARCH-API.md#analytics).
+- [ ] **M32** — `docs/RUNTIME-FLOW.md`: the actual `POST /search` pipeline (cache, keyword, did-you-mean, VPS, hybrid ranking, log) with the component map and degradation ladder. Docs only; keep it in sync with `SearchController::search()`.

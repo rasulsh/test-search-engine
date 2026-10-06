@@ -1,0 +1,24 @@
+# Served directory of the search service (cPanel: LiteSpeed / Apache 2.4).
+# Re-opens public/ below server/.htaccess's blanket deny (a deeper Require wins).
+Require all granted
+
+Options -Indexes
+
+# No dotfiles (.htaccess, .env, ...).
+<FilesMatch "^\.">
+    Require all denied
+</FilesMatch>
+
+<IfModule mod_headers.c>
+    Header always set X-Robots-Tag "noindex, nofollow"
+    Header always set X-Frame-Options "DENY"
+    Header always set Referrer-Policy "no-referrer"
+</IfModule>
+
+# Web-root deploy: /search, /health, /reload, /logs reach the front controller.
+# Direct *.php requests (the subfolder deploy) keep working.
+<IfModule mod_rewrite.c>
+    RewriteEngine On
+    RewriteCond %{REQUEST_FILENAME} !-f
+    RewriteRule ^(search|health|reload|logs)/?$ index.php [L]
+</IfModule>

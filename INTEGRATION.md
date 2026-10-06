@@ -32,17 +32,17 @@ VPS (vps/README.md)                  <- bge-m3 query model + product vectors
 ```
 
 - **Same origin as the store.** The service sends no CORS headers and does not
-  answer `OPTIONS` preflights. The storefront therefore calls it on the store's
-  own domain, under a subdirectory such as `/search-api/`. A separate subdomain
-  would need CORS support that does not exist yet.
+  answer `OPTIONS` preflights, so the storefront must call it on its own origin:
+  a subfolder such as `/search-api/`, or a host that shares the store's origin.
+  A different (sub)domain needs CORS support that does not exist yet.
 - **Only `server/public` is web-exposed.** `config.php` (credentials, reload
-  token), `data/` and `src/` stay outside `public_html`. The endpoint scripts
-  locate `bootstrap.php` through their real path, so a symlinked `search-api/`
-  works.
-- **Call the `.php` files directly** (`/search-api/search.php`). They need no
-  URL rewriting. The front controller (`index.php`) routes the pretty paths
-  (`/search`, `/health`, `/reload`) only when the service is at the web root of
-  its host, not under a subdirectory.
+  token), `data/` and `src/` stay outside the web root. The endpoint scripts
+  find the app through `public/app_base.php`: `SEARCH_APP_BASE`, else the
+  parent of `public/`; a symlinked `search-api/` works. Layouts and the
+  `.htaccess` safety nets: [DEPLOY.md, Layout](docs/DEPLOY.md#layout).
+- **Both URL forms work** (`/search-api/search` and `/search-api/search.php`):
+  `public/.htaccess` routes the extensionless names to the front controller, and
+  the front controller routes by file name, so a subfolder works too.
 - **The VPS is private.** Only the cPanel server calls it (token + firewall,
   see `vps/README.md`, "Keeping the model private"). Browsers never see its
   address or token.
@@ -277,6 +277,7 @@ that helps.
 | `method_not_allowed` | 405 | all |
 | `invalid_bundle` | 422 | `/reload` |
 | `internal_error` | 500 | `/search`, `/reload` |
+| `app_base_not_found` | 500 | every endpoint: `bootstrap.php` is not in the app base (the parent of `public/`, or `SEARCH_APP_BASE`); a deploy-layout error, see [DEPLOY.md](docs/DEPLOY.md#layout) |
 | `reload_disabled` | 503 | `/reload` |
 
 `/health` reports failure through `status: "degraded"` with HTTP 503, not

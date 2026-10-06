@@ -9,6 +9,7 @@ Builds the bundle and packs, relative to the host's
     data_incoming/        the bundle (vectors, products.load.sql, meta.json, ...)
     bootstrap.php, config.example.php, src/, public/ (incl. public/install.php),
     tools/config-check.php (the config doctor, run after unzipping)
+    .htaccess, data/.htaccess, data_incoming/.htaccess (deny-all safety nets)
     db/schema.sql         read by install.php on the first deploy
 
 No browser model ships (M18): queries are embedded on the VPS. Since M18 /search
@@ -56,6 +57,9 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 # config.example.php is the template for a first deploy; config.php is never packed.
 # tools/config-check.php is the only tool shipped: deploy runs it after unzipping.
 SERVER_CODE = ("bootstrap.php", "config.example.php", "src", "public", "tools/config-check.php")
+# Deny-all files (M30): a safety net if the tree is ever misplaced under a web root.
+# The bundle's own data_incoming/.htaccess becomes data/.htaccess on reload.
+SAFETY_NET = (".htaccess", "data/.htaccess", "data_incoming/.htaccess")
 
 
 def _files(root: Path, relative: str) -> Iterator[tuple[Path, str]]:
@@ -76,6 +80,11 @@ def release_entries(bundle_dir: Path, server_dir: Path) -> list[tuple[Path, str]
             # public/client is a leftover local copy of the pre-M18 browser model.
             if not arcname.startswith("public/client/"):
                 entries.append((source, arcname))
+
+    for relative in SAFETY_NET:
+        if not (server_dir / relative).is_file():
+            raise RuntimeError(f"server/{relative} is missing: the release must carry it")
+        entries.append((server_dir / relative, relative))
 
     if any(Path(arcname).name == "config.php" for _, arcname in entries):
         raise RuntimeError("config.php must never be packed")

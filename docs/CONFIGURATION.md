@@ -19,6 +19,7 @@ Defaults are defined once. `App\Config` (`server/src/Config.php`) holds the whol
 - **Required:** `db.dsn` and `db.user`, the two things the app cannot invent. Tunables are never required. Tokens are optional: an empty token switches its feature off (`reload.token` empty disables `POST /reload`).
 - **Casting:** `"0"`, `"0.0"` and `"false"` survive as `0`, `0.0` and `false` (they never fall back to the default). A blank value for a number or boolean means "unset" (the default); a value that does not cast keeps the default and is an ERROR in the doctor.
 - **Without a `config.php`** (development) the app starts on the defaults; the missing credentials show up in the doctor and in `/health`, not as a crash.
+- **Where the app lives:** `public/app_base.php` takes the app base (the folder with `bootstrap.php`, `src/`, `config.php`) from the environment variable `SEARCH_APP_BASE` (`SetEnv` in `public/.htaccess` works) and otherwise uses the parent of `public/`; a base without `bootstrap.php` answers `500 app_base_not_found`. Only needed when the web root holds just the public files ([DEPLOY.md](DEPLOY.md#layout)).
 - **Where the file lives:** `server/config.php`, or the path in `SEARCH_CONFIG_FILE` when set (a config kept outside the code directory; the test suite uses it).
 
 **Change a tunable:** add its key to `config.php` at the same nested path, for example

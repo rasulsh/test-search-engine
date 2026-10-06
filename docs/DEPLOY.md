@@ -13,6 +13,70 @@ on cPanel runs as a daemon or needs root.
 Placeholders: `shop.example.com`, `~/search-service`, database `cpuser_search`.
 Replace them with yours.
 
+### Layout
+
+`server/public/` is, by design, the web document root (a front-controller layout).
+Everything else in `server/` (`bootstrap.php`, `src/`, `config.php`,
+`config.example.php`, `data/`, `data_incoming/`, `data_old/`, `tools/`, `db/`)
+sits **one level above** `public/` and must stay out of the web root: `config.php`
+holds the database password and the tokens, and `data/products.load.sql` is the
+whole catalog. The endpoints find the app through `public/app_base.php`: the
+environment variable `SEARCH_APP_BASE` if set, else the parent of `public/`
+(`dirname(__DIR__)`). So `public/` must stay a **direct child of `server/`**
+(the default), or `SEARCH_APP_BASE` must name the app folder; it does not have
+to be literally `public_html`.
+
+```
+~/search-service/                  not web-accessible
+└── server/                        the app base (release.zip extracts here)
+    ├── bootstrap.php  src/  tools/  db/
+    ├── config.php                 yours; never in the zip, never web-accessible
+    ├── config.example.php
+    ├── data/  data_incoming/  data_old/
+    ├── .htaccess                  safety net: Require all denied
+    └── public/    <──────────── the document root points HERE
+        ├── index.php  search.php  health.php  reload.php  logs.php   (analytics.php once M31 lands)
+        ├── app_base.php  .htaccess  test.html (optional)
+        └── install.php            first setup only: delete it right after
+```
+
+**In the web root:** only the contents of `server/public/`. **Never in the web
+root:** `config.php`, `config.example.php`, `bootstrap.php`, `src/`, `data/`,
+`data_incoming/`, `data_old/`, `tests/`, `tools/`, `vendor/` or the rest of the
+repository.
+
+Two ways to serve it on cPanel:
+
+1. **Preferred: a subdomain or addon domain** (for example `search.example.com`).
+   cPanel, Domains: set the Document Root to `~/search-service/server/public`.
+   Only `public/` is served; the rest is a sibling above it. No path edits, no
+   `SEARCH_APP_BASE`. The storefront then calls `https://search.example.com/search`
+   (the `.htaccess` routes `/search`, `/health`, `/reload`, `/logs` to `index.php`).
+2. **Fallback: a subfolder of a site with a fixed `public_html`** (for example
+   `example.com/search-api`). Keep the app above the web root
+   (`~/search-service/server/`) and expose only the public files:
+   - with SSH, a symlink keeps updates automatic and needs nothing else:
+     `ln -s ~/search-service/server/public ~/public_html/search-api`;
+   - without SSH (File Manager cannot make symlinks), copy only the files of
+     `server/public/` into `public_html/search-api/` (after every extract too),
+     and tell them where the app is, in `public_html/search-api/.htaccess`:
+     `SetEnv SEARCH_APP_BASE /home/cpuser/search-service/server`.
+     Do **not** copy `src/`, `config.php` or `data/` into `public_html`.
+
+The storefront must reach the service on the **same origin** (no CORS support);
+see [INTEGRATION.md, Deployment shape](../INTEGRATION.md#deployment-shape). A
+wrong `SEARCH_APP_BASE` (or a `public/` moved out of `server/`) answers `500
+app_base_not_found` instead of a raw include error.
+
+The `.htaccess` files in the release (LiteSpeed and Apache honour them) are a
+**safety net, not a substitute for the layout**: `server/.htaccess`,
+`server/data/.htaccess` and `server/data_incoming/.htaccess` deny everything, so a
+tree misplaced under the web root does not leak `config.php`, `src/` or the
+bundle; `public/.htaccess` re-opens `public/`, denies dotfiles, sets the same
+security headers `logs.php` sends and routes the extensionless endpoints. They
+are ignored by a host that does not read `.htaccess` (an nginx front), so verify
+with the checks in the [go-live checklist](#production-go-live-checklist).
+
 ### One-time setup (cPanel host)
 
 The first deploy is: upload the zip, extract it, open `install.php`, fill in
@@ -32,18 +96,12 @@ the form. No config file editing, no separate model upload, no SSH needed.
    [`vps/README.md`](../vps/README.md) (it can also come later: until then,
    search is keyword-only).
 3. **Upload and extract** `release.zip` into `~/search-service/server/`,
-   outside `public_html` (File Manager: Upload, then Extract). Expose only its
-   `public/` directory on the store's domain, as a symlink:
-   ```bash
-   ln -s ~/search-service/server/public ~/public_html/search-api
-   ```
-   Use the symlink, not a copy: later releases update `server/public/` in
-   place, and a copy would keep serving the old files. (Without SSH, the File
-   Manager cannot create a symlink; then re-copy `public/` into
-   `public_html/search-api/` after every extract.)
-   The storefront must reach the service on the **same origin**. There is no
-   CORS support. See [INTEGRATION.md, Deployment shape](../INTEGRATION.md#deployment-shape).
-4. **Open `https://shop.example.com/search-api/install.php`** and fill in the
+   outside `public_html` (File Manager: Upload, then Extract). It unzips to
+   `server/{public,src,bootstrap.php,config.example.php,...}` with `public/` as a
+   child. Do not move `public/` out; point the document root into it, as in
+   [Layout](#layout) (a subdomain's Document Root, or the subfolder symlink /
+   copy + `SEARCH_APP_BASE`).
+4. **Open `https://shop.example.com/search-api/install.php`** (with a subdomain: `https://search.example.com/install.php`) and fill in the
    form (Persian, RTL):
    - database host (usually `localhost`), optional port, name, user, password;
    - the reload token: pre-filled with a fresh random value. **Copy it before
@@ -77,11 +135,14 @@ the form. No config file editing, no separate model upload, no SSH needed.
    If the load cannot finish within the host's time or memory limits, the page
    says so and shows the [manual staging load](#fallback-manual-staging-load)
    (`config.php` is already written by then; nothing was swapped).
-5. **Delete `install.php`.** Once `config.php` exists it refuses to do
-   anything (`403`, "already installed"), so a later release that re-extracts
-   it is harmless, but removing it keeps the surface small.
-   `curl -sS https://shop.example.com/search-api/health.php` should now report
-   `product_count` equal to the catalog size. Set `search.min_token_size` in
+5. **Delete `install.php` now.** The installer's last page says so too. Once
+   `config.php` exists it refuses to do anything (`403`, "already installed"), so
+   a later release that re-extracts it is harmless, but removing it keeps the
+   surface small; also delete it from `public_html/search-api/` if you copied the
+   public files. Then run `php tools/config-check.php` in `~/search-service/server`
+   and check
+   `curl -sS https://shop.example.com/search-api/health.php`: `product_count`
+   equal to the catalog size and `config.ok` true. Set `search.min_token_size` in
    `config.php` if the host's `innodb_ft_min_token_size` is not 3
    (`SHOW VARIABLES LIKE 'innodb_ft_min_token_size'`).
 6. **Storefront.** Install the storefront snippet through the OpenCart module
@@ -100,7 +161,8 @@ the host supports them. Run `php tools/config-check.php` afterwards. Import
 ### Every catalog update
 
 The whole update is three commands: export, `release`, and one `curl` after
-unzipping on the host.
+unzipping on the host. Unzip into `~/search-service/server/` (the layout of
+[Layout](#layout) is unchanged: `public/` stays a child of `server/`).
 
 ```
 OpenCart DB --(1) export.csv--> GPU machine (Colab T4) --(2) release.zip + vps_vectors/--> cPanel host + VPS --(3) unzip + curl reload.php?load=1 (and the VPS /reload)
@@ -419,6 +481,34 @@ this catalog (`vps/README.md`, "Rollback").
 Everything below was impossible to verify without the real host, catalog, or
 shoppers' devices. It consolidates the "Needs production validation" items from
 M0–M5. Verify each item on the production host before wide rollout.
+
+**Blocking: layout and secrets (the web exposure checks)**
+- [ ] The document root points at `server/public` (or the subfolder holds only
+  the public files plus `SEARCH_APP_BASE`), per [Layout](#layout): `config.php`,
+  `src/`, `data/` and the rest of `server/` are above the web root.
+- [ ] **`install.php` is deleted** from the served folder (it answers `403`
+  once `config.php` exists, but it should not be there at all).
+- [ ] Nothing outside `public/` is reachable. Each of these returns `403` or
+  `404`, never `200`:
+  ```bash
+  for p in config.php config.example.php bootstrap.php src/Config.php \
+           data/products.load.sql data/meta.json data_incoming/meta.json \
+           ../config.php ../data/products.load.sql .htaccess; do
+    printf '%-34s' "$p"; curl -s -o /dev/null --path-as-is -w '%{http_code}\n' "https://search.example.com/$p"
+  done
+  ```
+  Also try the same under the subfolder (`https://shop.example.com/search-api/...`)
+  and, if the app tree might ever have been copied under `public_html`, at
+  `https://shop.example.com/search-service/server/config.php`. The `.htaccess`
+  files are the safety net for that last case only; a host that ignores
+  `.htaccess` makes the layout the only protection.
+- [ ] `php tools/config-check.php` reports no ERROR, and `GET /health` shows
+  `config.ok` true.
+- [ ] **Rotate the tokens before go-live** (`reload.token`, `vps.token`,
+  `logs.token`, `debug.token`; `redis.auth` if the cache is on): any value that
+  was typed into a chat, a ticket or a shell history is burned. Use long random,
+  different values. A new `vps.token` must be set on the VPS too
+  (`VPS_TOKEN`); a new `reload.token` is what the deploy `curl` sends.
 
 **Blocking: search quality and the model**
 - [ ] **Persian embedding-model feasibility test (mandatory before wide

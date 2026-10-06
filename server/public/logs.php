@@ -13,7 +13,8 @@ use App\LogsPage;
 
 /** @var array<string, mixed> $config */
 if (!isset($config)) {
-    $config = require dirname(__DIR__) . '/bootstrap.php';
+    $appBase = require __DIR__ . '/app_base.php';
+    $config = require $appBase . '/bootstrap.php';
 }
 
 header('Content-Type: text/html; charset=utf-8');

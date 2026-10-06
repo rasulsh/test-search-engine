@@ -1,0 +1,4 @@
+# Safety net, not a substitute for the layout: the app tree (config.php, src/,
+# data/, ...) belongs ABOVE the web root. If it ever lands under one, nothing
+# here is downloadable. public/.htaccess re-opens public/ when it is served.
+Require all denied

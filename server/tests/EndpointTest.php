@@ -150,6 +150,14 @@ final class EndpointTest extends TestCase
         }
     }
 
+    public function testRoutesByFileNameSoASubfolderDeployWorks(): void
+    {
+        [$status, $body] = $this->request('GET', '/search-api/health');
+
+        self::assertSame(200, $status);
+        self::assertSame('ok', json_decode((string) $body, true)['status']);
+    }
+
     public function testUnknownPathReturns404(): void
     {
         [$status, $body] = $this->request('GET', '/does-not-exist');

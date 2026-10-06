@@ -13,8 +13,8 @@ The HTTP surface of the service and the read-only tools around it. The exact req
 
 The exact request/response JSON, headers, status codes, and every error and
 `invalid_bundle` reason are in [`INTEGRATION.md`](../INTEGRATION.md#http-contract).
-On a subdirectory deploy, call the scripts directly (`/search-api/search.php`,
-and so on). The front controller's pretty paths only route at a web root.
+Both forms work, at a web root or under a subfolder: `/search-api/search` and
+`/search-api/search.php` (and so on); `public/.htaccess` routes the former.
 
 ## Search logs and ranking debug
 

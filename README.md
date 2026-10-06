@@ -32,7 +32,12 @@ A standalone two-tier product-search service for an OpenCart 2.0.3.1 storefront 
    ```bash
    python pipeline/release.py --csv export.csv --out release.zip
    ```
-3. **First deploy on cPanel:** create a database, extract `release.zip` into `~/search-service/server/`, expose `server/public/` as `public_html/search-api`, open `/search-api/install.php`, fill in the form, then delete `install.php` ([docs/DEPLOY.md](docs/DEPLOY.md#one-time-setup-cpanel-host)).
+3. **First deploy on cPanel:** create a database, extract `release.zip` into `~/search-service/server/` (outside the web root), point the document root at `server/public` (preferred: a subdomain whose Document Root is `.../server/public`; fallback: a symlink or the public files in a `public_html` subfolder plus `SEARCH_APP_BASE`), open `install.php`, fill in the form, then **delete `install.php`** ([docs/DEPLOY.md](docs/DEPLOY.md#layout)).
+
+   ```
+   ~/search-service/server/      app base: src/, config.php, data/, ...  (never web-accessible)
+   └── public/                   the ONLY folder served (document root)
+   ```
 4. **Semantic tier (optional):** set up the VM and load `vps_vectors/` there ([vps/README.md](vps/README.md)), then enter its URL and token in the installer or `config.php`. Until then search is keyword-only.
 5. **Storefront:** install the snippet from [INTEGRATION.md](INTEGRATION.md#storefront-reference). It sends only the query text.
 
@@ -49,7 +54,7 @@ curl -sS -X POST https://shop.example.com/search-api/search.php \
 curl -sS https://shop.example.com/search-api/health.php
 ```
 
-On a subdirectory deploy call the scripts directly, as above (pretty paths only route at a web root). Request and response shapes, every endpoint and the error codes: [docs/SEARCH-API.md](docs/SEARCH-API.md) and [INTEGRATION.md](INTEGRATION.md#http-contract). To try the service by hand, open `/search-api/test.html`.
+On a subfolder deploy both forms work (`/search-api/search` and `/search-api/search.php`). Request and response shapes, every endpoint and the error codes: [docs/SEARCH-API.md](docs/SEARCH-API.md) and [INTEGRATION.md](INTEGRATION.md#http-contract). To try the service by hand, open `/search-api/test.html`.
 
 ## Development
 

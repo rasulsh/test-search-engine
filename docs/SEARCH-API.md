@@ -49,6 +49,70 @@ blended relevance, every boost (`stock`, `popularity`, `brand`, `category`,
 and is never written to the log. The search test page shows it under each card
 when opened as `test.html?debug` and given the token.
 
+## Search analytics
+
+<a id="analytics"></a>`public/analytics.php` (`GET /analytics` or `/analytics.php`, M31) turns the
+same `search_logs` table into read-only aggregates, with no schema change beyond
+one index (`idx_ts_result`, see [DEPLOY.md](DEPLOY.md#upgrading-to-m31)). It is the
+logs page's sibling: it **reuses `logs.token`** (header `X-Logs-Token`, or
+`?token=…` with the same caveats; `503` while no token is set, `401` without a
+valid one, `405` for anything but `GET`), sends the same `no-store`, `noindex`,
+`X-Frame-Options` and CSP headers, escapes every value and runs only `SELECT`s.
+`customer_id` and `raw_q` stay admin-only behind that token; the dashboard adds
+no new PII surface (it shows queries, never customer ids).
+
+| parameter | values | meaning |
+| --- | --- | --- |
+| `window` | `24h`, `7d` (default), `30d`, `90d`, `all` | the time range, counted back from the database clock; an unknown value means `7d` |
+| `format` | `json` | the same data as JSON instead of the HTML dashboard |
+
+The HTML dashboard (English, tables and numeric tiles, no JavaScript) shows the
+tiles (searches, zero-result rate, cache hit rate, hybrid share, average and p95
+latency), **Top queries**, **Zero-result queries**, the tier / cache breakdown,
+latency (average, p50, p95, max) and volume per day (per hour for `24h`).
+
+`?format=json` returns (one object; lists hold at most 20 rows):
+
+```json
+{
+  "window": "7d", "since": "2026-09-29 10:00:00",
+  "summary": {"total": 812, "zero_results": 37, "zero_rate": 4.6, "avg_results": 11.2},
+  "cache": {"total": 812, "hits": 240, "misses": 572, "hit_rate": 29.6},
+  "tier": {"total": 812, "keyword_only": 90, "hybrid": 722, "hybrid_share": 88.9,
+           "with_vector": 722, "vector_share": 88.9},
+  "latency": {"count": 812, "avg": 61.3, "p50": 48, "p95": 140, "max": 420},
+  "did_you_mean": {"total": 812, "suggested": 29, "share": 3.6},
+  "top_queries": [{"query": "far cry", "searches": 41, "last_seen": "2026-10-05 21:40:02"}],
+  "zero_result_queries": [{"query": "فارکرای ۶", "searches": 5, "last_seen": "2026-10-05 18:12:44"}],
+  "volume": [{"bucket": "2026-10-04", "searches": 118}]
+}
+```
+
+`since` is `null` for `all`. Percentiles are nearest-rank over the window.
+**Grouping caveat:** queries are grouped by their *normalized* form (the raw text
+when that is empty), so spelling variants that normalize alike merge, but
+cross-script aliases (`far cry` and `فارکرای`) stay separate rows. That is
+expected, and read next to the [alias file](SEARCH-BEHAVIOR.md#aliases) it is a
+signal: two rows for one product means an alias is missing.
+
+**Reading the numbers.**
+- *Zero-result rate rising*, or a frequent query in the zero-result list: shoppers
+  ask for something the catalog or the matching does not cover. Add an alias or
+  tag for a name variant, check the catalog for a missing product, and re-read
+  the list after the next reload. A one-off typo is noise; repeats are the gap.
+- *Cache hit rate low* (with the cache on): queries rarely repeat inside the TTL
+  (`redis.ttl`), the prefix keeps being flushed, or Redis is failing (look for
+  `error_log` lines); a near-zero rate with Redis off is normal. Latency is read
+  with the hit rate: hits answer in a few ms, so a high rate pulls the average
+  down while p95 shows the misses.
+- *Hybrid share low*: the VPS is slow, down or not configured (every miss of the
+  semantic tier is a keyword-only answer); compare `vector_share` and the VPS's
+  own health.
+- *p95 latency near the 200 ms budget*: look at the Slowest view of the logs page
+  for the queries behind it.
+- *Did-you-mean share high*: many typos; check the suggestions are accepted
+  (the storefront applies them) and that the spellcheck dictionary is current.
+
 ## Eval harness
 
 `server/tools/eval.php` runs the labeled queries in `fixtures/eval_queries.json`

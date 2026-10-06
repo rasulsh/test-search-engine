@@ -35,7 +35,7 @@ to be literally `public_html`.
     ├── data/  data_incoming/  data_old/
     ├── .htaccess                  safety net: Require all denied
     └── public/    <──────────── the document root points HERE
-        ├── index.php  search.php  health.php  reload.php  logs.php   (analytics.php once M31 lands)
+        ├── index.php  search.php  health.php  reload.php  logs.php   analytics.php
         ├── app_base.php  .htaccess  test.html (optional)
         └── install.php            first setup only: delete it right after
 ```
@@ -379,6 +379,26 @@ once, so this never recurs: delete the `'normalization_version'` line from
 `server/config.php` (and its `'model'` section if nothing else is left in it); the
 code default then follows the deployed rules. `php tools/config-check.php --verbose`
 shows it as a code default.
+
+<a id="upgrading-to-m31"></a>**Upgrading to M31 (search analytics).** Server code
+only (upload the new `server/`); the page `analytics.php` reuses `logs.token`, so an
+installation that already has a logs token needs no config edit. `/reload` never
+touches `search_logs` (like the column back-fill in `Logger.php`), so add the one
+supporting index to the live table yourself, once. It is idempotent
+(MariaDB):
+
+```sql
+ALTER TABLE search_logs ADD INDEX IF NOT EXISTS idx_ts_result (ts, result_count);
+```
+
+Without it the pages still work; the zero-result and grouped queries just scan
+more rows on a large log. `db/schema.sql` carries the index for new installs.
+
+**Log retention (optional, operator-run).** `search_logs` grows with traffic and
+nothing prunes it, on purpose: no daemon runs on the cPanel host. When the table
+gets large, delete old rows by hand or from a cPanel cron you own, for example
+`DELETE FROM search_logs WHERE ts < NOW() - INTERVAL 180 DAY;` (what the analytics
+windows cannot see any more is gone for good; `all` then means "since the prune").
 
 <a id="upgrading-to-m23"></a>**Upgrading to M23 (spacing + soft AND).** Two parts with
 different deploy needs; `normalization_version`, the models and the dimensions

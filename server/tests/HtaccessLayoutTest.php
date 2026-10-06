@@ -37,12 +37,15 @@ final class HtaccessLayoutTest extends TestCase
         foreach (['X-Robots-Tag', 'X-Frame-Options "DENY"', 'Referrer-Policy'] as $header) {
             self::assertStringContainsString($header, $htaccess);
         }
-        self::assertStringContainsString('RewriteRule ^(search|health|reload|logs)/?$ index.php [L]', $htaccess);
+        self::assertStringContainsString(
+            'RewriteRule ^(search|health|reload|logs|analytics)/?$ index.php [L]',
+            $htaccess
+        );
     }
 
     public function testEveryEntryPointResolvesTheAppBaseThroughAppBase(): void
     {
-        foreach (['index', 'search', 'health', 'reload', 'logs', 'install'] as $name) {
+        foreach (['index', 'search', 'health', 'reload', 'logs', 'analytics', 'install'] as $name) {
             $php = (string) file_get_contents(dirname(__DIR__) . "/public/{$name}.php");
             self::assertStringContainsString("__DIR__ . '/app_base.php'", $php, "{$name}.php");
             self::assertStringNotContainsString("dirname(__DIR__) . '/bootstrap.php'", $php, "{$name}.php");

@@ -76,5 +76,7 @@ CREATE TABLE IF NOT EXISTS search_logs (
     -- M26: 1 when the result came from the Redis result cache (Logger.php adds it).
     cache_hit    TINYINT(1)      NOT NULL DEFAULT 0,
     PRIMARY KEY (id),
-    KEY idx_ts (ts)
+    KEY idx_ts (ts),
+    -- M31: keeps the analytics zero-result window scan and grouped counts cheap.
+    KEY idx_ts_result (ts, result_count)
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_unicode_ci;

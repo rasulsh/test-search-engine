@@ -2,7 +2,7 @@
 
 /**
  * Front controller. Tiny by design: parse the path, dispatch to a handler.
- * Serves GET /health, POST /search, POST /reload and GET /logs (token-protected).
+ * Serves GET /health, POST /search, POST /reload and GET /logs, GET /analytics (token-protected).
  */
 
 declare(strict_types=1);
@@ -31,6 +31,10 @@ switch ($route) {
     case 'logs':
     case 'logs.php':
         require __DIR__ . '/logs.php';
+        break;
+    case 'analytics':
+    case 'analytics.php':
+        require __DIR__ . '/analytics.php';
         break;
     default:
         header('Content-Type: application/json; charset=utf-8');

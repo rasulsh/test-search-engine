@@ -21,8 +21,10 @@ venv/
 .ruff_cache/
 
 # Server runtime data: active bundle + staging + rollback backup (never committed)
-/server/data/
-/server/data_incoming/
+/server/data/*
+!/server/data/.htaccess
+/server/data_incoming/*
+!/server/data_incoming/.htaccess
 /server/data_old/
 
 # Index bundles produced offline

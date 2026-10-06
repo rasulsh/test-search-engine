@@ -88,6 +88,8 @@ abstraction layers.
 │   └── tests/
 ├── server/                       # cPanel (PHP 8.x, no framework)
 │   ├── public/
+│   │   ├── app_base.php          # app base: SEARCH_APP_BASE else parent of public/ (M30)
+│   │   ├── .htaccess             # re-opens public/, dotfile deny, headers, routes (M30)
 │   │   ├── index.php             # front controller / router
 │   │   ├── search.php            # POST /search
 │   │   ├── health.php            # GET /health
@@ -310,6 +312,13 @@ wait for review before starting the next.
   never lacks a key. `ConfigDoctor` + `tools/config-check.php` + the `/health`
   `config` section report ERROR (missing required, bad type) and WARN (unknown key,
   half-configured feature) by key path only. Docs and `.env.example` follow.
+
+- **M30 — cPanel deployment structure:** `server/public/` is the document root and
+  stays a child of `server/` (documented layout, two cPanel patterns), `app_base.php`
+  resolves the app base (`SEARCH_APP_BASE` else `dirname(__DIR__)`, clear 500 when
+  missing), deny-all `.htaccess` safety nets (`server/`, `data/`, `data_incoming/`)
+  shipped in `release.zip`, `public/.htaccess` (headers, routing), DEPLOY.md layout,
+  one-time setup and go-live exposure checks.
 
 - **M22 — Offline build speed + reliable export:** `pipeline/db_export.py`
   (direct DB -> CSV, replaces the phpMyAdmin export), GPU/fp16/batch-configured

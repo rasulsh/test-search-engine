@@ -13,7 +13,7 @@ use App\Installer;
 use App\InstallerException;
 use App\InstallPage;
 
-$serverDir = dirname(__DIR__);
+$serverDir = require __DIR__ . '/app_base.php';
 
 header('Content-Type: text/html; charset=utf-8');
 header('Cache-Control: no-store');

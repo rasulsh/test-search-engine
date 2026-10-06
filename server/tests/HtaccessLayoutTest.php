@@ -37,7 +37,10 @@ final class HtaccessLayoutTest extends TestCase
         foreach (['X-Robots-Tag', 'X-Frame-Options "DENY"', 'Referrer-Policy'] as $header) {
             self::assertStringContainsString($header, $htaccess);
         }
-        self::assertStringContainsString('RewriteRule ^(search|health|reload|logs|analytics)/?$ index.php [L]', $htaccess);
+        self::assertStringContainsString(
+            'RewriteRule ^(search|health|reload|logs|analytics)/?$ index.php [L]',
+            $htaccess
+        );
     }
 
     public function testEveryEntryPointResolvesTheAppBaseThroughAppBase(): void

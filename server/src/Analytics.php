@@ -236,7 +236,9 @@ final class Analytics
 
         return array_map(
             static fn (array $r): array => [
-                'query' => (string) $r['q'], 'searches' => (int) $r['searches'], 'last_seen' => (string) $r['last_seen'],
+                'query' => (string) $r['q'],
+                'searches' => (int) $r['searches'],
+                'last_seen' => (string) $r['last_seen'],
             ],
             $stmt->fetchAll(PDO::FETCH_ASSOC)
         );

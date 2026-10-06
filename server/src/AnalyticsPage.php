@@ -104,7 +104,8 @@ final class AnalyticsPage
             . 'th,td{border:1px solid #ddd;padding:4px 8px;text-align:start;vertical-align:top}'
             . 'th{background:#f4f4f4}td.n{text-align:end}'
             . '</style></head><body><h1>Search analytics</h1><nav>' . $nav . '</nav>'
-            . '<p>' . $e(self::LABELS[$report['window']]) . ($report['since'] !== null ? ', since ' . $e($report['since']) : '')
+            . '<p>' . $e(self::LABELS[$report['window']])
+            . ($report['since'] !== null ? ', since ' . $e($report['since']) : '')
             . '</p><div class="tiles">' . $tileHtml . '</div>'
             . '<h2>Top queries</h2>' . $top
             . '<h2>Zero-result queries</h2>' . $zero

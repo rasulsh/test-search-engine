@@ -34,7 +34,7 @@ if (($_SERVER['REQUEST_METHOD'] ?? 'GET') !== 'GET') {
     return;
 }
 
-$configuredToken = (string) ($config['logs']['token'] ?? '');
+$configuredToken = (string) $config['logs']['token'];
 if ($configuredToken === '') {
     $notice(503, 'Logs page disabled: set SEARCH_LOGS_TOKEN');
     return;
@@ -57,7 +57,7 @@ try {
     $page = new LogsPage(
         $db->pdo(),
         (string) $config['db']['search_logs_table'],
-        (int) ($config['logs']['page_size'] ?? 50)
+        (int) $config['logs']['page_size']
     );
     $data = $page->fetch((string) ($_GET['view'] ?? 'recent'), (int) ($_GET['page'] ?? 1));
 } catch (Throwable) {

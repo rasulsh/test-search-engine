@@ -5,11 +5,14 @@
  * namespace (the server must run with no Composer runtime dependencies) and
  * returns the configuration array.
  *
- * Prefers server/config.php; falls back to the committed example so the app is
- * runnable out of the box in dev.
+ * The configuration is App\Config's defaults with server/config.php's
+ * overrides merged over them; without a config.php the app still starts on the
+ * defaults (the doctor and /health report the missing credentials).
  */
 
 declare(strict_types=1);
+
+use App\Config;
 
 spl_autoload_register(static function (string $class): void {
     $prefix = 'App\\';
@@ -23,8 +26,4 @@ spl_autoload_register(static function (string $class): void {
     }
 });
 
-$configFile = is_file(__DIR__ . '/config.php')
-    ? __DIR__ . '/config.php'
-    : __DIR__ . '/config.example.php';
-
-return require $configFile;
+return Config::load(Config::file());

@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Tests;
 
+use App\Config;
 use App\Keyword;
 use App\Reload;
 use App\ReloadException;
@@ -37,14 +38,13 @@ final class ReloadTest extends DatabaseTestCase
     /** @param array<string, mixed> $model @return array<string, mixed> */
     private function config(string $dataDir, string $incomingDir, array $model = []): array
     {
-        return [
+        return Config::merge([
             'paths' => ['data' => $dataDir, 'data_incoming' => $incomingDir],
-            'db' => ['products_table' => 'products'],
             'model' => array_merge(
                 ['name' => 'intfloat/multilingual-e5-small', 'dim' => self::DIM, 'normalization_version' => 2],
                 $model
             ),
-        ];
+        ]);
     }
 
     private function newTempDir(string $suffix): string

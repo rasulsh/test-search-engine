@@ -27,7 +27,7 @@ keyword search, one bounded HTTP call to the VPS, and the merge.
 the cPanel-to-VPS call is framed around a short timeout. The final target is a
 self-hosted VM on the owner's own ESXi server on the LAN, well-resourced, so
 that call is expected to be fast and reliable there. The safety net stays
-regardless: `SEARCH_VPS_TIMEOUT_MS` (default 300) bounds the call and any
+regardless: `vps.timeout_ms` (default 300) bounds the call and any
 failure serves keyword-only results.
 
 ## Repository layout
@@ -67,7 +67,7 @@ Tier 2 adds cross-language recall on top of keyword search. It is purely
 additive: keyword-only requests are unchanged.
 
 **Query embedding and cosine top-K — on the VPS (M18).** `search.php` POSTs
-`{q, limit: SEARCH_SEMANTIC_TOP_K, min_score: SEARCH_SEMANTIC_MIN_SCORE}` to
+`{q, limit: search.semantic_top_k, min_score: search.semantic_min_score}` to
 `SEARCH_VPS_URL` + `/search-vectors` with the bearer token
 (`server/src/VpsClient.php`, curl). The VPS embeds the raw query with bge-m3
 and scans every product vector (global brute force, which is what delivers
@@ -75,7 +75,7 @@ cross-language recall; ~8 ms for 20k × 1024 there) and returns the neighbours
 at or above the floor, best first. cPanel re-applies the floor, drops ids the
 `products` table does not hold, and fuses the rest with the keyword hits
 (`server/src/Ranker.php`). The whole call is bounded by
-`SEARCH_VPS_TIMEOUT_MS` (default 300, connect included). Unreachable, timed
+`vps.timeout_ms` (default 300, connect included). Unreachable, timed
 out, non-`200` or malformed: the request is answered keyword-only, logs
 `search: semantic tier unavailable (<reason>); served keyword-only results` to
 the PHP error log, and writes `had_vector = 0` in `search_logs`. Nothing about
@@ -84,7 +84,7 @@ tier: cPanel to VPS".
 
 **Relevance floor.** The nearest vectors of a query with no relevant product
 are still unrelated items (on the real catalog, "ball bearing" returned case
-fans). Neighbours with cosine below `SEARCH_SEMANTIC_MIN_SCORE` are dropped,
+fans). Neighbours with cosine below `search.semantic_min_score` are dropped,
 and a query with no keyword hit and nothing above the floor returns an empty
 result instead of `limit` far neighbours. The default is **0.4, on bge-m3's
 scale** (M18): e5's old 0.82 would drop nearly every bge-m3 neighbour, and a
@@ -159,11 +159,11 @@ vendor/bin/phpunit
 - [ ] **M14.1** — `release.py` downloads the browser assets itself when `client/` lacks them (cached; `--no-model` skips), so one command builds a complete release. `desc_index_chars` leaves the installer and server config and becomes `release.py --desc-index-chars`.
 - [ ] **M15.1** — `normalization_version` in `config.php` (and the installer prefill) defaults to the code's `Normalizer::VERSION`, and the pipeline always stamps its own `NORMALIZATION_VERSION`, so a rules bump reloads with no config edit.
 - [ ] **M17** — VPS vector service (`vps/`): bge-m3 (ONNX, CPU) query embedding, `POST /search-vectors` global cosine top-K with a score floor, token auth, validated atomic `POST /reload`, `GET /health`, `setup.sh` + systemd; `build.py` / `release.py --vps-out` produce its bge-m3 product vectors.
-- [ ] **M16** — Multi-word queries require every word across title, specs and description (per alias variant), ranked title band, spec band (no title match), description-only, then score; best-partial fallback when nothing holds every word; semantic neighbours not appended to all-words hits (`SEARCH_REQUIRE_ALL_TERMS`, default on).
+- [ ] **M16** — Multi-word queries require every word across title, specs and description (per alias variant), ranked title band, spec band (no title match), description-only, then score; best-partial fallback when nothing holds every word; semantic neighbours not appended to all-words hits (`search.require_all_terms`, default on).
 - [ ] **M18** — Semantic tier from the VPS: `/search` POSTs the query server-to-server to the VPS `/search-vectors` (`SEARCH_VPS_URL` / `_TOKEN` / `_TIMEOUT_MS`, `min_score` = the cPanel floor, now 0.4 for bge-m3), RRF-merges the neighbours as before, and falls back to logged keyword-only results when the VPS is off, down, slow or failing. The browser model is gone (`client/`, `fetch_web_model.py`, the model in `release.zip`, `q_vector`); the test page and storefront snippet send only `{q}`.
-- [ ] **M20** — Blended hybrid ranking: relevance = keyword_weight × keyword_norm + semantic_weight × semantic_norm with a combined floor (`SEARCH_KEYWORD_WEIGHT` / `_SEMANTIC_WEIGHT` / `_MIN_RELEVANCE`); replaces the keyword-first tiers, RRF and the description-only gate. Server-only.
+- [ ] **M20** — Blended hybrid ranking: relevance = keyword_weight × keyword_norm + semantic_weight × semantic_norm with a combined floor (`search.keyword_weight` / `_SEMANTIC_WEIGHT` / `_MIN_RELEVANCE`); replaces the keyword-first tiers, RRF and the description-only gate. Server-only.
 - [ ] **M21** — Catalog tags (`oc_tag` / `oc_product_tag`, exported as `tags`) end to end: `normalized_tags` in the FULLTEXT index (weighted just below the title) and the embedding passage, learned by "did you mean"; brand and category as searched fields (`normalized_brand`, `normalized_category`) with config-driven weights; brand / category / tag-phrase ranking boosts after the floor; `search_logs` gains `did_you_mean` and `tier`; read-only token-protected `logs.php` (recent, zero-result, slowest); token-guarded `debug` score breakdown on `/search`; `release.py` also builds the VPS vectors and prints the deploy commands for both hosts. `normalization_version`, model and dim unchanged.
-- [ ] **M23** — Recall: collapsed names (`normalized_collapsed`, `Normalizer::collapse` / `normalize.collapse` with a shared parity fixture; a schema change, rebuild + reload) so `farcry` = `far cry` = `Far Cry`, `dualsense` = `dual sense`; soft AND (full-coverage hits first, partial-coverage top-up when fewer than `SEARCH_SOFT_AND_MIN_RESULTS`, penalized, server-only); alias variants matched in title, tags, brand, category and specs (FULLTEXT-sized tokens) and an all-terms-swapped variant for multi-alias queries; eval cases (negative queries supported).
+- [ ] **M23** — Recall: collapsed names (`normalized_collapsed`, `Normalizer::collapse` / `normalize.collapse` with a shared parity fixture; a schema change, rebuild + reload) so `farcry` = `far cry` = `Far Cry`, `dualsense` = `dual sense`; soft AND (full-coverage hits first, partial-coverage top-up when fewer than `search.soft_and_min_results`, penalized, server-only); alias variants matched in title, tags, brand, category and specs (FULLTEXT-sized tokens) and an all-terms-swapped variant for multi-alias queries; eval cases (negative queries supported).
 - [ ] **M22** — Offline build: `pipeline/db_export.py` exports the catalog straight from the OpenCart DB (server-side cursor, MariaDB `max_statement_time`, this shop's single-language / `meta_title` query) as the recommended step 1, phpMyAdmin CSV demoted to a warned fallback, plus a low-row-count guard in `build.py`; `RealEmbedder` picks cuda/cpu, fp16 on GPU, a configurable batch size and shows progress (`SEARCH_EMBED_*`, [PIPELINE.md](PIPELINE.md#where-to-build-gpu) and [TRAINING-COLAB.md](TRAINING-COLAB.md)); `db_export.py` stays Python 3.6-compatible (it runs on the cPanel server); `release.py` builds the unread cPanel `vectors.bin` with the mock embedder (`SEARCH_BUNDLE_EMBEDDER`). No contract, model, dim or normalization change.
 - [ ] **M24** — Documentation restructure: the README is a short onboarding with a documentation index; the technical detail lives in `docs/` (this folder), including the new Colab rebuild / retrain runbook `TRAINING-COLAB.md`. Docs only, no behavior change.
 - [ ] **M25** — Offline alias generator: `pipeline/gen_aliases.py` asks an OpenAI-compatible LLM for the Persian spellings of the catalog's English brand / title names, writes candidates for human review and `--merge`s the reviewed ones into `aliases.json` ([ALIASES.md](ALIASES.md)). Prep-time only; the search path is unchanged.
@@ -177,4 +177,5 @@ vendor/bin/phpunit
 - Conventional Commits; PSR-12 (PHP) and ruff-clean (Python); English only.
 
 See `CLAUDE.md` §9–§11 for the full workflow and coding standards.
-- [ ] **M28** — Facet queries: a spec-only query term held by at least `SEARCH_FACET_MIN_PRODUCTS` products' specs (a genre / feature value, e.g. "شوتر") counts as solid, so its hits skip the relevance floor; rarer spec mentions stay weak. Query-time count, server-only, no rebuild.
+- [ ] **M28** — Facet queries: a spec-only query term held by at least `search.facet_min_products` products' specs (a genre / feature value, e.g. "شوتر") counts as solid, so its hits skip the relevance floor; rarer spec mentions stay weak. Query-time count, server-only, no rebuild.
+- [ ] **M29** — Config layering + doctor: `App\Config` owns the schema, types and every default; `config.php` holds only overrides (deep-merged over them), so code reads keys without a fallback. `App\ConfigDoctor`, `server/tools/config-check.php` and the `/health` `config` section report missing required keys, bad types, unknown keys and half-configured features by key path only. No search behavior change.

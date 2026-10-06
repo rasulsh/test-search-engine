@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Tests;
 
 use App\Cache;
+use App\Config;
 use App\Identifier;
 use App\Keyword;
 use App\Logger;
@@ -245,14 +246,8 @@ final class SearchControllerCacheTest extends DatabaseTestCase
 
     public function testFromConfigWiresTheCacheOnlyWhenEnabled(): void
     {
-        $config = [
-            'search' => [
-                'min_token_size' => 3, 'default_limit' => 20, 'stock_boost' => 0.1,
-                'popularity_boost' => 0.1, 'semantic_top_k' => 100,
-            ],
-            'db' => ['products_table' => 'products', 'search_logs_table' => 'search_logs'],
-            'paths' => ['data' => sys_get_temp_dir() . '/no-such-data-dir'],
-        ];
+        $config = Config::defaults();
+        $config['paths']['data'] = sys_get_temp_dir() . '/no-such-data-dir';
 
         SearchController::fromConfig($this->pdo, $config)->search(['q' => 'macbook']);
         self::assertSame([], $this->redis->data);

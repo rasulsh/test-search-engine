@@ -48,15 +48,14 @@ final class CacheEndpointTest extends TestCase
         fclose($probe);
         $this->baseUrl = "http://127.0.0.1:{$port}";
         $env = getenv() + [];
-        $env['SEARCH_DB_DSN'] = $dsn;
-        $env['SEARCH_DB_USER'] = $user;
-        $env['SEARCH_DB_PASSWORD'] = $password;
-        $env['SEARCH_DATA_DIR'] = $this->dataDir;
-        $env['SEARCH_REDIS_ENABLED'] = '1';
-        $env['SEARCH_REDIS_HOST'] = '127.0.0.1';
-        $env['SEARCH_REDIS_PORT'] = (string) $this->redis->port;
-        $env['SEARCH_REDIS_AUTH'] = 'cache-pw';
-        $env['SEARCH_REDIS_TTL'] = '60';
+        $env['SEARCH_CONFIG_FILE'] = TempConfig::write([
+            'db' => ['dsn' => $dsn, 'user' => $user, 'password' => $password],
+            'paths' => ['data' => $this->dataDir],
+            'redis' => [
+                'enabled' => true, 'host' => '127.0.0.1', 'port' => $this->redis->port,
+                'auth' => 'cache-pw', 'ttl' => 60,
+            ],
+        ]);
         $this->process = proc_open(
             [PHP_BINARY, '-S', "127.0.0.1:{$port}", '-t', $root . '/server/public', $root . '/server/public/index.php'],
             [0 => ['pipe', 'r'], 1 => ['file', '/dev/null', 'w'], 2 => ['file', '/dev/null', 'w']],

@@ -106,9 +106,8 @@ final class SearchController
 
     /**
      * The production wiring shared by POST /search and the eval harness, so the
-     * harness measures exactly the knobs /search serves. Search keys missing
-     * from an older config.php fall back to the documented defaults (no `vps`
-     * section: keyword-only).
+     * harness measures exactly the knobs /search serves. $config is a loaded
+     * App\Config array, so every key is present.
      *
      * @param array<string, mixed> $config the server config array
      * @param VpsClient|null $vps replaces the client built from $config['vps'] (tests)
@@ -118,8 +117,8 @@ final class SearchController
     {
         $search = $config['search'];
         $productsTable = $config['db']['products_table'];
-        $maxDistance = (int) ($search['suggest_max_distance'] ?? 2);
-        $minFrequency = (int) ($search['suggest_min_frequency'] ?? 2);
+        $maxDistance = (int) $search['suggest_max_distance'];
+        $minFrequency = (int) $search['suggest_min_frequency'];
 
         $keyword = new Keyword(
             $pdo,
@@ -127,24 +126,24 @@ final class SearchController
             (int) $search['min_token_size'],
             (int) $search['default_limit'],
             null,
-            (float) ($search['title_weight'] ?? 10.0),
-            (float) ($search['desc_weight'] ?? 1.0),
-            (float) ($search['phrase_bonus'] ?? 5.0),
-            (int) ($search['sku_prefix_min_length'] ?? 4),
-            (float) ($search['spec_weight'] ?? 6.0),
-            Synonyms::fromDirectory($config['paths']['data'], (int) ($search['synonyms_max_group_size'] ?? 4)),
-            (int) ($search['alias_max_variants'] ?? 6),
-            (bool) ($search['require_all_terms'] ?? true),
-            (float) ($search['tag_weight'] ?? 8.0),
-            (float) ($search['brand_weight'] ?? 7.0),
-            (float) ($search['category_weight'] ?? 5.0),
-            (float) ($search['collapse_weight'] ?? 9.0),
-            (int) ($search['collapse_min_length'] ?? 5),
-            (int) ($search['soft_and_min_results'] ?? 3),
-            (float) ($search['soft_and_min_coverage'] ?? 0.5),
-            (float) ($search['soft_and_partial_penalty'] ?? 0.5),
-            (int) ($search['soft_and_candidate_cap'] ?? 100),
-            (int) ($search['facet_min_products'] ?? 20)
+            (float) $search['title_weight'],
+            (float) $search['desc_weight'],
+            (float) $search['phrase_bonus'],
+            (int) $search['sku_prefix_min_length'],
+            (float) $search['spec_weight'],
+            Synonyms::fromDirectory($config['paths']['data'], (int) $search['synonyms_max_group_size']),
+            (int) $search['alias_max_variants'],
+            (bool) $search['require_all_terms'],
+            (float) $search['tag_weight'],
+            (float) $search['brand_weight'],
+            (float) $search['category_weight'],
+            (float) $search['collapse_weight'],
+            (int) $search['collapse_min_length'],
+            (int) $search['soft_and_min_results'],
+            (float) $search['soft_and_min_coverage'],
+            (float) $search['soft_and_partial_penalty'],
+            (int) $search['soft_and_candidate_cap'],
+            (int) $search['facet_min_products']
         );
         // The bundle dictionary is cached per worker (and in APCu); the table scan
         // is only a fallback for a data directory without spellcheck.txt.
@@ -198,23 +197,23 @@ final class SearchController
             $spellerFactory,
             null,
             10,
-            $vps ?? VpsClient::fromConfig($config['vps'] ?? []),
+            $vps ?? VpsClient::fromConfig($config['vps']),
             new Ranker(
                 (float) $search['stock_boost'],
                 (float) $search['popularity_boost'],
-                (float) ($search['keyword_weight'] ?? 0.4),
-                (float) ($search['semantic_weight'] ?? 0.6),
-                (float) ($search['min_relevance'] ?? 0.45),
-                (float) ($search['brand_match_boost'] ?? 0.15),
-                (float) ($search['category_match_boost'] ?? 0.1),
-                (float) ($search['tag_match_boost'] ?? 0.1),
-                (int) ($search['tag_match_min_tokens'] ?? 2)
+                (float) $search['keyword_weight'],
+                (float) $search['semantic_weight'],
+                (float) $search['min_relevance'],
+                (float) $search['brand_match_boost'],
+                (float) $search['category_match_boost'],
+                (float) $search['tag_match_boost'],
+                (int) $search['tag_match_min_tokens']
             ),
             $signalsProvider,
             (int) $search['semantic_top_k'],
             (int) $search['default_limit'],
-            (float) ($search['semantic_min_score'] ?? 0.4),
-            (int) ($search['suggest_min_results'] ?? 3),
+            (float) $search['semantic_min_score'],
+            (int) $search['suggest_min_results'],
             $cache ?? Cache::fromConfig($config)
         );
     }

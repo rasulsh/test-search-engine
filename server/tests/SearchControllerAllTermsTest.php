@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Tests;
 
+use App\Config;
 use App\Keyword;
 use App\Logger;
 use App\ProductLoader;
@@ -70,15 +71,11 @@ final class SearchControllerAllTermsTest extends DatabaseTestCase
     /** @param array<string, mixed> $search overrides of the search config */
     private function controller(array $search = [], bool $semantic = false): SearchController
     {
-        return SearchController::fromConfig($this->pdo, [
-            'db'     => ['products_table' => 'products', 'search_logs_table' => 'search_logs'],
-            'search' => $search + [
-                'default_limit' => 20, 'min_token_size' => 3, 'semantic_top_k' => 100,
-                'stock_boost' => 0.1, 'popularity_boost' => 0.1,
-                'semantic_min_score' => 0.82,
-            ],
-            'paths'  => ['data' => sys_get_temp_dir() . '/no-bundle-' . uniqid()],
-        ], $semantic ? FakeVps::client($this->vps) : null);
+        $config = Config::defaults();
+        $config['search'] = $search + ['semantic_min_score' => 0.82] + $config['search'];
+        $config['paths']['data'] = sys_get_temp_dir() . '/no-bundle-' . uniqid();
+
+        return SearchController::fromConfig($this->pdo, $config, $semantic ? FakeVps::client($this->vps) : null);
     }
 
     /** @return list<int> */
@@ -193,11 +190,10 @@ final class SearchControllerAllTermsTest extends DatabaseTestCase
         self::assertContains(self::RED_MOUSE, $ids);
     }
 
-    public function testRequireAllTermsDefaultsOnForAnOlderConfig(): void
+    public function testRequireAllTermsDefaultsOn(): void
     {
-        // The controller() config carries no require_all_terms key.
+        // The controller() config does not override require_all_terms.
         self::assertNotContains(self::BLACK_KEYBOARD, $this->ids('کیبورد قرمز'));
-        $example = require self::repoRoot() . '/server/config.example.php';
-        self::assertTrue($example['search']['require_all_terms']);
+        self::assertTrue(Config::defaults()['search']['require_all_terms']);
     }
 }

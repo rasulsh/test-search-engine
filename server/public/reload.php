@@ -26,7 +26,7 @@ if (($_SERVER['REQUEST_METHOD'] ?? 'GET') !== 'POST') {
     return;
 }
 
-$configuredToken = (string) ($config['reload']['token'] ?? '');
+$configuredToken = (string) $config['reload']['token'];
 if ($configuredToken === '') {
     http_response_code(503);
     echo json_encode(['error' => 'reload_disabled'], JSON_UNESCAPED_UNICODE);

@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Tests;
 
+use App\Config;
 use App\Keyword;
 use App\ProductLoader;
 use App\SearchController;
@@ -182,7 +183,7 @@ final class KeywordAliasTest extends DatabaseTestCase
     public function testSearchEndpointWiringExpandsFromTheDataDirectory(): void
     {
         /** @var array<string, mixed> $config */
-        $config = require self::repoRoot() . '/server/config.example.php';
+        $config = Config::defaults();
         $config['paths']['data'] = $this->dataDir;
         $config['db']['products_table'] = 'products';
         $config['db']['search_logs_table'] = 'search_logs';

@@ -81,7 +81,7 @@ the form. No config file editing, no separate model upload, no SSH needed.
    anything (`403`, "already installed"), so a later release that re-extracts
    it is harmless, but removing it keeps the surface small.
    `curl -sS https://shop.example.com/search-api/health.php` should now report
-   `product_count` equal to the catalog size. Set `SEARCH_MIN_TOKEN_SIZE` in
+   `product_count` equal to the catalog size. Set `search.min_token_size` in
    `config.php` if the host's `innodb_ft_min_token_size` is not 3
    (`SHOW VARIABLES LIKE 'innodb_ft_min_token_size'`).
 6. **Storefront.** Install the storefront snippet through the OpenCart module
@@ -89,10 +89,13 @@ the form. No config file editing, no separate model upload, no SSH needed.
    It sends only the query; nothing model-related is uploaded to the store.
 
 **Without the installer** (or to change settings later): `config.php` is a
-copy of `config.example.php` with the defaults after each `?:` (or in each
-`$setting(...)`) edited; every key is described in `.env.example`, and
-`SEARCH_*` environment variables still override the file where the host
-supports them. Import `db/schema.sql` yourself in that case.
+copy of `config.example.php` holding only your overrides: the database, tokens,
+VPS and storefront values, plus any tunable you change (add its key; every key
+and default is in [CONFIGURATION.md](CONFIGURATION.md#the-layered-server-config)).
+Anything not listed uses the code default. The example reads the connection
+settings and secrets from `SEARCH_*` environment variables (`.env.example`) where
+the host supports them. Run `php tools/config-check.php` afterwards. Import
+`db/schema.sql` yourself in that case.
 
 ### Every catalog update
 
@@ -143,11 +146,11 @@ bundle's `vectors.bin` with the mock embedder (see below) and packs one
 | in the zip | what |
 | --- | --- |
 | `data_incoming/` | the bundle: `vectors.bin`, `vectors.idx`, `products.load.sql`, `meta.json`, `spellcheck.txt`, `synonyms.json`, `aliases.json`, `keymap.json` |
-| `bootstrap.php`, `src/`, `public/` | the server code (including `public/install.php` and `public/test.html`) |
+| `bootstrap.php`, `src/`, `public/`, `tools/config-check.php` | the server code (including `public/install.php` and `public/test.html`) and the config doctor |
 | `config.example.php`, `db/schema.sql` | the installer's config template and schema |
 
 `config.php` is **never** in the zip, so unzipping never overwrites the
-server's configuration. Tests, tools, and local data are not packed either.
+server's configuration. Tests, local data and the other tools are not packed either.
 **The cPanel `vectors.bin` is a mock (M22).** `/search` has not read it since
 M18; `/reload` only checks `meta.json` (model, dim, normalization version),
 the file size and the checksum, and those all hold for deterministic mock vectors
@@ -158,8 +161,20 @@ real e5 vectors. The VPS vectors are always real (its `/reload` refuses mock
 ones). `build.py` run directly still follows `EMBEDDER`.
 
 `SEARCH_MODEL`, `SEARCH_MODEL_REVISION` and `SEARCH_MODEL_DIM` must match
-`server/config.php` (the reload rejects a mismatch). New config keys come with
+`server/config.php`'s `model.*` (code defaults: pin them there if you changed the
+build's; the reload rejects a mismatch). New config keys come with code
 defaults, so an older `config.php` keeps working.
+
+**Upgrading to M29 (layered config).** `config.php` now holds only overrides and
+the code owns every default ([CONFIGURATION.md](CONFIGURATION.md#the-layered-server-config)).
+An existing `config.php` (a full copy of the old example) keeps working
+unchanged: each of its entries is simply an override. Two things change:
+tunables are no longer read from `SEARCH_*` environment variables unless your
+`config.php` still lists them (the new example reads only the database, VPS URL
+and token, Redis connection, tokens and storefront bases); and `tools/config-check.php`
+ships in the zip. For a clean file, replace `config.php` with a copy of the new
+`config.example.php` carrying just your values, then run
+`php tools/config-check.php --verbose`.
 
 **Upgrading to M18 (semantic tier on the VPS).** An existing `config.php` has
 no `vps` section, so search stays keyword-only after the upgrade (the old
@@ -184,11 +199,21 @@ folder next to `test.html`: nothing reads them any more.
 
 ```bash
 cd ~/search-service/server && unzip -o ~/release.zip
+php tools/config-check.php      # exits non-zero on an ERROR: fix config.php first
 curl -sS -X POST -H "X-Reload-Token: $SEARCH_RELOAD_TOKEN" \
      "https://shop.example.com/search-api/reload.php?load=1"
 # {"ok":true,"count":20000,"model":"intfloat/multilingual-e5-small","dim":384}
-curl -sS https://shop.example.com/search-api/health.php   # product_count == count
+curl -sS https://shop.example.com/search-api/health.php   # product_count == count, config.ok true
 ```
+
+`config.php` survives every unzip, so the new code meets an old config. The
+config doctor turns that from a silent risk into a checked step: it reports a
+required key (`db.dsn`, `db.user`) that is missing, a value of the wrong type
+(ERROR, non-zero exit), an unknown key left over from a removed option and a
+half-configured feature such as `vps.url` without `vps.token` (WARN). Tunables
+added by a release need no edit: they take their code default, and
+`php tools/config-check.php --verbose` lists them. The same verdict is in
+`/health` under `config` (key paths only, never values).
 
 Without SSH: upload `release.zip` into `~/search-service/server/` with the
 cPanel File Manager, choose **Extract**, and allow it to overwrite, then run
@@ -267,7 +292,7 @@ random values, different from each other and from the reload token. New
 ranking keys (`tag_weight`, `brand_weight`, `category_weight`,
 `brand_match_boost`, `category_match_boost`, `tag_match_boost`,
 `tag_match_min_tokens`) default in code, so an older `config.php` keeps
-working; see `config.example.php` to change them. Add the brand pairs your
+working; add a key to `config.php` to change it ([CONFIGURATION.md](CONFIGURATION.md)). Add the brand pairs your
 shoppers type in the other script to `pipeline/aliases.json` before building
 (`["سامسونگ", "samsung"]`).
 
@@ -282,22 +307,16 @@ A release that changes the normalization rules (M15's Roman numerals made it
 version 3) needs **no config edit**: the pipeline stamps its own
 `NORMALIZATION_VERSION` into `meta.json`, and `config.php` defaults to the
 deployed code's `Normalizer::VERSION`, so the new code and its bundle always
-agree. The installer writes that default into `config.php` unless you type a
-different number, which pins it (as does setting `SEARCH_NORMALIZATION_VERSION`).
+agree. The installer writes nothing for it unless you type a different number,
+which pins it as a `model.normalization_version` override.
 
 A `config.php` written before M15.1 has the number hardcoded (`?: 2` or `?: 3`).
 If it says 2, the M15 bundle is refused with `normalization_version_mismatch`
 and **nothing is swapped**; if it says 3, the next rules bump would be. Edit it
-once, so this never recurs: replace the `'normalization_version'` line in
-`server/config.php` with
-
-```php
-        'normalization_version' => (int) (getenv('SEARCH_NORMALIZATION_VERSION') ?: \App\Normalizer::VERSION),
-```
-
-Deploy the code and reload together: until the reload the new code normalizes
-queries with the new rules against the old table (for M15, only queries
-containing a standalone Roman numeral are affected, and no aliases are served).
+once, so this never recurs: delete the `'normalization_version'` line from
+`server/config.php` (and its `'model'` section if nothing else is left in it); the
+code default then follows the deployed rules. `php tools/config-check.php --verbose`
+shows it as a code default.
 
 <a id="upgrading-to-m23"></a>**Upgrading to M23 (spacing + soft AND).** Two parts with
 different deploy needs; `normalization_version`, the models and the dimensions
@@ -315,11 +334,11 @@ are unchanged, so the bundle passes both reloads:
   the column, with no error. The VPS vectors do not change (the column is not part
   of the embedded text), so the VPS step may be skipped.
 
-Settings added (all optional): `SEARCH_SOFT_AND_MIN_RESULTS` (3),
-`SEARCH_SOFT_AND_MIN_COVERAGE` (0.5), `SEARCH_SOFT_AND_PARTIAL_PENALTY` (0.5),
-`SEARCH_SOFT_AND_CANDIDATE_CAP` (100), `SEARCH_COLLAPSE_WEIGHT` (9),
-`SEARCH_COLLAPSE_MIN_LENGTH` (5). A `config.php` written before M23 lacks them and
-falls back on those defaults; copy them from `config.example.php` to change them.
+Settings added (all optional): `search.soft_and_min_results` (3),
+`search.soft_and_min_coverage` (0.5), `search.soft_and_partial_penalty` (0.5),
+`search.soft_and_candidate_cap` (100), `search.collapse_weight` (9),
+`search.collapse_min_length` (5). A `config.php` written before M23 lacks them and
+falls back on those defaults; add a key to `config.php` to change it.
 
 ### Fallback: manual staging load
 
@@ -364,17 +383,17 @@ talks to it with an in-repo RESP client: no Composer package, no PHP extension.
    tunnel (WireGuard, stunnel) between the hosts, with `--redis-bind` set to the private address. The cache
    holds product ids only.
 2. **Point cPanel at it** (environment or `config.php`, see [CONFIGURATION.md](CONFIGURATION.md#result-cache-redis-section-m26)):
-   `SEARCH_REDIS_ENABLED=1`, `SEARCH_REDIS_HOST`, `SEARCH_REDIS_PORT`, `SEARCH_REDIS_AUTH`; add the `redis` block
-   from `config.example.php` to an older `config.php`.
+   `SEARCH_REDIS_ENABLED=1`, `SEARCH_REDIS_HOST`, `SEARCH_REDIS_PORT`, `SEARCH_REDIS_AUTH`; for an older
+   `config.php` add `'redis' => ['enabled' => true, 'host' => ..., 'port' => ..., 'auth' => ...]`.
 3. **Check** that it works: send the same `/search` twice and look at `logs.php`: the second row has
    `cache_hit = 1` (and a latency near 0).
 
-`POST /reload` empties the cache (every key under `SEARCH_REDIS_PREFIX`) after a successful swap and reports
+`POST /reload` empties the cache (every key under `redis.prefix`) after a successful swap and reports
 `"cache_flushed": true` (or `false`, with the swap still done, when Redis could not be reached: entries then
 expire with their TTL). To flush by hand after a settings change:
 `redis-cli -a <password> --scan --pattern 'search:cache:*' | xargs -r redis-cli -a <password> del`.
 
-If Redis stops, searches carry on uncached (each costs at most `SEARCH_REDIS_TIMEOUT_MS` extra, logged with
+If Redis stops, searches carry on uncached (each costs at most `redis.timeout_ms` extra, logged with
 `error_log`); to turn the cache off set `SEARCH_REDIS_ENABLED=0`.
 
 ### Rollback (one step)
@@ -419,13 +438,13 @@ M0–M5. Verify each item on the production host before wide rollout.
   (`vps/README.md`, "Model parity": `VPS_REAL_PARITY=1 pytest
   vps/tests/test_real_model.py`). Rerun it whenever either side's model, files
   or ONNX build change.
-- [ ] Tune `SEARCH_SEMANTIC_MIN_SCORE` (default 0.4 on bge-m3's scale; e5's
+- [ ] Tune `search.semantic_min_score` (default 0.4 on bge-m3's scale; e5's
   0.82 no longer applies) and the fusion weights on the real catalog: search
   known "no match" queries (e.g. ball bearing, shorts) and known good cross-language queries on the test page, read each
   card's cosine, and set the floor between them. Confirm with
   `server/tools/eval.php` in hybrid mode. Too high loses cross-language recall;
   too low brings back unrelated neighbours.
-- [ ] Tune `SEARCH_SPEC_WEIGHT` (default 6, between title 10 and description
+- [ ] Tune `search.spec_weight` (default 6, between title 10 and description
   1) with `server/tools/eval.php` on real attribute / feature queries (brands,
   refresh rates, sizes). Check the build's malformed-`feature` warning count on
   the real export, and that `attributes` is not cut at 1024 bytes.
@@ -435,9 +454,9 @@ M0–M5. Verify each item on the production host before wide rollout.
   check that tags (noisy: duplicate and test names) help more than they hurt,
   that the brand pairs shoppers use across scripts are in `aliases.json`, and
   that the table and its FULLTEXT index fit `innodb_buffer_pool_size`.
-- [ ] Tune the M23 settings on real queries (`SEARCH_SOFT_AND_MIN_RESULTS`,
-  `_MIN_COVERAGE`, `_PARTIAL_PENALTY`, `_CANDIDATE_CAP`, `SEARCH_COLLAPSE_WEIGHT`,
-  `SEARCH_COLLAPSE_MIN_LENGTH`) with the eval harness (the seed set has negative
+- [ ] Tune the M23 settings on real queries (`search.soft_and_min_results`,
+  `_MIN_COVERAGE`, `_PARTIAL_PENALTY`, `_CANDIDATE_CAP`, `search.collapse_weight`,
+  `search.collapse_min_length`) with the eval harness (the seed set has negative
   and joined / separated cases) and the `debug` breakdown. Confirm after the
   rebuild + reload that `normalized_collapsed` is populated, and measure latency
   of a zero-hit multi-word query that has alias variants of very common words
@@ -448,14 +467,14 @@ M0–M5. Verify each item on the production host before wide rollout.
 - [ ] Review the generated `synonyms.json` of the real build (M15 expands
   queries with it): a group joining unrelated categories through a shared junk
   `model` code would add their products to each other's results. Lower
-  `SEARCH_SYNONYMS_MAX_GROUP_SIZE`, or fix the `model` values, if so.
+  `search.synonyms_max_group_size`, or fix the `model` values, if so.
 
 **Blocking: host capacity and latency**
 - [ ] **Real latency on cPanel** for keyword-only and hybrid requests, measured
   with `latency_ms` in `search_logs` and end-to-end from the storefront, against
   the 200 ms budget. Hybrid now adds one cPanel→VPS round trip (network +
   bge-m3 query embedding, ~50–100 ms end to end on a dev VM, never measured
-  between the real hosts). Pick `SEARCH_VPS_TIMEOUT_MS` from the measured p95:
+  between the real hosts). Pick `vps.timeout_ms` from the measured p95:
   too low turns slow VPS answers into keyword-only results (watch for
   `semantic tier unavailable (timeout)` in the PHP error log), too high lets a
   sick VPS slow every search. With the final target (the VPS as a self-hosted VM
@@ -478,7 +497,7 @@ M0–M5. Verify each item on the production host before wide rollout.
   `innodb_ft_min_token_size`) use the LIKE fallback, about 150 ms on the same
   data.
 - [ ] **Specs and the LIKE fallback (M13).** A query with a token shorter than
-  `SEARCH_MIN_TOKEN_SIZE` scans every row's title, specs and indexed
+  `search.min_token_size` scans every row's title, specs and indexed
   description. On a synthetic 20k catalog with about 550 characters of specs
   per product, with the table in memory on local MariaDB 10.11, that path took
   about **220 ms** (about 105–120 ms without specs); with the table larger

@@ -7,6 +7,7 @@
 
 declare(strict_types=1);
 
+use App\Config;
 use App\Db;
 use App\Health;
 
@@ -24,6 +25,12 @@ if (($_SERVER['REQUEST_METHOD'] ?? 'GET') !== 'GET') {
 }
 
 try {
+    $configSection = Health::configSection(Config::overrides(Config::file()));
+} catch (Throwable) {
+    $configSection = ['ok' => false, 'errors' => ['config: could not be evaluated'], 'warnings' => []];
+}
+
+try {
     $db = new Db($config['db']);
     $result = (new Health($db, $config['db']['products_table']))->check();
 } catch (Throwable) {
@@ -32,6 +39,8 @@ try {
         'checks' => ['database' => false, 'product_count' => null],
     ];
 }
+
+$result['config'] = $configSection;
 
 http_response_code($result['status'] === 'ok' ? 200 : 503);
 echo json_encode($result, JSON_UNESCAPED_UNICODE);

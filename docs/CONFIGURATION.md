@@ -6,97 +6,126 @@ Never commit secrets, `server/data/`, bundles or model files.
 
 ## How the settings are supplied
 
-- **Server.** On the host, `public/install.php` writes `server/config.php` from `server/config.example.php` on the first deploy ([DEPLOY.md](DEPLOY.md#one-time-setup-cpanel-host)). Otherwise copy the example to `config.php` and edit it, or supply the environment variables it reads (`.env.example` lists them all). Each value is `getenv('SEARCH_...') ?: default`, so an environment variable overrides the file where the host supports it. A `config.php` written before a milestone lacks that milestone's keys and falls back on the defaults below; copy the lines from `config.example.php` to change them.
+- **Server.** Layered: the code owns the schema and every default (`server/src/Config.php`, one table of `key => [type, default]`), and `server/config.php` holds **only the deployer's overrides** (see [The layered server config](#the-layered-server-config)). On the host, `public/install.php` writes `config.php` from `server/config.example.php` on the first deploy ([DEPLOY.md](DEPLOY.md#one-time-setup-cpanel-host)); otherwise copy the example to `config.php` and edit it. The example reads the connection settings and secrets from the environment (`.env.example` lists them); tunables are not read from the environment.
 - **Pipeline.** Environment variables only (a `.env` next to the repo works for `db_export.py`; `cp .env.example .env`). Defaults live in `pipeline/config.py`. Command-line flags of `release.py` / `build.py` / `db_export.py` override them for one run.
 - **VPS.** `/etc/search-vectors.env` on the vector-service VM, written once by `vps/setup.sh` (template `vps/search-vectors.env.example`, runbook [`vps/README.md`](../vps/README.md)).
 
 The model, revision, dimension, pooling and prefixes are parameterized and shared between the pipeline and the VPS (bge-m3, contract 2), and between the pipeline and the cPanel bundle check (e5, contract 3); see [ARCHITECTURE.md](ARCHITECTURE.md#the-three-contracts) and [INTEGRATION.md, Changing the model](../INTEGRATION.md#changing-the-model).
 
-## Server (`config.php` / `SEARCH_*`)
+## The layered server config
+
+Defaults are defined once. `App\Config` (`server/src/Config.php`) holds the whole schema as a flat table of `'section.key' => [type, default]` (`'search.title_weight' => ['float', 10.0]`). `server/config.php` returns a nested array of **overrides only**; `Config::load()` deep-merges it over the defaults and casts every known key to its schema type, so code reads `$config['search']['title_weight']` with no fallback and an old `config.php` never lacks a key a newer release added. The tables below list every key and its default.
+
+- **Required:** `db.dsn` and `db.user`, the two things the app cannot invent. Tunables are never required. Tokens are optional: an empty token switches its feature off (`reload.token` empty disables `POST /reload`).
+- **Casting:** `"0"`, `"0.0"` and `"false"` survive as `0`, `0.0` and `false` (they never fall back to the default). A blank value for a number or boolean means "unset" (the default); a value that does not cast keeps the default and is an ERROR in the doctor.
+- **Without a `config.php`** (development) the app starts on the defaults; the missing credentials show up in the doctor and in `/health`, not as a crash.
+- **Where the file lives:** `server/config.php`, or the path in `SEARCH_CONFIG_FILE` when set (a config kept outside the code directory; the test suite uses it).
+
+**Change a tunable:** add its key to `config.php` at the same nested path, for example
+
+```php
+'search' => ['title_weight' => 12.0, 'semantic_min_score' => 0.35],
+```
+
+**Add a tunable (developers):** add one line to `Config::table()` (type and default), read it as `$config['section']['key']` where it is used, and document it below. Do not add a `?? default` at the use site, and in tests build a config from `Config::defaults()` / `Config::merge([...])` rather than listing defaults again.
+
+### Config doctor
+
+`php server/tools/config-check.php` (run it after unzipping a release, see [DEPLOY.md](DEPLOY.md#every-catalog-update)) compares `config.php` with the schema:
+
+| level | what |
+| --- | --- |
+| ERROR | a required key missing or empty; a value that does not cast to its type |
+| WARN | an unknown key path (a typo or a removed option); a half-configured feature: `redis.enabled` on with an empty `redis.host`, `vps.url` set with an empty `vps.token`, `reload.token` empty (`/reload` is disabled) |
+| INFO (`--verbose`) | every tunable still at its code default, so all available knobs are visible |
+
+It prints key paths only, never values, and exits non-zero on any ERROR, so a deploy script or CI can gate on it. `--file=<path>` checks another overrides file. `GET /health` carries the same verdict as `config: {ok, errors[], warnings[]}` (key paths and statuses only; `/health` is unauthenticated, so never values).
+
+## Server (`config.php` overrides)
 
 ### Database and paths
 
-| key / env | default | meaning |
+| key | default | meaning |
 | --- | --- | --- |
-| `SEARCH_DB_DSN` | `mysql:host=localhost;dbname=search;charset=utf8mb4` | PDO DSN |
-| `SEARCH_DB_USER`, `SEARCH_DB_PASSWORD` | empty | credentials (secret) |
-| `SEARCH_PRODUCTS_TABLE` | `products` | live table (the load file stages into `<table>_new`) |
-| `SEARCH_SEARCH_LOGS_TABLE` | `search_logs` | log table |
-| `SEARCH_DATA_DIR` | `server/data` | active bundle (spellcheck, synonyms, aliases, keymap) |
-| `SEARCH_DATA_INCOMING_DIR` | `server/data_incoming` | staging directory for the atomic reload swap |
-| `SEARCH_RELOAD_TOKEN` | empty | enables `POST /reload` (`X-Reload-Token`); set a strong random value |
+| `db.dsn` | none (required) | PDO DSN, e.g. `mysql:host=localhost;dbname=search;charset=utf8mb4` |
+| `db.user`, `db.password` | none (user required), empty | credentials (secret; the password may be empty) |
+| `db.products_table` | `products` | live table (the load file stages into `<table>_new`) |
+| `db.search_logs_table` | `search_logs` | log table |
+| `paths.data` | `server/data` | active bundle (spellcheck, synonyms, aliases, keymap) |
+| `paths.data_incoming` | `server/data_incoming` | staging directory for the atomic reload swap |
+| `reload.token` | empty | enables `POST /reload` (`X-Reload-Token`); set a strong random value |
 
 ### Bundle compatibility (checked on `POST /reload`, contract 3)
 
-| key / env | default | meaning |
+| key | default | meaning |
 | --- | --- | --- |
-| `SEARCH_MODEL` | `intfloat/multilingual-e5-small` | model stamped in the cPanel bundle's `meta.json` |
-| `SEARCH_MODEL_REVISION` | `main` | its revision |
-| `SEARCH_MODEL_DIM` | `384` | its dimension |
-| `SEARCH_NORMALIZATION_VERSION` | the code's `Normalizer::VERSION` (3) | set only to pin a version; a rules bump then needs no config edit |
+| `model.name` | `intfloat/multilingual-e5-small` | model stamped in the cPanel bundle's `meta.json` |
+| `model.revision` | `main` | its revision |
+| `model.dim` | `384` | its dimension |
+| `model.normalization_version` | the code's `Normalizer::VERSION` (3) | set only to pin a version; a rules bump then needs no config edit |
 
 `/search` does not read the bundle's vectors since M18 (the semantic tier's model, bge-m3, runs on the VPS); `/reload` still checks model, dim, normalization version, file size and checksum.
 
 ### Keyword search
 
-| key / env | default | meaning |
+| key | default | meaning |
 | --- | --- | --- |
-| `SEARCH_DEFAULT_LIMIT` | 20 | results when the request has no `limit` |
-| `SEARCH_MIN_TOKEN_SIZE` | 3 | mirror the host's `innodb_ft_min_token_size`; queries with a shorter token use the LIKE fallback |
-| `SEARCH_TITLE_WEIGHT` / `SEARCH_DESC_WEIGHT` / `SEARCH_PHRASE_BONUS` | 10 / 1 / 5 | field weighting and the adjacent-in-title bonus |
-| `SEARCH_SPEC_WEIGHT` | 6 | token found only in attributes / feature titles |
-| `SEARCH_TAG_WEIGHT` / `SEARCH_BRAND_WEIGHT` / `SEARCH_CATEGORY_WEIGHT` | 8 / 7 / 5 | M21 fields (tags just below the title) |
-| `SEARCH_SKU_PREFIX_MIN_LENGTH` | 4 | shortest query (with a digit) that prefix-matches SKUs |
-| `SEARCH_ALIAS_MAX_VARIANTS` | 6 | alias / synonym query variants, the literal one included (1 = off) |
-| `SEARCH_SYNONYMS_MAX_GROUP_SIZE` | 4 | generated synonym groups larger than this are ignored |
-| `SEARCH_REQUIRE_ALL_TERMS` | 1 | multi-word queries need every word (0 = most words first) |
-| `SEARCH_SOFT_AND_MIN_RESULTS` | 3 | M23: below this many full-coverage hits, add partial-coverage ones (0 = strict) |
-| `SEARCH_SOFT_AND_MIN_COVERAGE` | 0.5 | share of a variant's words a partial hit must hold |
-| `SEARCH_SOFT_AND_PARTIAL_PENALTY` | 0.5 | scale on a partial hit's keyword score |
-| `SEARCH_SOFT_AND_CANDIDATE_CAP` | 100 | rows scored per alias-variant top-up (0 = no cap) |
-| `SEARCH_FACET_MIN_PRODUCTS` | 20 | a spec-only query term held by at least this many products' specs is a facet (genre/feature): its hits are floor-exempt like title matches (M28; 0 = off) |
-| `SEARCH_COLLAPSE_WEIGHT` | 9 | M23: score of a collapsed-name hit (0 = off) |
-| `SEARCH_COLLAPSE_MIN_LENGTH` | 5 | shortest collapsed query tried |
-| `SEARCH_SUGGEST_MIN_RESULTS` | 3 | "did you mean" runs below this many keyword hits |
-| `SEARCH_SUGGEST_MIN_FREQUENCY` | 2 | a candidate must occur in this many products |
-| `SEARCH_SUGGEST_MAX_DISTANCE` | 2 | maximum edits (1 for tokens of 4 characters or fewer) |
+| `search.default_limit` | 20 | results when the request has no `limit` |
+| `search.min_token_size` | 3 | mirror the host's `innodb_ft_min_token_size`; queries with a shorter token use the LIKE fallback |
+| `search.title_weight` / `search.desc_weight` / `search.phrase_bonus` | 10 / 1 / 5 | field weighting and the adjacent-in-title bonus |
+| `search.spec_weight` | 6 | token found only in attributes / feature titles |
+| `search.tag_weight` / `search.brand_weight` / `search.category_weight` | 8 / 7 / 5 | M21 fields (tags just below the title) |
+| `search.sku_prefix_min_length` | 4 | shortest query (with a digit) that prefix-matches SKUs |
+| `search.alias_max_variants` | 6 | alias / synonym query variants, the literal one included (1 = off) |
+| `search.synonyms_max_group_size` | 4 | generated synonym groups larger than this are ignored |
+| `search.require_all_terms` | 1 | multi-word queries need every word (0 = most words first) |
+| `search.soft_and_min_results` | 3 | M23: below this many full-coverage hits, add partial-coverage ones (0 = strict) |
+| `search.soft_and_min_coverage` | 0.5 | share of a variant's words a partial hit must hold |
+| `search.soft_and_partial_penalty` | 0.5 | scale on a partial hit's keyword score |
+| `search.soft_and_candidate_cap` | 100 | rows scored per alias-variant top-up (0 = no cap) |
+| `search.facet_min_products` | 20 | a spec-only query term held by at least this many products' specs is a facet (genre/feature): its hits are floor-exempt like title matches (M28; 0 = off) |
+| `search.collapse_weight` | 9 | M23: score of a collapsed-name hit (0 = off) |
+| `search.collapse_min_length` | 5 | shortest collapsed query tried |
+| `search.suggest_min_results` | 3 | "did you mean" runs below this many keyword hits |
+| `search.suggest_min_frequency` | 2 | a candidate must occur in this many products |
+| `search.suggest_max_distance` | 2 | maximum edits (1 for tokens of 4 characters or fewer) |
 
 ### Hybrid ranking (semantic tier)
 
-| key / env | default | meaning |
+| key | default | meaning |
 | --- | --- | --- |
-| `SEARCH_SEMANTIC_TOP_K` | 300 | neighbours asked of the VPS (its cap is `VPS_MAX_LIMIT`, 500) |
-| `SEARCH_SEMANTIC_MIN_SCORE` | 0.4 | cosine floor on bge-m3's scale (sent as `min_score`, re-applied); needs tuning on the real catalog |
-| `SEARCH_KEYWORD_WEIGHT` / `SEARCH_SEMANTIC_WEIGHT` / `SEARCH_MIN_RELEVANCE` | 0.4 / 0.6 / 0.45 | blended relevance and its floor (M20) |
-| `SEARCH_STOCK_BOOST` / `SEARCH_POPULARITY_BOOST` | 0.1 / 0.1 | light boosts after the floor |
-| `SEARCH_BRAND_MATCH_BOOST` / `SEARCH_CATEGORY_MATCH_BOOST` / `SEARCH_TAG_MATCH_BOOST` | 0.15 / 0.1 / 0.1 | M21 match boosts (0 disables one) |
-| `SEARCH_TAG_MATCH_MIN_TOKENS` | 2 | shortest query that phrase-matches tags |
-| `SEARCH_LATENCY_BUDGET_MS` | 200 | the budget the latency-guard tests assert against |
+| `search.semantic_top_k` | 300 | neighbours asked of the VPS (its cap is `VPS_MAX_LIMIT`, 500) |
+| `search.semantic_min_score` | 0.4 | cosine floor on bge-m3's scale (sent as `min_score`, re-applied); needs tuning on the real catalog |
+| `search.keyword_weight` / `search.semantic_weight` / `search.min_relevance` | 0.4 / 0.6 / 0.45 | blended relevance and its floor (M20) |
+| `search.stock_boost` / `search.popularity_boost` | 0.1 / 0.1 | light boosts after the floor |
+| `search.brand_match_boost` / `search.category_match_boost` / `search.tag_match_boost` | 0.15 / 0.1 / 0.1 | M21 match boosts (0 disables one) |
+| `search.tag_match_min_tokens` | 2 | shortest query that phrase-matches tags |
+| `search.latency_budget_ms` | 200 | the budget the latency-guard tests assert against |
 
 ### VPS client (`vps` section)
 
-| key / env | default | meaning |
+| key | default | meaning |
 | --- | --- | --- |
-| `SEARCH_VPS_URL` | empty | base URL (the client appends `/search-vectors`); empty = keyword-only |
-| `SEARCH_VPS_TOKEN` | empty | the VPS's `VPS_TOKEN` (secret) |
-| `SEARCH_VPS_TIMEOUT_MS` | 300 | whole-call budget, connect included. A slow or unreachable VPS means keyword-only results for that request, never an error. The default is sized for an external VPS; on the final LAN VM it is a safety net, keep it sane |
+| `vps.url` | empty | base URL (the client appends `/search-vectors`); empty = keyword-only |
+| `vps.token` | empty | the VPS's `VPS_TOKEN` (secret) |
+| `vps.timeout_ms` | 300 | whole-call budget, connect included. A slow or unreachable VPS means keyword-only results for that request, never an error. The default is sized for an external VPS; on the final LAN VM it is a safety net, keep it sane |
 
 ### Result cache (`redis` section, M26)
 
-Optional and **off by default**: with `SEARCH_REDIS_ENABLED` unset nothing changes. Repeated identical
+Optional and **off by default**: with `redis.enabled` off nothing changes. Repeated identical
 queries are then answered from Redis instead of recomputing keyword + VPS + ranking
-([DEPLOY.md](DEPLOY.md#result-cache-optional-redis-m26)). An existing `config.php` has no `redis` section:
-copy the block from `config.example.php` (or set the variables in the environment) to enable it.
+([DEPLOY.md](DEPLOY.md#result-cache-optional-redis-m26)). To enable it, set `redis.enabled`, `redis.host`, `redis.port` and
+`redis.auth` in `config.php` (the example template reads them from the environment).
 
-| key / env | default | meaning |
+| key | default | meaning |
 | --- | --- | --- |
-| `SEARCH_REDIS_ENABLED` | `0` | `1` turns the cache on |
-| `SEARCH_REDIS_HOST`, `SEARCH_REDIS_PORT` | `127.0.0.1`, `6379` | the Redis server (on the VPS, `vps/setup.sh --redis`; cPanel only runs the client) |
-| `SEARCH_REDIS_AUTH` | empty | Redis password (a secret: environment or `config.php`, never the repository) |
-| `SEARCH_REDIS_DB` | `0` | database number |
-| `SEARCH_REDIS_TTL` | `300` | seconds an entry lives; a catalog reload flushes it earlier |
-| `SEARCH_REDIS_TIMEOUT_MS` | `100` | connect + read budget; a slow or dead Redis costs at most this per request and means a cache miss, never an error |
-| `SEARCH_REDIS_PREFIX` | `search:cache:` | key prefix; the keyspace `POST /reload` flushes. Give each environment sharing one Redis its own prefix |
+| `redis.enabled` | off | turns the cache on |
+| `redis.host`, `redis.port` | `127.0.0.1`, `6379` | the Redis server (on the VPS, `vps/setup.sh --redis`; cPanel only runs the client) |
+| `redis.auth` | empty | Redis password (a secret: environment or `config.php`, never the repository) |
+| `redis.db` | `0` | database number |
+| `redis.ttl` | `300` | seconds an entry lives; a catalog reload flushes it earlier |
+| `redis.timeout_ms` | `100` | connect + read budget; a slow or dead Redis costs at most this per request and means a cache miss, never an error |
+| `redis.prefix` | `search:cache:` | key prefix; the keyspace `POST /reload` flushes. Give each environment sharing one Redis its own prefix |
 
 Entries are keyed by the normalized query, the `limit` and whether the semantic tier is configured. Responses
 with `debug` are never cached, and neither is a result served without the semantic tier that is configured (a
@@ -105,12 +134,12 @@ hand (see [DEPLOY.md](DEPLOY.md#result-cache-optional-redis-m26)) or wait out th
 
 ### Tooling and storefront
 
-| key / env | default | meaning |
+| key | default | meaning |
 | --- | --- | --- |
-| `SEARCH_DEBUG_TOKEN` | empty | enables `"debug": 1` on `/search` (`X-Debug-Token`), see [SEARCH-API.md](SEARCH-API.md#search-logs-and-ranking-debug) |
-| `SEARCH_LOGS_TOKEN` | empty | enables `logs.php` (`X-Logs-Token`) |
-| `SEARCH_LOGS_PAGE_SIZE` | 50 | rows per page |
-| `SEARCH_STORE_BASE`, `SEARCH_IMAGE_BASE` | empty | absolute bases for `with_details` product links and images; empty keeps the exported values |
+| `debug.token` | empty | enables `"debug": 1` on `/search` (`X-Debug-Token`), see [SEARCH-API.md](SEARCH-API.md#search-logs-and-ranking-debug) |
+| `logs.token` | empty | enables `logs.php` (`X-Logs-Token`) |
+| `logs.page_size` | 50 | rows per page |
+| `storefront.store_base`, `storefront.image_base` | empty | absolute bases for `with_details` product links and images; empty keeps the exported values |
 
 The test page's `PRICE_SUFFIX` is a constant in `server/public/test.html`, not a server setting.
 
@@ -119,7 +148,7 @@ The test page's `PRICE_SUFFIX` is a constant in `server/public/test.html`, not a
 | env | default | meaning |
 | --- | --- | --- |
 | `EMBEDDER` | `mock` | `mock` (deterministic, no model download; tests) or `real`. `release.py` embeds the VPS vectors for real regardless |
-| `SEARCH_MODEL`, `SEARCH_MODEL_REVISION`, `SEARCH_MODEL_DIM`, `SEARCH_NORMALIZATION_VERSION` | as the server | stamped into the cPanel bundle's `meta.json`; must match `config.php` |
+| `SEARCH_MODEL`, `SEARCH_MODEL_REVISION`, `SEARCH_MODEL_DIM`, `SEARCH_NORMALIZATION_VERSION` | as the server | stamped into the cPanel bundle's `meta.json`; must match `config.php`'s `model.*` (code defaults, pin them there) |
 | `SEARCH_VPS_MODEL` | `BAAI/bge-m3` | model of the vector service |
 | `SEARCH_VPS_MODEL_REVISION` | `5617a9f61b028005a4858fdac845db406aefb181` | pinned revision |
 | `SEARCH_VPS_MODEL_DIM` | 1024 | dimension |

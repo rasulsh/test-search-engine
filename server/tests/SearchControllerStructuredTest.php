@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Tests;
 
+use App\Config;
 use App\Logger;
 use App\ProductLoader;
 use App\SearchController;
@@ -57,7 +58,7 @@ final class SearchControllerStructuredTest extends DatabaseTestCase
         bool $withVps = true,
         float $gameCosine = 0.3
     ): SearchController {
-        $config = require self::repoRoot() . '/server/config.example.php';
+        $config = Config::defaults();
         $config['paths']['data'] = $this->dataDir;
         $config['search'] = $searchOverrides + $config['search'];
         $unit = [1.0, 0.0, 0.0];
@@ -180,7 +181,7 @@ final class SearchControllerStructuredTest extends DatabaseTestCase
         // Product 4 matches only through its tags; the VPS knows nothing of it
         // (keyword-weight alone would sit under the floor). A name match is solid.
         $unit = [1.0, 0.0, 0.0];
-        $config = require self::repoRoot() . '/server/config.example.php';
+        $config = Config::defaults();
         $config['paths']['data'] = $this->dataDir;
         $vps = FakeVps::client(['products' => [1 => $unit], 'queries' => ['*' => $unit]]);
 

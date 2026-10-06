@@ -49,10 +49,8 @@ final class NormalizationVersionBumpTest extends DatabaseTestCase
             array_merge($defaults, ['db_name' => 'search', 'db_user' => 'search'])
         ));
         $config = (string) file_get_contents($this->serverDir . '/config.php');
-        self::assertStringContainsString(
-            "(int) (getenv('SEARCH_NORMALIZATION_VERSION') ?: \\App\\Normalizer::VERSION)",
-            $config
-        );
+        // Left to the code default: no version written, so a rules bump needs no config edit.
+        self::assertDoesNotMatchRegularExpression("/'normalization_version' => \\d/", $config);
 
         $bumped = Normalizer::VERSION + 1;
         $this->bumpCodeVersion($bumped);
@@ -84,7 +82,7 @@ final class NormalizationVersionBumpTest extends DatabaseTestCase
         )));
 
         $config = (string) file_get_contents($this->serverDir . '/config.php');
-        self::assertStringContainsString("(int) (getenv('SEARCH_NORMALIZATION_VERSION') ?: {$pin})", $config);
+        self::assertStringContainsString("'normalization_version' => {$pin},", $config);
         $this->bumpCodeVersion(Normalizer::VERSION + 1);
         self::assertSame(
             (int) $pin,

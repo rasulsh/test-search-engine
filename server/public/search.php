@@ -37,7 +37,7 @@ if (!is_array($request)) {
 // Opt-in score breakdown (M21): needs the configured debug token; never logged.
 $debug = false;
 if (in_array($request['debug'] ?? null, [1, true, '1'], true)) {
-    $debugToken = (string) ($config['debug']['token'] ?? '');
+    $debugToken = (string) $config['debug']['token'];
     if ($debugToken === '' || !hash_equals($debugToken, (string) ($_SERVER['HTTP_X_DEBUG_TOKEN'] ?? ''))) {
         http_response_code(403);
         echo json_encode(['error' => 'debug_forbidden'], JSON_UNESCAPED_UNICODE);
@@ -58,8 +58,8 @@ try {
         $details = new ProductDetails(
             $pdo,
             $config['db']['products_table'],
-            (string) ($config['storefront']['store_base'] ?? ''),
-            (string) ($config['storefront']['image_base'] ?? '')
+            (string) $config['storefront']['store_base'],
+            (string) $config['storefront']['image_base']
         );
         $result['products'] = $details->fetch($result['product_ids']);
     }

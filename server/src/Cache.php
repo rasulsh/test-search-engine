@@ -30,21 +30,21 @@ class Cache
     /** @param array<string, mixed> $config the server config array; null when the cache is off */
     public static function fromConfig(array $config): ?self
     {
-        $redis = $config['redis'] ?? [];
-        if (!($redis['enabled'] ?? false)) {
+        $redis = $config['redis'];
+        if (!$redis['enabled']) {
             return null;
         }
 
         return new self(
             new RedisClient(
-                (string) ($redis['host'] ?? '127.0.0.1'),
-                (int) ($redis['port'] ?? 6379),
-                (string) ($redis['auth'] ?? ''),
-                (int) ($redis['db'] ?? 0),
-                (int) ($redis['timeout_ms'] ?? 100)
+                (string) $redis['host'],
+                (int) $redis['port'],
+                (string) $redis['auth'],
+                (int) $redis['db'],
+                (int) $redis['timeout_ms']
             ),
-            (string) ($redis['prefix'] ?? 'search:cache:'),
-            (int) ($redis['ttl'] ?? 300)
+            (string) $redis['prefix'],
+            (int) $redis['ttl']
         );
     }
 

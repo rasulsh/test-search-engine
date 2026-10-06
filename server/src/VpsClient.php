@@ -41,12 +41,12 @@ final class VpsClient
      */
     public static function fromConfig(array $vps): ?self
     {
-        $url = trim((string) ($vps['url'] ?? ''));
+        $url = trim((string) $vps['url']);
         if ($url === '') {
             return null;
         }
 
-        return new self($url, (string) ($vps['token'] ?? ''), (int) ($vps['timeout_ms'] ?? 300));
+        return new self($url, (string) $vps['token'], (int) $vps['timeout_ms']);
     }
 
     /**

@@ -7,7 +7,8 @@ Builds the bundle and packs, relative to the host's
 `server/` directory, everything the site needs:
 
     data_incoming/        the bundle (vectors, products.load.sql, meta.json, ...)
-    bootstrap.php, config.example.php, src/, public/ (incl. public/install.php)
+    bootstrap.php, config.example.php, src/, public/ (incl. public/install.php),
+    tools/config-check.php (the config doctor, run after unzipping)
     db/schema.sql         read by install.php on the first deploy
 
 No browser model ships (M18): queries are embedded on the VPS. Since M18 /search
@@ -53,7 +54,8 @@ from normalize import NORMALIZATION_VERSION
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 # config.example.php is the template for a first deploy; config.php is never packed.
-SERVER_CODE = ("bootstrap.php", "config.example.php", "src", "public")
+# tools/config-check.php is the only tool shipped: deploy runs it after unzipping.
+SERVER_CODE = ("bootstrap.php", "config.example.php", "src", "public", "tools/config-check.php")
 
 
 def _files(root: Path, relative: str) -> Iterator[tuple[Path, str]]:

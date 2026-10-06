@@ -102,8 +102,11 @@ abstraction layers.
 │   │   ├── Ranker.php             # hybrid merge + business ranking
 │   │   ├── Logger.php             # search logs (incl. did_you_mean, tier)
 │   │   ├── LogsPage.php           # read-only search_logs view for logs.php (M21)
-│   │   └── Db.php                 # thin PDO wrapper
-│   ├── config.php                # reads from env; config.example.php committed
+│   │   ├── Db.php                 # thin PDO wrapper
+│   │   ├── Config.php             # config schema + every default; load() merges config.php overrides (M29)
+│   │   └── ConfigDoctor.php       # checks config.php against the schema (M29)
+│   ├── config.php                # deployer overrides only (gitignored); config.example.php committed
+│   ├── tools/config-check.php    # config doctor CLI (M29): exits non-zero on an ERROR
 │   ├── data/                      # active bundle (gitignored)
 │   └── tests/
 ├── vps/                          # VPS vector service (Python): query embedding + cosine top-K
@@ -215,16 +218,17 @@ because Tier 2 is unavailable.
   worker under systemd on a 2–4 GB VPS (`vps/README.md`). It embeds queries
   and runs the cosine top-K. No model runs in the browser.
 - cPanel reaches the VPS with PHP curl: `SEARCH_VPS_URL`, `SEARCH_VPS_TOKEN`,
-  `SEARCH_VPS_TIMEOUT_MS` (small, default 300). Empty URL = keyword-only.
+  `vps.timeout_ms` (small, default 300). Empty URL = keyword-only.
 - Semantic model: `BAAI/bge-m3` (dim 1024), configured in `pipeline/config.py`
   (`SEARCH_VPS_MODEL*`) and on the VPS (`VPS_MODEL*`); it is pending a
   Persian-quality test and may change. The cosine floor
-  (`SEARCH_SEMANTIC_MIN_SCORE`, default 0.4 for bge-m3) needs real-catalog
+  (`search.semantic_min_score`, default 0.4 for bge-m3) needs real-catalog
   tuning; one-word precision comes from the keyword tier blended with the cosine (M20), not the
   floor. The cPanel bundle's `meta.json` model (`SEARCH_MODEL`, default
   `intfloat/multilingual-e5-small`, dim 384) is only checked on `/reload`.
   Never hardcode models, dims, or thresholds; read them from config.
-- Config via env; commit `config.example.php` and `.env.example`. Never commit
+- Config: defaults live in `App\Config`, `config.php` holds only overrides (secrets from
+  env inside it); commit `config.example.php` and `.env.example`. Never commit
   secrets, `data/`, bundles, or model files.
 
 ---
@@ -299,6 +303,13 @@ wait for review before starting the next.
   `RedisClient.php` (in-repo RESP client, no Composer package or extension),
   config `redis`, flush on `/reload`, `search_logs.cache_hit`, `vps/setup.sh
   --redis` (secured, firewalled). Any Redis error is a miss; contracts unchanged.
+
+- **M29 — Config layering + doctor:** `App\Config` is the single source of truth
+  (schema, types, every non-secret default); `config.php` holds only overrides and is
+  deep-merged over it, so code reads keys without `?? default` and an old `config.php`
+  never lacks a key. `ConfigDoctor` + `tools/config-check.php` + the `/health`
+  `config` section report ERROR (missing required, bad type) and WARN (unknown key,
+  half-configured feature) by key path only. Docs and `.env.example` follow.
 
 - **M22 — Offline build speed + reliable export:** `pipeline/db_export.py`
   (direct DB -> CSV, replaces the phpMyAdmin export), GPU/fp16/batch-configured

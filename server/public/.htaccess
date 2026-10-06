@@ -15,10 +15,10 @@ Options -Indexes
     Header always set Referrer-Policy "no-referrer"
 </IfModule>
 
-# Web-root deploy: /search, /health, /reload, /logs reach the front controller.
+# Web-root deploy: /search, /health, /reload, /logs, /analytics reach the front controller.
 # Direct *.php requests (the subfolder deploy) keep working.
 <IfModule mod_rewrite.c>
     RewriteEngine On
     RewriteCond %{REQUEST_FILENAME} !-f
-    RewriteRule ^(search|health|reload|logs)/?$ index.php [L]
+    RewriteRule ^(search|health|reload|logs|analytics)/?$ index.php [L]
 </IfModule>

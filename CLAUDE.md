@@ -95,6 +95,7 @@ abstraction layers.
 │   │   ├── health.php            # GET /health
 │   │   ├── reload.php            # POST /reload (token-protected, atomic swap)
 │   │   └── logs.php              # GET /logs.php (M21: token-protected, read-only search_logs view)
+│   │   ├── analytics.php         # GET /analytics.php (M31: logs.token, read-only aggregates, ?format=json)
 │   ├── src/
 │   │   ├── Normalizer.php         # MUST mirror pipeline/normalize.py exactly
 │   │   ├── Keyword.php            # FULLTEXT + fuzzy + keymap + did-you-mean
@@ -106,7 +107,9 @@ abstraction layers.
 │   │   ├── LogsPage.php           # read-only search_logs view for logs.php (M21)
 │   │   ├── Db.php                 # thin PDO wrapper
 │   │   ├── Config.php             # config schema + every default; load() merges config.php overrides (M29)
-│   │   └── ConfigDoctor.php       # checks config.php against the schema (M29)
+│   │   ├── ConfigDoctor.php       # checks config.php against the schema (M29)
+│   │   ├── Analytics.php          # read-only search_logs aggregates (M31)
+│   │   └── AnalyticsPage.php      # HTML dashboard for analytics.php (M31)
 │   ├── config.php                # deployer overrides only (gitignored); config.example.php committed
 │   ├── tools/config-check.php    # config doctor CLI (M29): exits non-zero on an ERROR
 │   ├── data/                      # active bundle (gitignored)
@@ -319,6 +322,12 @@ wait for review before starting the next.
   missing), deny-all `.htaccess` safety nets (`server/`, `data/`, `data_incoming/`)
   shipped in `release.zip`, `public/.htaccess` (headers, routing), DEPLOY.md layout,
   one-time setup and go-live exposure checks.
+
+- **M31 — Search analytics:** `Analytics` (top / zero-result queries by normalized form,
+  cache hit rate, tier and vector shares, result health, latency avg / p50 / p95 / max,
+  did-you-mean share, volume) over the existing `search_logs`, `AnalyticsPage` +
+  `public/analytics.php` (reuses `logs.token`, same headers as `logs.php`, `?window=`,
+  `?format=json`), one new index `idx_ts_result`, retention documented not automated.
 
 - **M22 — Offline build speed + reliable export:** `pipeline/db_export.py`
   (direct DB -> CSV, replaces the phpMyAdmin export), GPU/fp16/batch-configured

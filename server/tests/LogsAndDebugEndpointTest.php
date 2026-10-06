@@ -336,4 +336,113 @@ final class LogsAndDebugEndpointTest extends TestCase
         self::assertCount(1, $logged);
         self::assertStringNotContainsString('keyword_hit', json_encode($logged, JSON_UNESCAPED_UNICODE) ?: '');
     }
+
+    private function recentLogs(): void
+    {
+        // seedLogs() stamps 2026-01-01: re-stamp to now so the default 7d window holds them.
+        $this->seedLogs([
+            ['raw_q' => 'far cry', 'result_count' => 4, 'tier' => 'hybrid', 'had_vector' => 1, 'latency_ms' => 30],
+            ['raw_q' => 'far cry', 'result_count' => 4, 'tier' => 'hybrid', 'had_vector' => 1, 'latency_ms' => 50],
+            ['raw_q' => '<b>nothing</b>', 'result_count' => 0, 'latency_ms' => 10],
+        ]);
+        self::$pdo->exec('UPDATE search_logs SET ts = NOW()');
+    }
+
+    public function testAnalyticsRequireTheLogsToken(): void
+    {
+        $this->recentLogs();
+
+        [$none, $noneBody] = $this->request('armed', 'GET', '/analytics.php');
+        [$wrong] = $this->request('armed', 'GET', '/analytics.php', ['X-Logs-Token: nope']);
+        [$debugToken] = $this->request('armed', 'GET', '/analytics.php', ['X-Logs-Token: ' . self::DEBUG_TOKEN]);
+        [$jsonNone, $jsonBody] = $this->request('armed', 'GET', '/analytics.php?format=json');
+
+        self::assertSame([401, 401, 401, 401], [$none, $wrong, $debugToken, $jsonNone]);
+        self::assertStringNotContainsString('far cry', $noneBody . $jsonBody);
+        self::assertStringContainsString('<form', $noneBody);
+    }
+
+    public function testAnalyticsAreDisabledWithoutAConfiguredToken(): void
+    {
+        $this->recentLogs();
+
+        [$status, $body] = $this->request('off', 'GET', '/analytics.php', ['X-Logs-Token: ']);
+
+        self::assertSame(503, $status);
+        self::assertStringNotContainsString('far cry', $body);
+    }
+
+    public function testAnalyticsDashboardShowsTheSectionsEscapedAndNoStore(): void
+    {
+        $this->recentLogs();
+
+        [$status, $body, $headers] = $this->request(
+            'armed',
+            'GET',
+            '/analytics',
+            ['X-Logs-Token: ' . self::LOGS_TOKEN]
+        );
+
+        self::assertSame(200, $status);
+        foreach (
+            ['Top queries', 'Zero-result queries', 'Tier and cache', 'Latency', 'Volume', 'Cache hit rate',
+            'Zero-result rate', 'Last 7 days'] as $section
+        ) {
+            self::assertStringContainsString($section, $body);
+        }
+        self::assertStringContainsString('far cry', $body);
+        self::assertStringContainsString('&lt;b&gt;nothing&lt;/b&gt;', $body);
+        self::assertStringNotContainsString('<b>nothing</b>', $body);
+        self::assertStringNotContainsString(self::LOGS_TOKEN, $body, 'a header token is never echoed into links');
+        $all = strtolower(implode("\n", $headers));
+        foreach (
+            ['cache-control: no-store', 'x-robots-tag: noindex', 'x-frame-options: deny',
+            'content-security-policy: default-src \'none\''] as $header
+        ) {
+            self::assertStringContainsString($header, $all);
+        }
+    }
+
+    public function testAnalyticsJsonShapeAndWindows(): void
+    {
+        $this->recentLogs();
+
+        [$status, $body, $headers] = $this->request(
+            'armed',
+            'GET',
+            '/analytics.php?format=json&window=24h',
+            ['X-Logs-Token: ' . self::LOGS_TOKEN]
+        );
+        $report = json_decode($body, true);
+
+        self::assertSame(200, $status);
+        self::assertStringContainsString('application/json', strtolower(implode("\n", $headers)));
+        self::assertSame('24h', $report['window']);
+        self::assertSame(3, $report['summary']['total']);
+        self::assertSame(1, $report['summary']['zero_results']);
+        self::assertSame(33.3, $report['summary']['zero_rate']);
+        self::assertSame(['far cry', 2], [$report['top_queries'][0]['query'], $report['top_queries'][0]['searches']]);
+        self::assertSame('<b>nothing</b>', $report['zero_result_queries'][0]['query']);
+        self::assertSame(66.7, $report['tier']['hybrid_share']);
+        self::assertSame(30, $report['latency']['p50']);
+        foreach (['cache', 'did_you_mean', 'volume', 'since'] as $key) {
+            self::assertArrayHasKey($key, $report);
+        }
+
+        [, $default] = $this->request('armed', 'GET', '/analytics.php?format=json&window=bogus', [
+            'X-Logs-Token: ' . self::LOGS_TOKEN,
+        ]);
+        self::assertSame('7d', json_decode($default, true)['window']);
+    }
+
+    public function testAnalyticsAreReadOnlyAndGetOnly(): void
+    {
+        $this->recentLogs();
+
+        [$post] = $this->request('armed', 'POST', '/analytics.php', ['X-Logs-Token: ' . self::LOGS_TOKEN], '{}');
+        $this->request('armed', 'GET', '/analytics.php?format=json', ['X-Logs-Token: ' . self::LOGS_TOKEN]);
+
+        self::assertSame(405, $post);
+        self::assertSame(3, (int) self::$pdo->query('SELECT COUNT(*) FROM search_logs')->fetchColumn());
+    }
 }

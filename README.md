@@ -13,7 +13,7 @@ A standalone two-tier product-search service for an OpenCart 2.0.3.1 storefront 
 | [docs/ALIASES.md](docs/ALIASES.md) | Offline LLM alias generator: Persian spellings of English names, review, merge, rebuild |
 | [docs/TRAINING-COLAB.md](docs/TRAINING-COLAB.md) | **Rebuild / retrain end to end on Google Colab** (export, upload, build, download), the recommended build path |
 | [docs/DEPLOY.md](docs/DEPLOY.md) | One-time cPanel setup, every catalog update, upgrade notes, fallback, rollback, go-live checklist |
-| [docs/SEARCH-API.md](docs/SEARCH-API.md) | HTTP endpoints, `logs.php`, the `debug` flag, eval harness, search test page, model-parity check |
+| [docs/SEARCH-API.md](docs/SEARCH-API.md) | HTTP endpoints, `logs.php`, `analytics.php`, the `debug` flag, eval harness, search test page, model-parity check |
 | [INTEGRATION.md](INTEGRATION.md) | The storefront HTTP contract, the reference storefront snippet, the cPanel-to-VPS call |
 | [vps/README.md](vps/README.md) | The VPS vector-service runbook |
 | [CLAUDE.md](CLAUDE.md) | The implementation spec for Claude Code: contracts, milestones, workflow |

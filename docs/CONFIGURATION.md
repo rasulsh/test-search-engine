@@ -138,9 +138,11 @@ hand (see [DEPLOY.md](DEPLOY.md#result-cache-optional-redis-m26)) or wait out th
 | key | default | meaning |
 | --- | --- | --- |
 | `debug.token` | empty | enables `"debug": 1` on `/search` (`X-Debug-Token`), see [SEARCH-API.md](SEARCH-API.md#search-logs-and-ranking-debug) |
-| `logs.token` | empty | enables `logs.php` (`X-Logs-Token`) |
+| `logs.token` | empty | enables `logs.php` and `analytics.php` (`X-Logs-Token`; one token, no second secret) |
 | `logs.page_size` | 50 | rows per page |
 | `storefront.store_base`, `storefront.image_base` | empty | absolute bases for `with_details` product links and images; empty keeps the exported values |
+
+`search_logs` is never pruned automatically (no daemon on cPanel); an optional operator-run prune is in [DEPLOY.md](DEPLOY.md#upgrading-to-m31).
 
 The test page's `PRICE_SUFFIX` is a constant in `server/public/test.html`, not a server setting.
 

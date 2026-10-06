@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Tests;
 
+use App\Config;
 use App\Keyword;
 use App\ProductLoader;
 use App\SearchController;
@@ -230,14 +231,8 @@ final class KeywordSoftAndTest extends DatabaseTestCase
         mkdir($dir);
         file_put_contents($dir . '/' . Synonyms::ALIASES_FILE, '[["وارفار", "warfare"], ["مدرن", "modern"]]');
         Synonyms::clearCache();
-        $config = [
-            'db'     => ['products_table' => 'products', 'search_logs_table' => 'search_logs'],
-            'search' => [
-                'default_limit' => 20, 'min_token_size' => 3, 'semantic_top_k' => 100,
-                'stock_boost' => 0.1, 'popularity_boost' => 0.1,
-            ],
-            'paths'  => ['data' => $dir],
-        ];
+        $config = Config::defaults();
+        $config['paths']['data'] = $dir;
 
         try {
             $ids = SearchController::fromConfig($this->pdo, $config)->search(['q' => 'مدرن وارفار'])['product_ids'];
@@ -269,14 +264,9 @@ final class KeywordSoftAndTest extends DatabaseTestCase
         mkdir($dir);
         file_put_contents($dir . '/' . Synonyms::ALIASES_FILE, '[["وارفار", "warfare"]]');
         Synonyms::clearCache();
-        $config = [
-            'db'     => ['products_table' => 'products', 'search_logs_table' => 'search_logs'],
-            'search' => [
-                'default_limit' => 20, 'min_token_size' => 3, 'semantic_top_k' => 100,
-                'stock_boost' => 0.1, 'popularity_boost' => 0.1, 'semantic_min_score' => 0.82,
-            ],
-            'paths'  => ['data' => $dir],
-        ];
+        $config = Config::defaults();
+        $config['paths']['data'] = $dir;
+        $config['search']['semantic_min_score'] = 0.82;
 
         try {
             $keywordOnly = SearchController::fromConfig($this->pdo, $config)->search(['q' => 'مدرن وارفار']);

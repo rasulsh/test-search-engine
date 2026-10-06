@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace App\Tests;
 
+use App\Config;
+use App\Normalizer;
 use PHPUnit\Framework\TestCase;
 
 /**
@@ -13,13 +15,23 @@ use PHPUnit\Framework\TestCase;
  */
 final class ScaffoldTest extends TestCase
 {
-    /** @return array<string, mixed> */
+    /** @return array<string, mixed> the example's overrides merged over the code defaults */
     private function loadExampleConfig(): array
     {
-        $config = require __DIR__ . '/../config.example.php';
-        $this->assertIsArray($config);
+        return Config::load(__DIR__ . '/../config.example.php');
+    }
 
-        return $config;
+    public function testExampleConfigIsOverridesOnly(): void
+    {
+        $overrides = Config::overrides(__DIR__ . '/../config.example.php');
+        $tunables = ['search', 'model', 'paths'];
+        foreach ($tunables as $section) {
+            $this->assertArrayNotHasKey($section, $overrides, "config.example must not repeat {$section} defaults");
+        }
+        // Every key it does list is one the schema knows.
+        foreach (array_keys(Config::flatten($overrides)) as $path) {
+            $this->assertArrayHasKey($path, Config::schema(), "config.example lists unknown key {$path}");
+        }
     }
 
     public function testExampleConfigExposesRequiredSections(): void
@@ -42,7 +54,7 @@ final class ScaffoldTest extends TestCase
 
         $this->assertIsInt($model['dim']);
         $this->assertGreaterThan(0, $model['dim']);
-        $this->assertIsInt($model['normalization_version']);
+        $this->assertSame(Normalizer::VERSION, $model['normalization_version']);
     }
 
     public function testExampleConfigContainsNoSecrets(): void
@@ -55,23 +67,13 @@ final class ScaffoldTest extends TestCase
         // M21 tooling is off until an operator sets a token.
         $this->assertSame('', $config['debug']['token'], 'config.example must not ship a debug token');
         $this->assertSame('', $config['logs']['token'], 'config.example must not ship a logs token');
+        $this->assertSame('', $config['redis']['auth'], 'config.example must not ship a Redis password');
     }
 
-    public function testM21KnobsAreConfigDrivenAndDocumentedInTheEnvExample(): void
+    public function testM21KnobsHaveSaneDefaults(): void
     {
         $search = $this->loadExampleConfig()['search'];
-        $env = (string) file_get_contents(dirname(__DIR__, 2) . '/.env.example');
 
-        $knobs = [
-            'tag_weight' => 'SEARCH_TAG_WEIGHT', 'brand_weight' => 'SEARCH_BRAND_WEIGHT',
-            'category_weight' => 'SEARCH_CATEGORY_WEIGHT', 'brand_match_boost' => 'SEARCH_BRAND_MATCH_BOOST',
-            'category_match_boost' => 'SEARCH_CATEGORY_MATCH_BOOST', 'tag_match_boost' => 'SEARCH_TAG_MATCH_BOOST',
-            'tag_match_min_tokens' => 'SEARCH_TAG_MATCH_MIN_TOKENS',
-        ];
-        foreach ($knobs as $key => $variable) {
-            $this->assertArrayHasKey($key, $search, "Missing search.{$key}");
-            $this->assertStringContainsString($variable . '=', $env, "{$variable} is not in .env.example");
-        }
         // Tags just below the title, then brand, category, specs; boosts small next to the relevance range.
         $this->assertLessThan($search['title_weight'], $search['tag_weight']);
         $this->assertGreaterThan($search['spec_weight'], $search['tag_weight']);
@@ -79,8 +81,18 @@ final class ScaffoldTest extends TestCase
             $this->assertGreaterThan(0.0, $search[$boost]);
             $this->assertLessThanOrEqual(0.2, $search[$boost]);
         }
-        $this->assertStringContainsString('SEARCH_DEBUG_TOKEN=', $env);
-        $this->assertStringContainsString('SEARCH_LOGS_TOKEN=', $env);
+    }
+
+    public function testEnvExampleListsOnlyWhatTheServerStillReads(): void
+    {
+        $env = (string) file_get_contents(dirname(__DIR__, 2) . '/.env.example');
+
+        $names = ['SEARCH_DB_DSN', 'SEARCH_VPS_URL', 'SEARCH_RELOAD_TOKEN', 'SEARCH_DEBUG_TOKEN', 'SEARCH_LOGS_TOKEN'];
+        foreach ($names as $name) {
+            $this->assertStringContainsString($name . '=', $env, "{$name} is not in .env.example");
+        }
+        // Tunables are no longer read from the environment: listing them would mislead.
+        $this->assertStringNotContainsString('SEARCH_TITLE_WEIGHT', $env);
     }
 
     public function testRelevanceKnobsAreConfigDrivenWithDefaults(): void
@@ -103,17 +115,15 @@ final class ScaffoldTest extends TestCase
 
         putenv('SEARCH_VPS_URL=https://vps.example.com:8600');
         putenv('SEARCH_VPS_TOKEN=secret-from-env-0123');
-        putenv('SEARCH_VPS_TIMEOUT_MS=150');
         try {
             $vps = $this->loadExampleConfig()['vps'];
         } finally {
             putenv('SEARCH_VPS_URL');
             putenv('SEARCH_VPS_TOKEN');
-            putenv('SEARCH_VPS_TIMEOUT_MS');
         }
 
         $this->assertSame(
-            ['url' => 'https://vps.example.com:8600', 'token' => 'secret-from-env-0123', 'timeout_ms' => 150],
+            ['url' => 'https://vps.example.com:8600', 'token' => 'secret-from-env-0123', 'timeout_ms' => 300],
             $vps
         );
     }
@@ -129,7 +139,7 @@ final class ScaffoldTest extends TestCase
 
         $env = [
             'SEARCH_REDIS_ENABLED' => '1', 'SEARCH_REDIS_HOST' => '10.0.0.5', 'SEARCH_REDIS_PORT' => '6400',
-            'SEARCH_REDIS_AUTH' => 'pw-from-env', 'SEARCH_REDIS_DB' => '2', 'SEARCH_REDIS_TTL' => '60',
+            'SEARCH_REDIS_AUTH' => 'pw-from-env',
         ];
         foreach ($env as $name => $value) {
             putenv("{$name}={$value}");
@@ -143,27 +153,6 @@ final class ScaffoldTest extends TestCase
         }
 
         $this->assertTrue($redis['enabled']);
-        $this->assertSame(['10.0.0.5', 6400, 'pw-from-env', 2, 60], [
-            $redis['host'], $redis['port'], $redis['auth'], $redis['db'], $redis['ttl'],
-        ]);
-    }
-
-    public function testExplicitZeroFromTheEnvironmentIsHonoured(): void
-    {
-        // `getenv() ?: default` would silently replace "0" with the default.
-        putenv('SEARCH_SEMANTIC_MIN_SCORE=0');
-        putenv('SEARCH_STOCK_BOOST=0');
-        putenv('SEARCH_SEMANTIC_WEIGHT=0.5');
-        try {
-            $search = $this->loadExampleConfig()['search'];
-        } finally {
-            putenv('SEARCH_SEMANTIC_MIN_SCORE');
-            putenv('SEARCH_STOCK_BOOST');
-            putenv('SEARCH_SEMANTIC_WEIGHT');
-        }
-
-        $this->assertSame(0.0, $search['semantic_min_score']);
-        $this->assertSame(0.0, $search['stock_boost']);
-        $this->assertSame(0.5, $search['semantic_weight']);
+        $this->assertSame(['10.0.0.5', 6400, 'pw-from-env'], [$redis['host'], $redis['port'], $redis['auth']]);
     }
 }

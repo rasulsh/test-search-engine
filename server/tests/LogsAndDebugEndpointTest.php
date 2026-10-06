@@ -55,18 +55,15 @@ final class LogsAndDebugEndpointTest extends TestCase
         }
 
         $base = [
-            'SEARCH_DB_DSN' => $dsn,
-            'SEARCH_DB_USER' => $user,
-            'SEARCH_DB_PASSWORD' => $password,
-            'SEARCH_DATA_DIR' => sys_get_temp_dir() . '/logs_endpoint_no_bundle',
-            'SEARCH_VPS_URL' => '',
-            'SEARCH_LOGS_PAGE_SIZE' => '3',
+            'db' => ['dsn' => $dsn, 'user' => $user, 'password' => $password],
+            'paths' => ['data' => sys_get_temp_dir() . '/logs_endpoint_no_bundle'],
+            'logs' => ['page_size' => 3],
         ];
-        self::start(
-            'armed',
-            $base + ['SEARCH_LOGS_TOKEN' => self::LOGS_TOKEN, 'SEARCH_DEBUG_TOKEN' => self::DEBUG_TOKEN]
-        );
-        self::start('off', $base + ['SEARCH_LOGS_TOKEN' => '', 'SEARCH_DEBUG_TOKEN' => '']);
+        self::start('armed', array_replace_recursive($base, [
+            'logs' => ['token' => self::LOGS_TOKEN],
+            'debug' => ['token' => self::DEBUG_TOKEN],
+        ]));
+        self::start('off', $base);
     }
 
     public static function tearDownAfterClass(): void
@@ -98,7 +95,7 @@ final class LogsAndDebugEndpointTest extends TestCase
             [0 => ['pipe', 'r'], 1 => ['file', '/dev/null', 'w'], 2 => ['file', '/dev/null', 'w']],
             $pipes,
             $root,
-            $settings + getenv()
+            ['SEARCH_CONFIG_FILE' => TempConfig::write($settings)] + getenv()
         );
         self::assertIsResource($process, 'Failed to start built-in PHP server');
         self::$processes[$name] = $process;

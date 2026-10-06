@@ -119,13 +119,13 @@ tags with every non-letter / non-digit removed (`Normalizer::collapse`, parity
 tested; the normalized text itself, and so `normalization_version`, is
 unchanged), and the query with its spaces removed is substring-matched against
 it, then verified to start at a word of the spaced fields (so `far cry` does not
-match `sofar crystal`). A hit is a name match scored `SEARCH_COLLAPSE_WEIGHT`
+match `sofar crystal`). A hit is a name match scored `search.collapse_weight`
 (default 9, just under `title_weight`): in the title band when the name is in the
 title, in the tag / brand band otherwise. It is an **additional candidate
 source**: a product the token match already found keeps its own hit, and the
 scan is skipped when the page is already full of title hits that outrank it (a
-broad word). Collapsed queries shorter than `SEARCH_COLLAPSE_MIN_LENGTH` (default
-5) characters are not tried, `SEARCH_COLLAPSE_WEIGHT=0` turns it off. **Needs a
+broad word). Collapsed queries shorter than `search.collapse_min_length` (default
+5) characters are not tried, `search.collapse_weight=0` turns it off. **Needs a
 rebuild + reload** (new column `normalized_collapsed VARCHAR(700)` and covering
 index `idx_collapsed_scan`); until then the live table has no column and `/search`
 runs without it.
@@ -143,7 +143,7 @@ apply to specs. `feature` is parsed by a real PHP unserializer
 bytes and Persian characters take two; a malformed value (wrong lengths,
 truncated, trailing data) is skipped, and the build prints a warning naming the
 product ids. Each query token not in the title but in the specs earns
-`SEARCH_SPEC_WEIGHT` (default 6; title 10, description 1): `score =
+`search.spec_weight` (default 6; title 10, description 1): `score =
 (title_weight × title hits + spec_weight × spec hits + desc_weight × other
 hits) / tokens`. Every spec match ranks above every description-only match and
 below every title match in keyword-only results, whatever the weights; in hybrid
@@ -176,7 +176,7 @@ of a multi-word tag); the export's `DISTINCT` already removes repeated names.
 | `normalize.py` / `Normalizer.php` | tags use the **same** rules (shared fixture cases `tags:*`); `normalization_version` is **not** bumped (no rule changed) |
 | `build.py` | normalizes tags, brand and category into the load file; the embedding passage is `title tags brand category model features attributes desc` (tags early) |
 | `keyword.py` | tag words feed the `spellcheck.txt` dictionary, so "did you mean" learns franchise names (synonyms stay model/category based: tags carry no language pairing) |
-| `Keyword.php` | each query token not in the title but in tags / brand / category / specs earns that field's weight: `SEARCH_TAG_WEIGHT` 8 (just below the title's 10), `SEARCH_BRAND_WEIGHT` 7, `SEARCH_SPEC_WEIGHT` 6, `SEARCH_CATEGORY_WEIGHT` 5, description 1; a match in any of them (none in the title) ranks above every description-only row. A hit with every term in title **or tags** is a *name* match (`name_all`), solid for the hybrid floor |
+| `Keyword.php` | each query token not in the title but in tags / brand / category / specs earns that field's weight: `search.tag_weight` 8 (just below the title's 10), `search.brand_weight` 7, `search.spec_weight` 6, `search.category_weight` 5, description 1; a match in any of them (none in the title) ranks above every description-only row. A hit with every term in title **or tags** is a *name* match (`name_all`), solid for the hybrid floor |
 | `Ranker.php` | three small boosts after the floor, below |
 
 Needs a rebuild + reload (new columns and index); until then the live table has

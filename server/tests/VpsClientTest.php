@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Tests;
 
+use App\Config;
 use App\VpsClient;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
@@ -34,9 +35,10 @@ final class VpsClientTest extends TestCase
 
     public function testFromConfigIsNullWithoutAUrl(): void
     {
-        self::assertNull(VpsClient::fromConfig([]));
-        self::assertNull(VpsClient::fromConfig(['url' => '  ', 'token' => 'x', 'timeout_ms' => 300]));
-        self::assertInstanceOf(VpsClient::class, VpsClient::fromConfig(['url' => 'https://vps.example.com']));
+        self::assertNull(VpsClient::fromConfig(Config::defaults()['vps']));
+        self::assertNull(VpsClient::fromConfig(Config::merge(['vps' => ['url' => '  ', 'token' => 'x']])['vps']));
+        $configured = Config::merge(['vps' => ['url' => 'https://vps.example.com']])['vps'];
+        self::assertInstanceOf(VpsClient::class, VpsClient::fromConfig($configured));
     }
 
     public function testRequestShape(): void

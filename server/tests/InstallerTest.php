@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Tests;
 
+use App\Config;
 use App\Installer;
 use App\InstallerException;
 use App\Normalizer;
@@ -97,7 +98,7 @@ final class InstallerTest extends TestCase
                 PHP_BINARY,
                 '-r',
                 'spl_autoload_register(fn ($c) => require $argv[2] . "/" . substr($c, 4) . ".php");'
-                . 'echo json_encode(require $argv[1]);',
+                . 'echo json_encode(\\App\\Config::load($argv[1], dirname($argv[1])));',
                 $path,
                 $srcDir ?? dirname(__DIR__) . '/src',
             ],
@@ -172,17 +173,48 @@ final class InstallerTest extends TestCase
         self::assertSame($this->serverDir . '/data_incoming', $config['paths']['data_incoming']);
     }
 
-    public function testRenderedConfigStillLetsTheEnvironmentOverride(): void
+    public function testRenderedConfigHoldsOnlyOverrides(): void
     {
         $installer = new Installer($this->serverDir, '/unused');
         $php = $installer->renderConfig($installer->validate(self::validInput()));
 
-        self::assertStringContainsString("getenv('SEARCH_DB_USER') ?: 'cpuser_search'", $php);
-        self::assertStringContainsString("\$setting('SEARCH_TITLE_WEIGHT', '12.0')", $php);
-        self::assertStringContainsString("(int) (getenv('SEARCH_MODEL_DIM') ?: 384)", $php);
+        // The environment still overrides the template-listed settings.
+        self::assertStringContainsString("\$setting('SEARCH_DB_USER', 'cpuser_search')", $php);
+        // Tunables the form changed are written as plain overrides; the rest stay out.
+        self::assertStringContainsString("'title_weight' => 12.0,", $php);
+        self::assertStringContainsString("'timeout_ms' => 250,", $php);
+        self::assertStringNotContainsString('model_dim', $php);
+        self::assertStringNotContainsString("'min_relevance'", $php);
         // validInput() pins version 2, which differs from the code's: a literal.
-        self::assertStringContainsString("(int) (getenv('SEARCH_NORMALIZATION_VERSION') ?: 2)", $php);
+        self::assertStringContainsString("'normalization_version' => 2,", $php);
         self::assertStringContainsString('Written by public/install.php', $php);
+    }
+
+    public function testKeepingTheDefaultsWritesNoTunableOverrides(): void
+    {
+        $installer = new Installer($this->serverDir, '/unused');
+        $values = $installer->defaults();
+        $values = array_merge($values, ['db_name' => 'x', 'db_user' => 'x', 'db_password' => '']);
+        $php = $installer->renderConfig($installer->validate($values));
+
+        // Only the template's own (env-driven) keys are written: no tunable override.
+        self::assertSame(
+            [],
+            array_diff_key(
+                Config::flatten(Config::overrides($this->writeTemp($php))),
+                array_flip(['db.dsn', 'db.user', 'db.password', 'vps.url', 'vps.token', 'redis.enabled',
+                    'redis.host', 'redis.port', 'redis.auth', 'storefront.store_base', 'storefront.image_base',
+                    'reload.token', 'logs.token', 'debug.token'])
+            )
+        );
+    }
+
+    private function writeTemp(string $php): string
+    {
+        $path = $this->serverDir . '/rendered.php';
+        file_put_contents($path, $php);
+
+        return $path;
     }
 
     public function testDefaultsComeFromTheTemplateWithAFreshToken(): void
@@ -190,7 +222,7 @@ final class InstallerTest extends TestCase
         $installer = new Installer($this->serverDir, '/unused');
         $first = $installer->defaults();
 
-        self::assertSame('intfloat/multilingual-e5-small', $first['model_name']);
+        self::assertSame(Config::defaults()['model']['name'], $first['model_name']);
         self::assertSame('384', $first['model_dim']);
         self::assertSame((string) Normalizer::VERSION, $first['normalization_version']);
         self::assertSame('0.4', $first['semantic_min_score']);
@@ -293,7 +325,7 @@ final class InstallerTest extends TestCase
         $template = $this->serverDir . '/config.example.php';
         file_put_contents(
             $template,
-            str_replace("'SEARCH_PHRASE_BONUS'", "'SEARCH_PHRASE_BOOST'", (string) file_get_contents($template))
+            str_replace("'SEARCH_VPS_TOKEN'", "'SEARCH_VPS_SECRET'", (string) file_get_contents($template))
         );
         $installer = new Installer($this->serverDir, '/unused');
 

@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Tests;
 
 use App\Cache;
+use App\Config;
 use PHPUnit\Framework\TestCase;
 
 final class CacheTest extends TestCase
@@ -24,11 +25,11 @@ final class CacheTest extends TestCase
         @unlink($this->errorLog);
     }
 
-    public function testDisabledByDefaultAndWhenMissingFromAnOlderConfig(): void
+    public function testDisabledByDefaultAndUntilEnabled(): void
     {
-        self::assertNull(Cache::fromConfig([]));
-        self::assertNull(Cache::fromConfig(['redis' => ['enabled' => false]]));
-        self::assertInstanceOf(Cache::class, Cache::fromConfig(['redis' => ['enabled' => true]]));
+        self::assertNull(Cache::fromConfig(Config::defaults()));
+        self::assertNull(Cache::fromConfig(Config::merge(['redis' => ['enabled' => false]])));
+        self::assertInstanceOf(Cache::class, Cache::fromConfig(Config::merge(['redis' => ['enabled' => true]])));
     }
 
     public function testKeyDependsOnEveryResultAffectingInput(): void

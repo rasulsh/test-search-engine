@@ -48,19 +48,18 @@ final class VpsEndpointTest extends TestCase
 
         self::$vps = new MockVpsServer([]);
         $env = [
-            'SEARCH_DB_DSN' => $dsn,
-            'SEARCH_DB_USER' => $user,
-            'SEARCH_DB_PASSWORD' => $password,
-            'SEARCH_DATA_DIR' => sys_get_temp_dir() . '/vps_endpoint_no_bundle',
-            'SEARCH_VPS_TOKEN' => FakeVps::TOKEN,
-            'SEARCH_VPS_TIMEOUT_MS' => (string) self::TIMEOUT_MS,
-            'SEARCH_SEMANTIC_MIN_SCORE' => '0.4',
+            'db' => ['dsn' => $dsn, 'user' => $user, 'password' => $password],
+            'paths' => ['data' => sys_get_temp_dir() . '/vps_endpoint_no_bundle'],
+            'vps' => ['token' => FakeVps::TOKEN, 'timeout_ms' => self::TIMEOUT_MS],
         ];
-        self::$sites['up'] = self::startSite($root, $env + ['SEARCH_VPS_URL' => self::$vps->url]);
+        self::$sites['up'] = self::startSite(
+            $root,
+            array_replace_recursive($env, ['vps' => ['url' => self::$vps->url]])
+        );
         // Nothing listens on this port: connection refused.
         self::$sites['down'] = self::startSite(
             $root,
-            $env + ['SEARCH_VPS_URL' => 'http://127.0.0.1:' . MockVpsServer::freePort()]
+            array_replace_recursive($env, ['vps' => ['url' => 'http://127.0.0.1:' . MockVpsServer::freePort()]])
         );
     }
 
@@ -90,7 +89,7 @@ final class VpsEndpointTest extends TestCase
             [0 => ['pipe', 'r'], 1 => ['file', '/dev/null', 'w'], 2 => ['file', '/dev/null', 'w']],
             $pipes,
             $root,
-            $env + getenv()
+            ['SEARCH_CONFIG_FILE' => TempConfig::write($env)] + getenv()
         );
         self::assertIsResource($process);
         $url = "http://127.0.0.1:{$port}";

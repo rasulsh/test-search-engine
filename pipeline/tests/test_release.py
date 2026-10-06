@@ -28,7 +28,8 @@ def dev_tree(tmp_path: Path) -> Path:
     for rel in ("bootstrap.php", "config.php", "config.example.php", "src/Keyword.php",
                 "public/index.php", "public/reload.php", "public/test.html", "public/install.php",
                 "public/client/model/stale.onnx", "data/vectors.bin",
-                "data_incoming/old.txt", "tests/KeywordTest.php", "tools/eval.php"):
+                "data_incoming/old.txt", "tests/KeywordTest.php", "tools/eval.php",
+                "tools/config-check.php"):
         (server / rel).parent.mkdir(parents=True, exist_ok=True)
         (server / rel).write_text(rel, encoding="utf-8")
     return server
@@ -58,7 +59,9 @@ def test_release_packs_bundle_under_data_incoming_and_the_server_code(
     # Never shipped: the server's own config, live data, dev-only files.
     assert not any(n.endswith("config.php") for n in names)
     assert "config.example.php" in names  # install.php's template
-    assert not any(n.startswith(("data/", "tests/", "tools/")) for n in names)
+    assert not any(n.startswith(("data/", "tests/")) for n in names)
+    # The one tool shipped: the config doctor, run after unzipping.
+    assert [n for n in names if n.startswith("tools/")] == ["tools/config-check.php"]
     assert "data_incoming/old.txt" not in names
     assert not (tmp_path / "out" / "release.zip.tmp").exists()
     # First deploy needs nothing else: the web installer, its template, the schema.

@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Tests;
 
+use App\Config;
 use App\Keyword;
 use App\Logger;
 use App\Normalizer;
@@ -39,7 +40,7 @@ final class SpellerLatencyGuardTest extends DatabaseTestCase
 
     public function testNoKeywordMatchQueryStaysWithinBudgetOnWarmPath(): void
     {
-        $config = require self::repoRoot() . '/server/config.example.php';
+        $config = Config::defaults();
         $budgetMs = (float) $config['search']['latency_budget_ms'];
 
         $words = $this->wordPool();

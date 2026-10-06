@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Tests;
 
+use App\Config;
 use App\Keyword;
 use App\ProductLoader;
 use App\SearchController;
@@ -264,7 +265,7 @@ final class KeywordStructuredFieldsTest extends DatabaseTestCase
                 (product_id, title, description, normalized_title, normalized_desc, normalized_specs, stock, popularity)
              VALUES (1, 'x', '', 'zetamax console', '', '', 1, 1)"
         );
-        $config = require self::repoRoot() . '/server/config.example.php';
+        $config = Config::defaults();
         $config['paths']['data'] = sys_get_temp_dir() . '/no-bundle';
         $vps = FakeVps::client(['products' => [1 => [1.0, 0.0]], 'queries' => ['*' => [1.0, 0.0]]]);
 

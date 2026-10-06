@@ -26,30 +26,31 @@ final class Installer
 
     /** Form field => environment variable whose default it replaces in the template. */
     private const TEMPLATE_KEYS = [
-        'db_user'               => 'SEARCH_DB_USER',
-        'db_password'           => 'SEARCH_DB_PASSWORD',
-        'reload_token'          => 'SEARCH_RELOAD_TOKEN',
-        'model_name'            => 'SEARCH_MODEL',
-        'model_dim'             => 'SEARCH_MODEL_DIM',
-        'normalization_version' => 'SEARCH_NORMALIZATION_VERSION',
-        'store_base'            => 'SEARCH_STORE_BASE',
-        'image_base'            => 'SEARCH_IMAGE_BASE',
-        'vps_url'               => 'SEARCH_VPS_URL',
-        'vps_token'             => 'SEARCH_VPS_TOKEN',
-        'vps_timeout_ms'        => 'SEARCH_VPS_TIMEOUT_MS',
-        'semantic_min_score'    => 'SEARCH_SEMANTIC_MIN_SCORE',
-        'title_weight'          => 'SEARCH_TITLE_WEIGHT',
-        'desc_weight'           => 'SEARCH_DESC_WEIGHT',
-        'spec_weight'           => 'SEARCH_SPEC_WEIGHT',
-        'phrase_bonus'          => 'SEARCH_PHRASE_BONUS',
+        'db_user'      => 'SEARCH_DB_USER',
+        'db_password'  => 'SEARCH_DB_PASSWORD',
+        'reload_token' => 'SEARCH_RELOAD_TOKEN',
+        'store_base'   => 'SEARCH_STORE_BASE',
+        'image_base'   => 'SEARCH_IMAGE_BASE',
+        'vps_url'      => 'SEARCH_VPS_URL',
+        'vps_token'    => 'SEARCH_VPS_TOKEN',
     ];
 
     /**
-     * Template default of SEARCH_NORMALIZATION_VERSION: the code's own version.
-     * Kept in config.php when the form keeps it, so a later rules bump needs no
-     * config edit; any other value is written as a literal pin.
+     * Form field => config path of a tunable the template does not list: its
+     * default is App\Config's, and it is written into config.php (at the
+     * template's markers) only when the form's value differs from that default.
      */
-    private const VERSION_DEFAULT = '\App\Normalizer::VERSION';
+    private const OVERRIDE_KEYS = [
+        'model_name'            => 'model.name',
+        'model_dim'             => 'model.dim',
+        'normalization_version' => 'model.normalization_version',
+        'vps_timeout_ms'        => 'vps.timeout_ms',
+        'semantic_min_score'    => 'search.semantic_min_score',
+        'title_weight'          => 'search.title_weight',
+        'desc_weight'           => 'search.desc_weight',
+        'spec_weight'           => 'search.spec_weight',
+        'phrase_bonus'          => 'search.phrase_bonus',
+    ];
 
     /** Numeric fields: [type, min, max]. */
     private const NUMBERS = [
@@ -96,6 +97,11 @@ final class Installer
         foreach (self::TEMPLATE_KEYS as $field => $env) {
             $values[$field] ??= self::literalValue(self::findDefault($template, $env)[2]);
         }
+        $defaults = Config::flatten(Config::defaults());
+        foreach (self::OVERRIDE_KEYS as $field => $path) {
+            $default = $defaults[$path];
+            $values[$field] = is_float($default) ? var_export($default, true) : (string) $default;
+        }
 
         return $values;
     }
@@ -121,7 +127,7 @@ final class Installer
         $this->createSchema($pdo);
         $this->writeConfig($values);
 
-        $config = $this->loadConfig($this->configPath);
+        $config = Config::load($this->configPath, dirname($this->configPath));
         if (!is_file(rtrim((string) $config['paths']['data_incoming'], '/') . '/meta.json')) {
             return ['status' => 'no_bundle'];
         }
@@ -144,7 +150,12 @@ final class Installer
     public function validate(array $input): array
     {
         $values = [];
-        foreach (array_merge(['db_host', 'db_port', 'db_name'], array_keys(self::TEMPLATE_KEYS)) as $field) {
+        $fields = array_merge(
+            ['db_host', 'db_port', 'db_name'],
+            array_keys(self::TEMPLATE_KEYS),
+            array_keys(self::OVERRIDE_KEYS)
+        );
+        foreach ($fields as $field) {
             $raw = $input[$field] ?? '';
             $raw = is_string($raw) ? $raw : '';
             // The password is taken verbatim: surrounding spaces may be part of it.
@@ -285,13 +296,10 @@ final class Installer
             $replacements[$env] = $values[$field];
         }
         foreach ($replacements as $env => $value) {
-            [$offset, $length, $literal] = self::findDefault($php, $env);
-            if ($literal === self::VERSION_DEFAULT && $value === (string) Normalizer::VERSION) {
-                continue;
-            }
-            $new = str_starts_with($literal, "'") ? var_export($value, true) : $value;
-            $php = substr_replace($php, $new, $offset, $length);
+            [$offset, $length] = self::findDefault($php, $env);
+            $php = substr_replace($php, var_export($value, true), $offset, $length);
         }
+        $php = self::insertOverrides($php, $values);
         $php = preg_replace(
             '/^declare\(strict_types=1\);$/m',
             "declare(strict_types=1);\n\n// Written by public/install.php on " . gmdate('Y-m-d H:i') . ' UTC. Holds the'
@@ -339,7 +347,8 @@ final class Installer
      */
     private function assertBundleCompatible(array $values): void
     {
-        $incoming = rtrim((string) $this->loadConfig($this->templatePath)['paths']['data_incoming'], '/');
+        $paths = Config::load($this->templatePath, dirname($this->templatePath))['paths'];
+        $incoming = rtrim((string) $paths['data_incoming'], '/');
         $meta = is_file($incoming . '/meta.json')
             ? json_decode((string) file_get_contents($incoming . '/meta.json'), true)
             : null;
@@ -358,15 +367,52 @@ final class Installer
         }
     }
 
-    /** @return array<string, mixed> */
-    private function loadConfig(string $path): array
+    /**
+     * Write the form's tunables that differ from the code defaults at the
+     * template's markers: vps keys inside the vps section, the rest as sections.
+     *
+     * @param array<string, string> $values validated values
+     */
+    private static function insertOverrides(string $php, array $values): string
     {
-        $config = (static fn (string $file): mixed => require $file)($path);
-        if (!is_array($config)) {
-            throw new InstallerException('config_invalid', ['error' => basename($path) . ' returned no array']);
+        $defaults = Config::flatten(Config::defaults());
+        $sections = [];
+        foreach (self::OVERRIDE_KEYS as $field => $path) {
+            $default = $defaults[$path];
+            $literal = match (true) {
+                is_int($default) => (string) (int) $values[$field],
+                is_float($default) => var_export((float) $values[$field], true),
+                default => var_export($values[$field], true),
+            };
+            if ($literal === var_export($default, true)) {
+                continue;
+            }
+            [$section, $key] = explode('.', $path, 2);
+            $sections[$section][$key] = $literal;
         }
 
-        return $config;
+        $render = static function (array $entries, string $indent): string {
+            $lines = [];
+            foreach ($entries as $key => $literal) {
+                $lines[] = $indent . var_export($key, true) . ' => ' . $literal . ',';
+            }
+
+            return implode("\n", $lines);
+        };
+        $vps = $render($sections['vps'] ?? [], '        ');
+        unset($sections['vps']);
+        $top = [];
+        foreach ($sections as $section => $entries) {
+            $top[] = '    ' . var_export($section, true) . " => [\n" . $render($entries, '        ') . "\n    ],";
+        }
+        $fill = static fn (string $php, string $marker, string $lines): string => preg_replace_callback(
+            '/^[ \t]*\/\/ @installer:' . $marker . '.*$/m',
+            static fn (array $match): string => $lines !== '' ? $lines : $match[0],
+            $php,
+            1
+        ) ?? $php;
+
+        return $fill($fill($php, 'vps', $vps), 'sections', implode("\n", $top));
     }
 
     private function template(): string
@@ -382,14 +428,14 @@ final class Installer
     /**
      * Locate the default literal for $env in the template: the right side of
      * `getenv('X') ?: <literal>` or the second argument of `$setting('X', '<literal>')`
-     * (a quoted string, a number, or VERSION_DEFAULT).
+     * (a quoted string or a number).
      *
      * @return array{int, int, string} byte offset, length, literal source
      */
     private static function findDefault(string $php, string $env): array
     {
         $name = preg_quote($env, '/');
-        $literal = "('(?:[^'\\\\]|\\\\.)*'|-?\\d+(?:\\.\\d+)?|" . preg_quote(self::VERSION_DEFAULT, '/') . ')';
+        $literal = "('(?:[^'\\\\]|\\\\.)*'|-?\\d+(?:\\.\\d+)?)";
         $pattern = "/(?:getenv\\('{$name}'\\)\\s*\\?:\\s*|\\\$setting\\('{$name}',\\s*){$literal}/";
         if (preg_match_all($pattern, $php, $matches, PREG_OFFSET_CAPTURE) !== 1) {
             throw new InstallerException('template_mismatch', ['key' => $env]);
@@ -401,9 +447,6 @@ final class Installer
 
     private static function literalValue(string $literal): string
     {
-        if ($literal === self::VERSION_DEFAULT) {
-            return (string) Normalizer::VERSION;
-        }
         if (!str_starts_with($literal, "'")) {
             return $literal;
         }

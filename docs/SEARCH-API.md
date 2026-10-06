@@ -31,7 +31,7 @@ rejected value) is logged with `error_log` and **never** fails the search.
 `public/logs.php` (`GET /logs.php`, English UI) shows the table read-only:
 **Recent** (newest first), **Zero results** (the gaps worth fixing: add aliases,
 tags or synonyms for them) and **Slowest**, paginated
-(`SEARCH_LOGS_PAGE_SIZE`, 50). It is off until `SEARCH_LOGS_TOKEN` is set. Send
+(`logs.page_size`, 50). It is off until `SEARCH_LOGS_TOKEN` is set. Send
 the token in the `X-Logs-Token` header or open `/logs.php?token=…` (a form asks
 for it otherwise); a URL token ends up in the browser history and the host's
 access log, so prefer the header and rotate the token if a link leaks. The page
@@ -83,7 +83,7 @@ result count, a clickable "did you mean", and the round-trip time. It sends only
 says whether the answer was hybrid (the VPS answered) or keyword-only (no VPS
 configured, or it was down or slow); in hybrid mode each card shows the cosine
 similarity the VPS computed (small, muted), which is how to pick
-`SEARCH_SEMANTIC_MIN_SCORE`. An empty result shows a "no results" message.
+`search.semantic_min_score`. An empty result shows a "no results" message.
 Clicking a card opens the product in a new tab.
 
 It makes **no third-party requests**: the page and its search request are

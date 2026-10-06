@@ -56,7 +56,7 @@ $search = static function (array $case) use ($controller, &$semanticCount): arra
 
 $report = (new Evaluator($search))->run($cases, $k);
 
-$tier = ($config['vps']['url'] ?? '') === '' ? 'VPS not configured' : "VPS answered {$semanticCount}";
+$tier = $config['vps']['url'] === '' ? 'VPS not configured' : "VPS answered {$semanticCount}";
 printf("Eval: %d queries, k=%d  (%s)\n", $report['query_count'], $report['k'], $tier);
 printf("%-26s %8s %8s %8s\n", 'query', 'hits', 'P@k', 'R@k');
 foreach ($report['per_query'] as $row) {

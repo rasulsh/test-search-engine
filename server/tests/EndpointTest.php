@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Tests;
 
+use App\Config;
 use App\Normalizer;
 use PDO;
 use PHPUnit\Framework\TestCase;
@@ -51,14 +52,12 @@ final class EndpointTest extends TestCase
         $port = self::freePort();
         self::$baseUrl = "http://127.0.0.1:{$port}";
 
-        // The server reads DB settings from these env vars (see config.example.php).
+        // The server reads these overrides (see config.example.php).
         $env = getenv();
-        $env['SEARCH_DB_DSN'] = $dsn;
-        $env['SEARCH_DB_USER'] = $user;
-        $env['SEARCH_DB_PASSWORD'] = $password;
-        $env['SEARCH_PRODUCTS_TABLE'] = 'products';
-        $env['SEARCH_SEARCH_LOGS_TABLE'] = 'search_logs';
-        $env['SEARCH_RELOAD_TOKEN'] = 'test-secret';
+        $overrides = [
+            'db' => ['dsn' => $dsn, 'user' => $user, 'password' => $password],
+            'reload' => ['token' => 'test-secret'],
+        ];
 
         // A bundle holding only the spellcheck dictionary. Its frequencies are
         // deliberately the reverse of the catalog's, so a suggestion can only
@@ -67,20 +66,21 @@ final class EndpointTest extends TestCase
         mkdir(self::$dataDir, 0777, true);
         // Both clear the default suggest_min_frequency (2).
         file_put_contents(self::$dataDir . '/spellcheck.txt', "body\t9\nsony\t2\n");
-        $env['SEARCH_DATA_DIR'] = self::$dataDir;
+        $overrides['paths']['data'] = self::$dataDir;
 
         // A staged bundle whose meta is compatible but which has no
         // products.load.sql, so /reload stops before any swap either way.
         self::$incomingDir = sys_get_temp_dir() . '/endpoint_incoming_' . uniqid('', true);
         mkdir(self::$incomingDir, 0777, true);
         file_put_contents(self::$incomingDir . '/meta.json', (string) json_encode([
-            'model' => getenv('SEARCH_MODEL') ?: 'intfloat/multilingual-e5-small',
-            'dim' => (int) (getenv('SEARCH_MODEL_DIM') ?: 384),
+            'model' => Config::defaults()['model']['name'],
+            'dim' => Config::defaults()['model']['dim'],
             'normalization_version' => Normalizer::VERSION,
             'count' => 0,
         ]));
         file_put_contents(self::$incomingDir . '/vectors.idx', '');
-        $env['SEARCH_DATA_INCOMING_DIR'] = self::$incomingDir;
+        $overrides['paths']['data_incoming'] = self::$incomingDir;
+        $env['SEARCH_CONFIG_FILE'] = TempConfig::write($overrides);
 
         $descriptors = [
             0 => ['pipe', 'r'],
@@ -133,6 +133,21 @@ final class EndpointTest extends TestCase
         self::assertSame('ok', $decoded['status']);
         self::assertTrue($decoded['checks']['database']);
         self::assertSame(14, $decoded['checks']['product_count']);
+    }
+
+    public function testHealthReportsTheConfigDoctorWithoutSecretValues(): void
+    {
+        [, $body] = $this->request('GET', '/health');
+        $decoded = json_decode((string) $body, true);
+
+        self::assertSame(['ok', 'errors', 'warnings'], array_keys($decoded['config']));
+        self::assertTrue($decoded['config']['ok']);
+        self::assertSame([], $decoded['config']['errors']);
+        // No VPS configured is fine (keyword-only); the reload token is set.
+        self::assertSame([], $decoded['config']['warnings']);
+        foreach (['test-secret', 'mysql:'] as $secret) {
+            self::assertStringNotContainsString($secret, (string) $body);
+        }
     }
 
     public function testUnknownPathReturns404(): void

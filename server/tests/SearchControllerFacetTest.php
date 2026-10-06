@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Tests;
 
+use App\Config;
 use App\ProductLoader;
 use App\SearchController;
 
@@ -47,15 +48,11 @@ final class SearchControllerFacetTest extends DatabaseTestCase
     /** @return list<int> */
     private function ids(string $query, int $minProducts = 20, int $limit = 20): array
     {
-        $controller = SearchController::fromConfig($this->pdo, [
-            'db'     => ['products_table' => 'products', 'search_logs_table' => 'search_logs'],
-            'search' => [
-                'default_limit' => 20, 'min_token_size' => 3, 'semantic_top_k' => 100,
-                'stock_boost' => 0.1, 'popularity_boost' => 0.1, 'semantic_min_score' => 0.82,
-                'facet_min_products' => $minProducts,
-            ],
-            'paths'  => ['data' => sys_get_temp_dir() . '/no-bundle-' . uniqid()],
-        ], FakeVps::client([
+        $config = Config::defaults();
+        $config['search']['semantic_min_score'] = 0.82;
+        $config['search']['facet_min_products'] = $minProducts;
+        $config['paths']['data'] = sys_get_temp_dir() . '/no-bundle-' . uniqid();
+        $controller = SearchController::fromConfig($this->pdo, $config, FakeVps::client([
             'queries'  => ['*' => [1.0, 0.0, 0.0, 0.0]],
             'products' => [self::POWER_SUPPLY => [0.0, 0.0, 0.0, 1.0]],
         ]));

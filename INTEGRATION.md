@@ -76,7 +76,7 @@ Request headers: `Content-Type: application/json`.
 | --- | --- | --- | --- |
 | `q` | string | yes | Raw query text as the shopper typed it. It is also what the service sends to the VPS for the semantic tier. A missing, non-string or blank `q` is treated as `""` and returns no results (the VPS is not asked). |
 | `customer_id` | string | no | Stored in `search_logs` only. **Must be a JSON string.** A number is silently logged as `NULL`, so send `String(id)`. Longer than 64 characters: the search is answered but its log row is dropped. |
-| `limit` | int | no | Maximum number of ids to return. Values below 1, or non-numeric values, are treated as 1. The default is `SEARCH_DEFAULT_LIMIT` (20). There is no server-side maximum, so the storefront should keep it at 50 or less. |
+| `limit` | int | no | Maximum number of ids to return. Values below 1, or non-numeric values, are treated as 1. The default is `search.default_limit` (20). There is no server-side maximum, so the storefront should keep it at 50 or less. |
 | `with_details` | bool | no | Only the JSON value `true` enables it (a string `"true"` or `1` is ignored). Adds a `products` array with display fields. Omit it and the response is exactly as below. Used by the search test page; the storefront renders from OpenCart and does not need it. |
 | `debug` | `1` / `true` | no | M21, operator tooling, not for the storefront. Adds a per-result score breakdown (`debug`, below). Needs the header `X-Debug-Token` equal to the configured `SEARCH_DEBUG_TOKEN`; without a configured token, or with a wrong or missing header, the request is refused `403 debug_forbidden` and not run. The breakdown is never logged. |
 
@@ -96,7 +96,7 @@ Response `200`:
 | --- | --- |
 | `query.raw` | `q` echoed back. |
 | `query.normalized` | `q` after Persian normalization (the canonical rules, contract 1). |
-| `did_you_mean` | `null`, or a keyboard-layout fix (`ئشزذخخن` → `macbook`) or spelling fix (`macbok` → `macbook`). Only tried when the literal query has fewer than `SEARCH_SUGGEST_MIN_RESULTS` (3) keyword hits, and only returned when the suggestion itself has **more** keyword hits than the literal query, so it never points to an empty result. It derives from shopper input, so render it as text, never as HTML. |
+| `did_you_mean` | `null`, or a keyboard-layout fix (`ئشزذخخن` → `macbook`) or spelling fix (`macbok` → `macbook`). Only tried when the literal query has fewer than `search.suggest_min_results` (3) keyword hits, and only returned when the suggestion itself has **more** keyword hits than the literal query, so it never points to an empty result. It derives from shopper input, so render it as text, never as HTML. |
 | `did_you_mean_applied` | `true` when the literal query matched nothing and the returned ids are for the suggestion: show "Showing results for …". `false` when the literal query had a few hits: the ids are for what the shopper typed, and the suggestion is only offered: show "Did you mean …?" linking to a search for it. |
 | `count` | `product_ids.length`. |
 | `product_ids` | Ordered OpenCart `product_id`s, best first. The service returns ids only; the storefront renders the products. |
@@ -109,7 +109,7 @@ Semantics the storefront should know:
 - A `q_vector` field sent by a pre-M18 storefront is ignored; the answer is
   the same as without it.
 - **Keyword-only** (no VPS configured, or the VPS is unreachable, slower than
-  `SEARCH_VPS_TIMEOUT_MS`, or answers with an error): FULLTEXT
+  `vps.timeout_ms`, or answers with an error): FULLTEXT
   results, still `200`. Products whose title matches the query come first, then products
   that match in their specs (attributes and feature titles), then products
   that match only in their description. `count` can be `0`.
@@ -117,8 +117,8 @@ Semantics the storefront should know:
   specs and description combined): `کیبورد قرمز` is red keyboards, not all
   keyboards plus all red products. When no product holds every word, the
   products holding the most words are returned instead. Set
-  `SEARCH_REQUIRE_ALL_TERMS=0` to always return partial matches.
-- Soft AND (M23): when fewer than `SEARCH_SOFT_AND_MIN_RESULTS` (3) products hold
+  `search.require_all_terms=0` to always return partial matches.
+- Soft AND (M23): when fewer than `search.soft_and_min_results` (3) products hold
   every word, partial-coverage matches (half the words by default) are added
   *below* every full-coverage product, so a word nothing matches no longer empties
   the result. The response shape is unchanged (`product_ids` stay ordered).
@@ -133,7 +133,7 @@ Semantics the storefront should know:
   Roman numerals equal digits (`GTA V` = `GTA 5`, so `query.normalized` shows
   `gta 5`). The response shape is unchanged.
 - **Hybrid** (the VPS answered): cosine neighbours below
-  `SEARCH_SEMANTIC_MIN_SCORE` are dropped, and so are keyword hits that match
+  `search.semantic_min_score` are dropped, and so are keyword hits that match
   only in the description (not the title or specs) with a cosine below it
   (one the VPS did not return counts as below it, unless the VPS returned a
   full top-K list, in which case it is kept). Every keyword hit ranks above every
@@ -168,7 +168,7 @@ snippet below.
 M21, operator tooling (not part of the storefront contract). A read-only HTML
 page (English) over `search_logs`: `?view=recent` (newest first, default),
 `?view=zero` (only searches that returned nothing, the gaps worth fixing) or
-`?view=slowest` (by `latency_ms`), paginated with `?page=N` (`SEARCH_LOGS_PAGE_SIZE`
+`?view=slowest` (by `latency_ms`), paginated with `?page=N` (`logs.page_size`
 rows, default 50). Columns: id, time, query, normalized query, tier, vector,
 result count, top ids, ms, suggestion, customer.
 
@@ -189,13 +189,16 @@ token reaches browser history and access logs.
 No body. Use it for uptime monitoring.
 
 ```json
-{ "status": "ok", "checks": { "database": true, "product_count": 18 } }
+{ "status": "ok", "checks": { "database": true, "product_count": 18 },
+  "config": { "ok": true, "errors": [], "warnings": [] } }
 ```
 
 | status | HTTP | meaning |
 | --- | --- | --- |
 | `ok` | 200 | Database reachable. `product_count` is the live `products` row count. **`0` means no catalog has been loaded yet**, so also alert on `product_count == 0`. |
 | `degraded` | 503 | Database unreachable: `{"database": false, "product_count": null}`. |
+
+`config` is the config doctor's verdict ([CONFIGURATION.md](docs/CONFIGURATION.md#config-doctor)): `ok` is false when a required key is missing or a value has the wrong type, and `errors` / `warnings` list **key paths and statuses only**, never values (the endpoint is unauthenticated). It does not change the status code.
 
 `405 method_not_allowed` for any method other than `GET`, **including `HEAD`**, so
 configure the uptime monitor to use `GET`.
@@ -291,17 +294,17 @@ POST {SEARCH_VPS_URL}/search-vectors
 Authorization: Bearer {SEARCH_VPS_TOKEN}
 Content-Type: application/json
 
-{"q": "<raw query>", "limit": SEARCH_SEMANTIC_TOP_K, "min_score": SEARCH_SEMANTIC_MIN_SCORE}
+{"q": "<raw query>", "limit": search.semantic_top_k, "min_score": search.semantic_min_score}
 -> 200 {"results": [{"product_id": 2002, "score": 0.71}, ...], "model": "BAAI/bge-m3", "took_ms": 31.4}
 ```
 
-| setting (`config.php` `vps`, or env) | default | meaning |
+| setting (`config.php` key; the URL and token also read the environment) | default | meaning |
 | --- | --- | --- |
 | `SEARCH_VPS_URL` | empty | Base URL of the VPS service (`https://vsearch.example.com`, the URL `vps/setup.sh --domain` prints). Empty = keyword-only search, nothing is called. |
 | `SEARCH_VPS_TOKEN` | empty | The VPS's `VPS_TOKEN`. A secret: keep it in the environment or `config.php` (install.php asks for it). |
-| `SEARCH_VPS_TIMEOUT_MS` | `300` | Budget for the whole call, connect included. A slower VPS means a keyword-only answer for that search. |
-| `SEARCH_SEMANTIC_MIN_SCORE` | `0.4` | The cosine floor, sent as `min_score` and re-applied on cPanel. See below. |
-| `SEARCH_SEMANTIC_TOP_K` | `300` | How many neighbours are asked for. |
+| `vps.timeout_ms` | `300` | Budget for the whole call, connect included. A slower VPS means a keyword-only answer for that search. |
+| `search.semantic_min_score` | `0.4` | The cosine floor, sent as `min_score` and re-applied on cPanel. See below. |
+| `search.semantic_top_k` | `300` | How many neighbours are asked for. |
 
 - **Fallback.** Unreachable, timed out, any non-`200` (`401` wrong token,
   `503` no vectors loaded, …) or a malformed body: the search is answered
@@ -311,7 +314,7 @@ Content-Type: application/json
   (`<reason>` is `timeout`, `unreachable: …`, `http_<status>` or
   `malformed_response`), and its `search_logs` row has `had_vector = 0`.
 - **Latency.** Keyword search plus the VPS round trip; a dead VPS costs at
-  most `SEARCH_VPS_TIMEOUT_MS`. Keep the timeout well under the 200 ms budget
+  most `vps.timeout_ms`. Keep the timeout well under the 200 ms budget
   plus network time on the real hosts (measure there).
 - **The floor.** bge-m3 cosines sit far lower than e5's: the old 0.82 would
   drop nearly every bge-m3 neighbour. 0.4 is a starting point and **needs
@@ -342,7 +345,7 @@ What the storefront does per search:
 
 | situation | what is sent | result |
 | --- | --- | --- |
-| VPS configured and answering within `SEARCH_VPS_TIMEOUT_MS` | `q` | hybrid |
+| VPS configured and answering within `vps.timeout_ms` | `q` | hybrid |
 | No VPS configured, or VPS down, slow, or erroring | `q` | keyword-only (still `200`) |
 | Search service down or non-`200` | redirect | OpenCart native search |
 
@@ -437,7 +440,7 @@ The semantic model lives on the VPS. Contract 2 (`CLAUDE.md`) is now between
 / `VPS_POOLING` / `VPS_QUERY_PREFIX` in `/etc/search-vectors.env`); the VPS's
 `/reload` rejects vectors whose `meta.json` disagrees. Follow
 `vps/README.md` ("Model parity", "Updating the product vectors"), then re-tune
-`SEARCH_SEMANTIC_MIN_SCORE` for the new model's score range. Nothing changes
+`search.semantic_min_score` for the new model's score range. Nothing changes
 on cPanel or in the storefront.
 
 `SEARCH_MODEL` / `SEARCH_MODEL_DIM` in `server/config.php` only describe the

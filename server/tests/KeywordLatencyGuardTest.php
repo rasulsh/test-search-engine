@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Tests;
 
+use App\Config;
 use App\Keyword;
 use App\ProductLoader;
 use App\SearchController;
@@ -98,7 +99,7 @@ final class KeywordLatencyGuardTest extends DatabaseTestCase
     #[DataProvider('shapes')]
     public function testBroadQueryStaysWithinBudget(int $descIndexChars, bool $withSpecs, ?array $aliases): void
     {
-        $config = require self::repoRoot() . '/server/config.example.php';
+        $config = Config::defaults();
         $budgetMs = (float) $config['search']['latency_budget_ms'];
         $maxVariants = (int) $config['search']['alias_max_variants'];
         $this->seedCatalog($descIndexChars, $withSpecs);
@@ -145,7 +146,7 @@ final class KeywordLatencyGuardTest extends DatabaseTestCase
 
     public function testAnyTermsFallbackStaysWithinBudget(): void
     {
-        $config = require self::repoRoot() . '/server/config.example.php';
+        $config = Config::defaults();
         $budgetMs = (float) $config['search']['latency_budget_ms'];
         $this->seedCatalog(self::DESC_INDEX_CHARS, true);
         $keyword = new Keyword($this->pdo, 'products', 3, 20, null, 10.0, 1.0, 5.0, 4, 6.0, softAndMinResults: 0);
@@ -200,7 +201,7 @@ final class KeywordLatencyGuardTest extends DatabaseTestCase
     #[DataProvider('softAndShapes')]
     public function testSoftAndTopUpStaysWithinBudget(array $groups, bool $broad): void
     {
-        $config = require self::repoRoot() . '/server/config.example.php';
+        $config = Config::defaults();
         $budgetMs = (float) $config['search']['latency_budget_ms'];
         $maxVariants = (int) $config['search']['alias_max_variants'];
         $this->seedCatalog(self::DESC_INDEX_CHARS, true);
@@ -259,7 +260,7 @@ final class KeywordLatencyGuardTest extends DatabaseTestCase
 
     public function testCollapsedQueryStaysWithinBudget(): void
     {
-        $config = require self::repoRoot() . '/server/config.example.php';
+        $config = Config::defaults();
         $budgetMs = (float) $config['search']['latency_budget_ms'];
         $this->seedCatalog(self::DESC_INDEX_CHARS, true);
         $on = new Keyword($this->pdo, 'products', 3, 20);
@@ -306,7 +307,7 @@ final class KeywordLatencyGuardTest extends DatabaseTestCase
 
     public function testHybridSearchWithVpsNeighboursStaysWithinBudget(): void
     {
-        $config = require self::repoRoot() . '/server/config.example.php';
+        $config = Config::defaults();
         $budgetMs = (float) $config['search']['latency_budget_ms'];
         $topK = (int) $config['search']['semantic_top_k'];
         $this->seedCatalog(self::DESC_INDEX_CHARS, true);
@@ -349,7 +350,7 @@ final class KeywordLatencyGuardTest extends DatabaseTestCase
 
     public function testStructuredFieldsBroadQueryStaysWithinBudget(): void
     {
-        $config = require self::repoRoot() . '/server/config.example.php';
+        $config = Config::defaults();
         $budgetMs = (float) $config['search']['latency_budget_ms'];
         $this->seedCatalog(self::DESC_INDEX_CHARS, true, true);
         $keyword = new Keyword($this->pdo, 'products', 3, 20, null, 10.0, 1.0, 5.0, 4, 6.0);
@@ -380,7 +381,7 @@ final class KeywordLatencyGuardTest extends DatabaseTestCase
 
     public function testStructuredFieldsHybridSearchStaysWithinBudget(): void
     {
-        $config = require self::repoRoot() . '/server/config.example.php';
+        $config = Config::defaults();
         $budgetMs = (float) $config['search']['latency_budget_ms'];
         $topK = (int) $config['search']['semantic_top_k'];
         $this->seedCatalog(self::DESC_INDEX_CHARS, true, true);

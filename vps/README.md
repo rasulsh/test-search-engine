@@ -5,7 +5,7 @@ query model and the product vectors, and answers **query text → top-K
 `{product_id, score}`**. cPanel keeps the keyword tier and stays the public,
 same-origin endpoint; since M18 its `/search` calls this service
 server-to-server (`SEARCH_VPS_URL` / `SEARCH_VPS_TOKEN` /
-`SEARCH_VPS_TIMEOUT_MS`, see INTEGRATION.md, "Semantic tier: cPanel to VPS")
+`vps.timeout_ms`, see INTEGRATION.md, "Semantic tier: cPanel to VPS")
 and falls back to keyword-only results whenever it is unreachable, slow or
 failing. The service is never meant to be reachable from browsers.
 
@@ -49,7 +49,7 @@ All requests and responses are JSON. Every endpoint except `/health` needs
 - Results are best-first (ties by `product_id`). Neighbours below the floor
   are dropped, so a query with nothing close returns `"results": []`, not
   far-away products. The floor is the request's `min_score` when given (cPanel
-  always sends its `SEARCH_SEMANTIC_MIN_SCORE`, so the relevance floor is
+  always sends its `search.semantic_min_score`, so the relevance floor is
   tuned in one place), else `VPS_SEMANTIC_MIN_SCORE`.
 
 ```bash
@@ -148,7 +148,7 @@ curl -s https://vsearch.example.com/health
 | `VPS_MODEL_DIR`, `VPS_ONNX_FILE` | `/opt/search-vectors/model`, `onnx/model_quantized.onnx` | Model location; `onnx/model.onnx` = fp32 build (see "Model parity"). Re-run `setup.sh` after changing the file. |
 | `VPS_MAX_TOKENS`, `VPS_THREADS` | `512`, `0` (all cores) | Tokenizer truncation; ONNX Runtime threads. |
 | `VPS_DATA_DIR` | `/var/lib/search-vectors` | Holds `active/`, `incoming/`, `previous/`. |
-| `VPS_SEMANTIC_MIN_SCORE` | `0.5` | Cosine floor for requests without `min_score` (cPanel always sends its own, `SEARCH_SEMANTIC_MIN_SCORE`, default 0.4). bge-m3 scores differ from e5's (e5's floor was 0.82); tune on the eval set. On the 6-product fixture, right single-word hits scored 0.42–0.49 (`تلویزیون` → the LG TV 0.42) while wrong ones reached 0.43, and multi-word hits 0.53–0.62: no floor separates short queries, which is why cPanel will fuse with keyword results. |
+| `VPS_SEMANTIC_MIN_SCORE` | `0.5` | Cosine floor for requests without `min_score` (cPanel always sends its own, `search.semantic_min_score`, default 0.4). bge-m3 scores differ from e5's (e5's floor was 0.82); tune on the eval set. On the 6-product fixture, right single-word hits scored 0.42–0.49 (`تلویزیون` → the LG TV 0.42) while wrong ones reached 0.43, and multi-word hits 0.53–0.62: no floor separates short queries, which is why cPanel will fuse with keyword results. |
 | `VPS_DEFAULT_LIMIT` / `VPS_MAX_LIMIT` | `100` / `500` | Result count. |
 | `VPS_MAX_QUERY_CHARS` | `200` | Longer queries are cut. |
 

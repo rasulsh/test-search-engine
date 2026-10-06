@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Tests;
 
+use App\Config;
 use App\Identifier;
 use App\Keyword;
 use App\Logger;
@@ -337,16 +338,10 @@ final class SearchControllerVpsTest extends DatabaseTestCase
 
     public function testFromConfigBuildsTheVpsClientAndDefaultsTheFloorForBgeM3(): void
     {
-        // A config without semantic_min_score gets the bge-m3 default (0.4):
+        // The default semantic_min_score is the bge-m3 one (0.4):
         // a 0.6 neighbour is kept, a 0.3 one dropped.
-        $config = [
-            'db'     => ['products_table' => 'products', 'search_logs_table' => 'search_logs'],
-            'search' => [
-                'default_limit' => 20, 'min_token_size' => 3, 'semantic_top_k' => 100,
-                'stock_boost' => 0.1, 'popularity_boost' => 0.1,
-            ],
-            'paths'  => ['data' => sys_get_temp_dir() . '/no-bundle'],
-        ];
+        $config = Config::defaults();
+        $config['paths']['data'] = sys_get_temp_dir() . '/no-bundle';
         $calls = [];
         $result = SearchController::fromConfig($this->pdo, $config, $this->vps([
             1011 => [0.6, 0.8, 0.0, 0.0],
@@ -355,8 +350,8 @@ final class SearchControllerVpsTest extends DatabaseTestCase
 
         self::assertSame([1011], $result['product_ids']);
         self::assertSame(0.4, $calls[0]['min_score']);
-        // No vps section (a config.php from before M18): keyword-only, no error.
-        self::assertNull(VpsClient::fromConfig($config['vps'] ?? []));
+        // No vps.url (the default): keyword-only, no error.
+        self::assertNull(VpsClient::fromConfig($config['vps']));
         $keywordOnly = SearchController::fromConfig($this->pdo, $config)->search(['q' => 'بلبرینگ']);
         self::assertSame([], $keywordOnly['product_ids']);
     }
@@ -470,15 +465,10 @@ final class SearchControllerVpsTest extends DatabaseTestCase
     public function testMinRelevanceIsConfigDriven(): void
     {
         $vectors = $this->seedBearingCatalog();
-        $config = [
-            'db'     => ['products_table' => 'products', 'search_logs_table' => 'search_logs'],
-            'search' => [
-                'default_limit' => 20, 'min_token_size' => 3, 'semantic_top_k' => 100,
-                'stock_boost' => 0.1, 'popularity_boost' => 0.1,
-                'semantic_min_score' => 0.82, 'min_relevance' => 0.0,
-            ],
-            'paths'  => ['data' => sys_get_temp_dir() . '/no-bundle'],
-        ];
+        $config = Config::defaults();
+        $config['search']['semantic_min_score'] = 0.82;
+        $config['search']['min_relevance'] = 0.0;
+        $config['paths']['data'] = sys_get_temp_dir() . '/no-bundle';
         $search = fn (array $config): array =>
             SearchController::fromConfig($this->pdo, $config, $this->vps($vectors))->search(['q' => 'bearing']);
 
@@ -486,12 +476,13 @@ final class SearchControllerVpsTest extends DatabaseTestCase
         $open = $search($config)['product_ids'];
         self::assertEqualsCanonicalizing([3001, 3002, 3003, 3004], $open);
 
-        unset($config['search']['min_relevance']); // older config.php: 0.45 default
+        $config['search']['min_relevance'] = Config::defaults()['search']['min_relevance'];
         self::assertSame([3001, 3003], $search($config)['product_ids']); // title hit solid, 3002 / 3004 weak
 
         // Weights come from config too: keyword-only weighting + a floor of 0.5
         // keeps the best keyword hit (3001 = title match) and drops the rest.
-        $config['search'] += ['keyword_weight' => 1.0, 'semantic_weight' => 0.0, 'min_relevance' => 0.5];
+        $keywordOnly = ['keyword_weight' => 1.0, 'semantic_weight' => 0.0, 'min_relevance' => 0.5];
+        $config['search'] = $keywordOnly + $config['search'];
         self::assertSame([3001], $search($config)['product_ids']);
     }
 

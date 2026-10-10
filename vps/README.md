@@ -93,7 +93,10 @@ env file, token, model, vectors and the live certificate):
 
 1. installs whichever of `python3`, `python3-venv`, `curl`, `tar`, `ufw` is
    missing (apt is not touched when nothing is missing, so an unreachable
-   distro mirror does not block a re-run), creates the `searchvec` system user;
+   distro mirror does not block a re-run; a package removed but not purged,
+   dpkg status `deinstall ok config-files`, counts as missing and is
+   reinstalled; if `ufw` still cannot be installed the firewall step prints a
+   warning and is skipped, so re-run once it installs), creates the `searchvec` system user;
 2. copies `search_vectors/` to `/opt/search-vectors/app` and installs
    `requirements.txt` into `/opt/search-vectors/venv` (CPU only, no torch);
 3. writes `/etc/search-vectors.env` from `search-vectors.env.example` **once**,

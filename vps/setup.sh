@@ -113,8 +113,10 @@ echo "==> System packages"
 missing=()
 wanted=(python3 python3-venv ca-certificates curl tar ufw)
 [ "$REDIS" = 1 ] && wanted+=(redis-server)
+# A removed-but-not-purged package (deinstall ok config-files) must be reinstalled.
+pkg_present() { dpkg-query -W -f='${Status}' "$1" 2>/dev/null | grep -q 'install ok installed'; }
 for pkg in "${wanted[@]}"; do
-    dpkg -s "$pkg" >/dev/null 2>&1 || missing+=("$pkg")
+    pkg_present "$pkg" || missing+=("$pkg")
 done
 if [ "${#missing[@]}" -gt 0 ]; then
     echo "    installing: ${missing[*]}"
@@ -174,6 +176,16 @@ allow_ssh() {
     done
 }
 
+# The service binds 127.0.0.1 behind Caddy, so a missing ufw degrades the
+# firewall step to a loud warning instead of aborting the whole provisioning.
+have_ufw=1
+command -v ufw >/dev/null 2>&1 || have_ufw=0
+warn_no_ufw() {
+    echo "WARNING: ufw is not installed (apt mirror unreachable?); firewall rules were NOT applied:" >&2
+    echo "         $1" >&2
+    echo "         Re-run setup.sh once ufw installs." >&2
+}
+
 if [ "$REDIS" = 1 ]; then
     echo "==> Redis result cache (password, protected mode, no persistence)"
     redis_conf="$REDIS_CONF_DIR/search-cache.conf"
@@ -211,16 +223,20 @@ REDISCONF
     systemctl enable redis-server >/dev/null
     systemctl restart redis-server
 
-    # Our previous Redis rules go first, so a changed or dropped --redis-allow-ip takes effect.
-    while n="$(ufw status numbered | sed -n 's/^\[ *\([0-9][0-9]*\)\].*search-vectors-redis.*/\1/p' | head -n1)" && [ -n "$n" ]; do
-        ufw --force delete "$n" >/dev/null
-    done
-    if [ -n "$REDIS_ALLOW_IP" ]; then
-        allow_ssh
-        ufw allow from "$REDIS_ALLOW_IP" to any port "$REDIS_PORT" proto tcp comment 'search-vectors-redis' >/dev/null
-        ufw deny "$REDIS_PORT/tcp" comment 'search-vectors-redis-deny' >/dev/null
-        ufw --force enable >/dev/null
-        echo "    $REDIS_PORT/tcp open to $REDIS_ALLOW_IP only"
+    if [ "$have_ufw" -eq 0 ]; then
+        [ -n "$REDIS_ALLOW_IP" ] && warn_no_ufw "$REDIS_PORT/tcp was not restricted to $REDIS_ALLOW_IP"
+    else
+        # Our previous Redis rules go first, so a changed or dropped --redis-allow-ip takes effect.
+        while n="$(ufw status numbered | sed -n 's/^\[ *\([0-9][0-9]*\)\].*search-vectors-redis.*/\1/p' | head -n1)" && [ -n "$n" ]; do
+            ufw --force delete "$n" >/dev/null
+        done
+        if [ -n "$REDIS_ALLOW_IP" ]; then
+            allow_ssh
+            ufw allow from "$REDIS_ALLOW_IP" to any port "$REDIS_PORT" proto tcp comment 'search-vectors-redis' >/dev/null
+            ufw deny "$REDIS_PORT/tcp" comment 'search-vectors-redis-deny' >/dev/null
+            ufw --force enable >/dev/null
+            echo "    $REDIS_PORT/tcp open to $REDIS_ALLOW_IP only"
+        fi
     fi
     if [ "$new_pass" -eq 1 ]; then
         echo "    wrote $redis_conf with a new random password (cPanel SEARCH_REDIS_AUTH=$redis_pass)"
@@ -319,21 +335,25 @@ else
 fi
 
 echo "==> Firewall (ufw)"
-allow_ssh
-ufw allow 80/tcp comment 'search-vectors-acme' >/dev/null
-# Replace our previous 443 rules so a changed or dropped --allow-ip takes effect.
-while n="$(ufw status numbered | sed -n 's/^\[ *\([0-9][0-9]*\)\].*search-vectors-https.*/\1/p' | head -n1)" && [ -n "$n" ]; do
-    ufw --force delete "$n" >/dev/null
-done
-if [ -n "$ALLOW_IP" ]; then
-    ufw allow from "$ALLOW_IP" to any port 443 proto tcp comment 'search-vectors-https' >/dev/null
-    echo "    443 restricted to $ALLOW_IP; 80 open for ACME"
+if [ "$have_ufw" -eq 0 ]; then
+    warn_no_ufw "port $port (backend) deny and the 443 restriction were not applied"
 else
-    ufw allow 443/tcp comment 'search-vectors-https' >/dev/null
-    echo "    443 open (bearer token + TLS); 80 open for ACME"
+    allow_ssh
+    ufw allow 80/tcp comment 'search-vectors-acme' >/dev/null
+    # Replace our previous 443 rules so a changed or dropped --allow-ip takes effect.
+    while n="$(ufw status numbered | sed -n 's/^\[ *\([0-9][0-9]*\)\].*search-vectors-https.*/\1/p' | head -n1)" && [ -n "$n" ]; do
+        ufw --force delete "$n" >/dev/null
+    done
+    if [ -n "$ALLOW_IP" ]; then
+        ufw allow from "$ALLOW_IP" to any port 443 proto tcp comment 'search-vectors-https' >/dev/null
+        echo "    443 restricted to $ALLOW_IP; 80 open for ACME"
+    else
+        ufw allow 443/tcp comment 'search-vectors-https' >/dev/null
+        echo "    443 open (bearer token + TLS); 80 open for ACME"
+    fi
+    ufw deny "$port/tcp" comment 'search-vectors-backend' >/dev/null
+    ufw --force enable >/dev/null
 fi
-ufw deny "$port/tcp" comment 'search-vectors-backend' >/dev/null
-ufw --force enable >/dev/null
 
 echo "==> Waiting for HTTPS (best effort)"
 live=0

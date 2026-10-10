@@ -19,7 +19,7 @@ STUBS = {
     "id": '[ "$#" -eq 1 ] && { echo 0; exit 0; }; [ -e "$SB/user.$2" ]',
     "useradd": 'touch "$SB/user.${!#}"',
     "chown": "exit 0",
-    "dpkg": "exit 0",
+    "dpkg-query": "printf 'install ok installed'",
     "apt-get": 'echo "apt-get $*" >> "$SB/calls"',
     "sleep": "exit 0",
     "getent": 'echo "203.0.113.7 $2"',
@@ -262,10 +262,29 @@ def test_apt_is_skipped_when_nothing_is_missing(sandbox: Path) -> None:
 
 
 def test_apt_installs_only_missing_packages(sandbox: Path) -> None:
-    dpkg = sandbox / "bin/dpkg"
-    dpkg.write_text('#!/usr/bin/env bash\n[ "$2" != ufw ]\n')
+    dpkg = sandbox / "bin/dpkg-query"
+    dpkg.write_text('#!/usr/bin/env bash\n[ "${!#}" = ufw ] || printf "install ok installed"\n')
     run_setup(sandbox, "--domain", DOMAIN)
     assert any(c.startswith("apt-get install") and c.endswith(" ufw") for c in calls(sandbox))
+
+
+def test_residual_config_package_counts_as_missing(sandbox: Path) -> None:
+    stub = sandbox / "bin/dpkg-query"
+    stub.write_text(
+        '#!/usr/bin/env bash\n'
+        'if [ "${!#}" = ufw ]; then printf "deinstall ok config-files"; else printf "install ok installed"; fi\n'
+    )
+    run_setup(sandbox, "--domain", DOMAIN)
+    assert any(c.startswith("apt-get install") and c.endswith(" ufw") for c in calls(sandbox))
+
+
+def test_missing_ufw_warns_and_skips_firewall(sandbox: Path) -> None:
+    (sandbox / "bin/ufw").unlink()
+    result = run_setup(sandbox, "--domain", DOMAIN)
+    assert result.returncode == 0, result.stderr
+    assert "ufw is not installed" in result.stderr
+    assert "Re-run setup.sh" in result.stderr
+    assert rules(sandbox) == []
 
 
 # --- Redis result cache (M26, --redis) ---------------------------------------
@@ -353,8 +372,8 @@ def test_unsafe_redis_options_are_rejected_before_any_change(
 
 
 def test_redis_package_is_installed_only_when_missing(sandbox: Path) -> None:
-    stub = sandbox / "bin" / "dpkg"
-    stub.write_text('#!/usr/bin/env bash\n[ "$2" != redis-server ]\n')
+    stub = sandbox / "bin" / "dpkg-query"
+    stub.write_text('#!/usr/bin/env bash\n[ "${!#}" = redis-server ] || printf "install ok installed"\n')
     result = run_setup(sandbox, "--redis")
     assert result.returncode == 0, result.stderr
     assert "apt-get install -y -qq redis-server" in calls(sandbox)

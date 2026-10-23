@@ -438,6 +438,46 @@ final class AnalyticsTest extends DatabaseTestCase
         );
     }
 
+    public function testLatencyTrendWithoutWindowFunctionsIsAnEmptySeriesAndLogsOnce(): void
+    {
+        $this->seed();
+        $windowless = WindowlessPdo::connect();
+        $analytics = new Analytics($windowless, 'search_logs');
+        $log = (string) tempnam(sys_get_temp_dir(), 'analytics_log_');
+        $previous = (string) ini_set('error_log', $log);
+
+        try {
+            $trend = $analytics->latencyTrend($analytics->since('7d'), 'day');
+            $logged = (string) file_get_contents($log);
+        } finally {
+            ini_set('error_log', $previous);
+            @unlink($log);
+        }
+
+        self::assertSame([], $trend, 'the same shape as a window with no rows');
+        self::assertCount(1, $windowless->refused);
+        self::assertSame(1, substr_count($logged, 'latency trend unavailable'));
+    }
+
+    public function testReportKeepsEverySectionWhenWindowFunctionsAreMissing(): void
+    {
+        $this->seed();
+        $previous = (string) ini_set('error_log', '/dev/null');
+
+        try {
+            $report = (new Analytics(WindowlessPdo::connect(), 'search_logs', 'products'))->report('7d');
+            $full = (new Analytics($this->pdo, 'search_logs', 'products'))->report('7d');
+        } finally {
+            ini_set('error_log', $previous);
+        }
+
+        self::assertSame([], $report['latency_trend'], 'the key is always present, empty here');
+        self::assertNotSame([], $full['latency_trend']);
+        unset($report['latency_trend'], $full['latency_trend'], $report['since'], $full['since']);
+        self::assertSame($full, $report, 'every other section is unchanged');
+        self::assertSame(8, $report['summary']['total']);
+    }
+
     public function testReportCarriesTheNewSectionsAdditively(): void
     {
         $this->seed();

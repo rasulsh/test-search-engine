@@ -23,7 +23,11 @@ final class AnalyticsPageTest extends TestCase
 
         preg_match('#<script type="application/json" id="report">(.*?)</script>#s', $html, $m);
         self::assertSame(self::report($query), json_decode($m[1], true));
-        self::assertSame(2, substr_count($html, '</script>'), 'the data block and the code block, nothing a query adds');
+        self::assertSame(
+            2,
+            substr_count($html, '</script>'),
+            'the data block and the code block, nothing a query adds'
+        );
         self::assertStringNotContainsString('<script>alert', $html);
     }
 
@@ -46,7 +50,8 @@ final class AnalyticsPageTest extends TestCase
 
         foreach (
             ['Search analytics', 'Zero-result rate', 'Cache hit rate', 'Hybrid share', 'p95 latency', 'Busiest hours',
-            'Query length', 'Top brands', 'Top categories', 'Zero-result queries', 'Top queries', 'prefers-color-scheme:dark',
+            'Query length', 'Top brands', 'Top categories', 'Zero-result queries', 'Top queries',
+            'prefers-color-scheme:dark',
             'Filter queries', 'format=json'] as $text
         ) {
             self::assertStringContainsString($text, $html, $text);
@@ -60,7 +65,8 @@ final class AnalyticsPageTest extends TestCase
             self::markTestSkipped('node is not installed');
         }
 
-        exec(escapeshellarg($node) . ' --check ' . escapeshellarg(dirname(__DIR__) . '/src/AnalyticsPage.js') . ' 2>&1', $out, $code);
+        $script = dirname(__DIR__) . '/src/AnalyticsPage.js';
+        exec(escapeshellarg($node) . ' --check ' . escapeshellarg($script) . ' 2>&1', $out, $code);
 
         self::assertSame(0, $code, implode("\n", $out));
     }

@@ -404,7 +404,11 @@ final class LogsAndDebugEndpointTest extends TestCase
         }
         preg_match("/script-src 'nonce-([^']+)'/", $all, $csp);
         preg_match('/<script nonce="([^"]+)"/', $body, $tag);
-        self::assertSame(strtolower($tag[1] ?? 'x'), strtolower($csp[1] ?? 'y'), 'the CSP nonce is the script tag nonce');
+        self::assertSame(
+            strtolower($tag[1] ?? 'x'),
+            strtolower($csp[1] ?? 'y'),
+            'the CSP nonce is the script tag nonce'
+        );
         self::assertStringNotContainsString('https://', $body, 'no third-party request');
     }
 

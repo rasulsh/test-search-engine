@@ -228,7 +228,9 @@ final class Analytics
 
     /**
      * Average and nearest-rank p95 latency per bucket, oldest first. The p95
-     * uses window functions (MariaDB 10.2+ / MySQL 8) over the window's rows.
+     * uses window functions (MariaDB 10.2+ / MySQL 8) over the window's rows. A
+     * database without them (or any error here) yields an empty series, logged
+     * once, so this one chart can never take the whole dashboard down.
      *
      * @return list<array{bucket: string, searches: int, avg: float, p95: int}>
      */
@@ -236,22 +238,29 @@ final class Analytics
     {
         $format = self::bucketFormat($bucket);
         [$where, $params] = $this->trendBound($since, $bucket);
-        $stmt = $this->pdo->prepare(
-            'SELECT bucket, COUNT(*) AS searches, AVG(latency_ms) AS avg,'
-            . ' MIN(CASE WHEN rn >= CEIL(0.95 * cnt) THEN latency_ms END) AS p95 FROM ('
-            . 'SELECT bucket, latency_ms, ROW_NUMBER() OVER (PARTITION BY bucket ORDER BY latency_ms) AS rn,'
-            . ' COUNT(*) OVER (PARTITION BY bucket) AS cnt FROM ('
-            . "SELECT DATE_FORMAT(ts, '{$format}') AS bucket, latency_ms FROM {$this->table}{$where}"
-            . ') AS b) AS ranked GROUP BY bucket ORDER BY bucket DESC LIMIT ' . self::TREND_DAYS
-        );
-        $stmt->execute($params);
+        try {
+            $stmt = $this->pdo->prepare(
+                'SELECT bucket, COUNT(*) AS searches, AVG(latency_ms) AS avg,'
+                . ' MIN(CASE WHEN rn >= CEIL(0.95 * cnt) THEN latency_ms END) AS p95 FROM ('
+                . 'SELECT bucket, latency_ms, ROW_NUMBER() OVER (PARTITION BY bucket ORDER BY latency_ms) AS rn,'
+                . ' COUNT(*) OVER (PARTITION BY bucket) AS cnt FROM ('
+                . "SELECT DATE_FORMAT(ts, '{$format}') AS bucket, latency_ms FROM {$this->table}{$where}"
+                . ') AS b) AS ranked GROUP BY bucket ORDER BY bucket DESC LIMIT ' . self::TREND_DAYS
+            );
+            $stmt->execute($params);
+            $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
+        } catch (PDOException $e) {
+            error_log('analytics: latency trend unavailable (window functions needed): ' . $e->getMessage());
+
+            return [];
+        }
 
         return array_reverse(array_map(
             static fn (array $r): array => [
                 'bucket' => (string) $r['bucket'], 'searches' => (int) $r['searches'],
                 'avg' => round((float) $r['avg'], 1), 'p95' => (int) $r['p95'],
             ],
-            $stmt->fetchAll(PDO::FETCH_ASSOC)
+            $rows
         ));
     }
 

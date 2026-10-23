@@ -144,7 +144,9 @@ shape. `hourly_heatmap` lists only the cells that have searches (`weekday` 0 = M
 6 = Sunday), `query_length` always has the five buckets (`5` = five or more words),
 `top_brands_categories` is empty when the catalog table cannot be read, and
 `refresh_seconds` echoes `logs.refresh_seconds` for the page. The trend p95 and the
-nearest-rank latency use window functions (MariaDB 10.2+ / MySQL 8). With the dashboard
+nearest-rank latency use window functions (MariaDB 10.2+ / MySQL 8); on an older
+database `latency_trend` is simply `[]` (one `error_log` line per request) and every other
+section still renders. With the dashboard
 open the report is computed every `refresh_seconds` for its window: on a very large log,
 raise `logs.refresh_seconds` or set it to `0`.
 

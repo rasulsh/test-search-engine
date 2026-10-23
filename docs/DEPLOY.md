@@ -198,6 +198,8 @@ keyword-indexed (default `SEARCH_DESC_INDEX_CHARS`, else 800; 0 = the whole
 description). It only affects the build; to change it, build and deploy a new
 release. `--aliases FILE` ships another [alias file](SEARCH-BEHAVIOR.md#aliases) instead of
 `pipeline/aliases.json`.
+`--intent-map FILE` likewise ships another [intent map](SEARCH-BEHAVIOR.md#intent-map) instead of
+`pipeline/intent_map.json`.
 
 On Windows: `pipeline\release.bat --csv export.csv --out release.zip`
 (same arguments). The command embeds the VPS vectors with the **real** model
@@ -207,7 +209,7 @@ bundle's `vectors.bin` with the mock embedder (see below) and packs one
 
 | in the zip | what |
 | --- | --- |
-| `data_incoming/` | the bundle: `vectors.bin`, `vectors.idx`, `products.load.sql`, `meta.json`, `spellcheck.txt`, `synonyms.json`, `aliases.json`, `keymap.json` |
+| `data_incoming/` | the bundle: `vectors.bin`, `vectors.idx`, `products.load.sql`, `meta.json`, `spellcheck.txt`, `synonyms.json`, `aliases.json`, `intent_map.json`, `keymap.json` |
 | `bootstrap.php`, `src/`, `public/`, `tools/config-check.php`, `tools/logs-export.php` | the server code (including `public/install.php` and `public/test.html`), the config doctor and the [log export](SEARCH-API.md#log-export) (M36) |
 | `config.example.php`, `db/schema.sql` | the installer's config template and schema |
 
@@ -394,6 +396,17 @@ ALTER TABLE search_logs ADD INDEX IF NOT EXISTS idx_ts_result (ts, result_count)
 Without it the pages still work; the zero-result and grouped queries just scan
 more rows on a large log. `db/schema.sql` carries the index for new installs.
 
+<a id="upgrading-to-m35"></a>**Upgrading to M35 (analytics dashboard v2).** Server code only (upload the new
+`server/`, which now carries `src/AnalyticsPage.js` and `src/AnalyticsPage.css`, both in
+`release.zip`); there is no schema change and **no new index**: every new query is
+window-bounded and uses `idx_ts` / `idx_ts_result` (the zero-rate trend is covered by
+`idx_ts_result`). `logs.refresh_seconds` (default 30, `0` = off) is the only new setting. The
+latency trend needs window functions (MariaDB 10.2+). The page makes no request to
+any other host, so it works behind a restrictive network; reopen it as
+`analytics.php?token=…`. If you ever do need a further index, add it by hand like
+the M31 one (`ALTER TABLE search_logs ADD INDEX IF NOT EXISTS ...`): `/reload` never
+touches `search_logs`.
+
 **Log retention (optional, operator-run).** `search_logs` grows with traffic and
 nothing prunes it, on purpose: no daemon runs on the cPanel host. When the table
 gets large, delete old rows by hand or from a cPanel cron you own, for example
@@ -474,6 +487,7 @@ talks to it with an in-repo RESP client: no Composer package, no PHP extension.
 `"cache_flushed": true` (or `false`, with the swap still done, when Redis could not be reached: entries then
 expire with their TTL). To flush by hand after a settings change:
 `redis-cli -a <password> --scan --pattern 'search:cache:*' | xargs -r redis-cli -a <password> del`.
+The pattern also covers the `search:cache:freq:*` hit counters of the adaptive TTL (M33).
 
 If Redis stops, searches carry on uncached (each costs at most `redis.timeout_ms` extra, logged with
 `error_log`); to turn the cache off set `SEARCH_REDIS_ENABLED=0`.

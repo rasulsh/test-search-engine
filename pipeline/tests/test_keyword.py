@@ -141,6 +141,51 @@ def test_shipped_alias_file_is_valid() -> None:
     assert {"grand theft auto", "جی تی ای"} <= set(gta)
 
 
+def test_load_intent_map_normalizes_values_and_keeps_keys(tmp_path: Path) -> None:
+    path = tmp_path / "intent_map.json"
+    path.write_text(json.dumps({
+        "فرمون": {"category": ["لوازم جانبی گیمینگ"], "tags": ["فرمان بازی", "فرمان  بازی"]},
+        "شوتر": {"tags": ["شوتر"]},
+    }, ensure_ascii=False), encoding="utf-8")
+
+    assert kw.load_intent_map(path) == {
+        "فرمون": {"category": ["لوازم جانبی گیمینگ"], "tags": ["فرمان بازی"]},
+        "شوتر": {"tags": ["شوتر"]},
+    }
+
+
+def test_load_intent_map_missing_file_means_none(tmp_path: Path) -> None:
+    assert kw.load_intent_map(tmp_path / "absent.json") == {}
+
+
+@pytest.mark.parametrize("key", ["Wheel", "فرمون ", "ي", "PS-5"])
+def test_load_intent_map_rejects_keys_that_are_not_normalized(tmp_path: Path, key: str) -> None:
+    path = tmp_path / "intent_map.json"
+    path.write_text(json.dumps({key: {"tags": ["x"]}}, ensure_ascii=False), encoding="utf-8")
+    with pytest.raises(ValueError, match="not in normalized form"):
+        kw.load_intent_map(path)
+
+
+@pytest.mark.parametrize("content", [
+    '{"a": {"tags": ["x"]},}',
+    '[["a"]]',
+    '{"a": ["x"]}',
+    '{"a": {}}',
+    '{"a": {"colour": ["x"]}}',
+    '{"a": {"tags": "x"}}',
+    '{"a": {"tags": ["---"]}}',
+])
+def test_load_intent_map_rejects_malformed_files(tmp_path: Path, content: str) -> None:
+    path = tmp_path / "intent_map.json"
+    path.write_text(content, encoding="utf-8")
+    with pytest.raises(ValueError, match="intent_map.json"):
+        kw.load_intent_map(path)
+
+
+def test_shipped_intent_map_is_valid() -> None:
+    assert isinstance(kw.load_intent_map(Path(config.load()["build"]["intent_map_file"])), dict)
+
+
 def test_build_keymap_round_trips() -> None:
     keymap = kw.build_keymap()
 

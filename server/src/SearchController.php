@@ -64,6 +64,8 @@ final class SearchController
     private float $semanticMinScore;
     private int $suggestMinResults;
     private ?Cache $cache;
+    private ?IntentMap $intentMap;
+    private int $intentMaxTerms;
 
     /**
      * @param callable(): Speller $spellerFactory Built lazily (a catalog scan),
@@ -87,7 +89,9 @@ final class SearchController
         int $defaultLimit = 20,
         float $semanticMinScore = 0.4,
         int $suggestMinResults = 3,
-        ?Cache $cache = null
+        ?Cache $cache = null,
+        ?IntentMap $intentMap = null,
+        int $intentMaxTerms = 4
     ) {
         $this->keyword = $keyword;
         $this->logger = $logger;
@@ -102,6 +106,8 @@ final class SearchController
         $this->semanticMinScore = $semanticMinScore;
         $this->suggestMinResults = max(1, $suggestMinResults);
         $this->cache = $cache;
+        $this->intentMap = $intentMap;
+        $this->intentMaxTerms = max(1, $intentMaxTerms);
     }
 
     /**
@@ -214,7 +220,9 @@ final class SearchController
             (int) $search['default_limit'],
             (float) $search['semantic_min_score'],
             (int) $search['suggest_min_results'],
-            $cache ?? Cache::fromConfig($config)
+            $cache ?? Cache::fromConfig($config),
+            IntentMap::fromDirectory($config['paths']['data']),
+            (int) $search['intent_max_terms']
         );
     }
 
@@ -248,6 +256,8 @@ final class SearchController
             ? $this->cache->key($normalized, $limit, $semanticOn)
             : null;
         if ($cacheKey !== null) {
+            // Count before the GET so hits (which return early) and misses both register.
+            $this->cache->registerLookup($cacheKey);
             $hit = $this->cache->get($cacheKey);
             if ($hit !== null && $this->isCachedResponse($hit)) {
                 return $this->serveCached($hit, $raw, $customerId, $start);
@@ -304,7 +314,8 @@ final class SearchController
                 $limit,
                 !$allTermsHits,
                 $this->keyword->variants($boostQuery),
-                $debug
+                $debug,
+                $this->intentMap?->resolve($boostQuery, $this->intentMaxTerms) ?? []
             );
         }
 
@@ -436,6 +447,8 @@ final class SearchController
      * @param bool $neighbours false: semantic evidence only reorders the keyword hits
      * @param list<list<string>> $variants query token variants for the Ranker's match boosts
      * @param bool $explain also return each ranked id's score breakdown (third element)
+     * @param array{categories?: list<string>, tags?: list<string>} $intent names the query's intent
+     *        words map to (M34)
      * @return array{0: list<int>, 1: list<?float>, 2: array<int, array<string, mixed>>}
      */
     private function hybrid(
@@ -445,7 +458,8 @@ final class SearchController
         ?int $limit,
         bool $neighbours,
         array $variants,
-        bool $explain
+        bool $explain,
+        array $intent = []
     ): array {
         $skuSet = array_flip($skuIds);
         $keywordScores = [];
@@ -483,7 +497,8 @@ final class SearchController
             $solid,
             $this->semanticMinScore,
             $variants,
-            $explain
+            $explain,
+            $intent
         );
         $pinned = array_values(array_intersect($skuIds, array_keys($signals)));
         $productIds = array_slice(

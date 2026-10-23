@@ -13,18 +13,39 @@ use Throwable;
  *
  * Keys are `<prefix><sha1 of the result-affecting inputs>`; the prefix is the
  * keyspace /reload flushes after a successful swap. Values are JSON.
+ *
+ * Adaptive TTL (M33): every lookup (hit or miss) bumps a per-query counter
+ * `<prefix>freq:<hash>` (it expires `freq_window` after its creation, so counts
+ * roll off). A write only reads it: a query looked up at least
+ * `ttl_hot_threshold` times lives `ttl_hot` instead of `ttl`. Counting lookups,
+ * not writes, matters because writes are themselves rationed by the TTL. The
+ * counters sit under the prefix, so the /reload flush clears them too. A
+ * counter error only means the base TTL.
  */
 class Cache
 {
     private RedisClient $redis;
     private string $prefix;
     private int $ttl;
+    private int $hotTtl;
+    private int $hotThreshold;
+    private int $freqWindow;
 
-    public function __construct(RedisClient $redis, string $prefix, int $ttlSeconds)
-    {
+    /** A $hotThreshold of 0 disables the adaptive tier (always the base TTL). */
+    public function __construct(
+        RedisClient $redis,
+        string $prefix,
+        int $ttlSeconds,
+        int $hotTtlSeconds = 0,
+        int $hotThreshold = 0,
+        int $freqWindowSeconds = 0
+    ) {
         $this->redis = $redis;
         $this->prefix = $prefix;
         $this->ttl = max(1, $ttlSeconds);
+        $this->hotTtl = max(1, $hotTtlSeconds);
+        $this->hotThreshold = max(0, $hotThreshold);
+        $this->freqWindow = max(1, $freqWindowSeconds);
     }
 
     /** @param array<string, mixed> $config the server config array; null when the cache is off */
@@ -44,7 +65,10 @@ class Cache
                 (int) $redis['timeout_ms']
             ),
             (string) $redis['prefix'],
-            (int) $redis['ttl']
+            (int) $redis['ttl'],
+            (int) $redis['ttl_hot'],
+            (int) $redis['ttl_hot_threshold'],
+            (int) $redis['freq_window']
         );
     }
 
@@ -79,10 +103,48 @@ class Cache
     {
         try {
             $json = (string) json_encode($value, JSON_UNESCAPED_UNICODE | JSON_PRESERVE_ZERO_FRACTION);
-            $this->redis->set($key, $json, $this->ttl);
+            $this->redis->set($key, $json, $this->ttlFor($key));
         } catch (Throwable $e) {
             error_log('search: cache write failed: ' . $e->getMessage());
         }
+    }
+
+    /** Counts one search for this result key (a hit or a miss); best effort, never throws. */
+    public function registerLookup(string $key): void
+    {
+        if ($this->hotThreshold === 0) {
+            return;
+        }
+        try {
+            $counter = $this->counterKey($key);
+            if ($this->redis->incr($counter) === 1) {
+                $this->redis->expire($counter, $this->freqWindow);
+            }
+        } catch (Throwable $e) {
+            error_log('search: cache counter failed: ' . $e->getMessage());
+        }
+    }
+
+    /** Base TTL, or the hot TTL once the query's lookup counter reaches the threshold. */
+    private function ttlFor(string $key): int
+    {
+        if ($this->hotThreshold === 0) {
+            return $this->ttl;
+        }
+        try {
+            $count = (int) $this->redis->get($this->counterKey($key));
+
+            return $count >= $this->hotThreshold ? $this->hotTtl : $this->ttl;
+        } catch (Throwable $e) {
+            error_log('search: cache counter failed: ' . $e->getMessage());
+
+            return $this->ttl;
+        }
+    }
+
+    private function counterKey(string $key): string
+    {
+        return $this->prefix . 'freq:' . substr($key, strlen($this->prefix));
     }
 
     /** Drops every cached result; false when Redis could not be reached. */

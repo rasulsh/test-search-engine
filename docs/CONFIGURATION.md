@@ -102,6 +102,7 @@ It prints key paths only, never values, and exits non-zero on any ERROR, so a de
 | `search.keyword_weight` / `search.semantic_weight` / `search.min_relevance` | 0.4 / 0.6 / 0.45 | blended relevance and its floor (M20) |
 | `search.stock_boost` / `search.popularity_boost` | 0.1 / 0.1 | light boosts after the floor |
 | `search.brand_match_boost` / `search.category_match_boost` / `search.tag_match_boost` | 0.15 / 0.1 / 0.1 | M21 match boosts (0 disables one) |
+| `search.intent_max_terms` | `4` | most intent-map keys applied to one query ([intent map](SEARCH-BEHAVIOR.md#intent-map), M34). The mapped categories / tags use the two boosts above; there is no separate knob |
 | `search.tag_match_min_tokens` | 2 | shortest query that phrase-matches tags |
 | `search.latency_budget_ms` | 200 | the budget the latency-guard tests assert against |
 
@@ -126,7 +127,10 @@ queries are then answered from Redis instead of recomputing keyword + VPS + rank
 | `redis.host`, `redis.port` | `127.0.0.1`, `6379` | the Redis server (on the VPS, `vps/setup.sh --redis`; cPanel only runs the client) |
 | `redis.auth` | empty | Redis password (a secret: environment or `config.php`, never the repository) |
 | `redis.db` | `0` | database number |
-| `redis.ttl` | `300` | seconds an entry lives; a catalog reload flushes it earlier |
+| `redis.ttl` | `86400` (1 day) | seconds an entry lives; a catalog reload flushes it earlier |
+| `redis.ttl_hot` | `604800` (7 days) | TTL of a frequently repeated query (see below) |
+| `redis.ttl_hot_threshold` | `20` | lookups (searches) of the same query inside `redis.freq_window` that make it hot; `0` disables the adaptive tier (always `redis.ttl`) |
+| `redis.freq_window` | `604800` (7 days) | lifetime of the per-query counter, set once when the counter is created (its first lookup), so counts roll off |
 | `redis.timeout_ms` | `100` | connect + read budget; a slow or dead Redis costs at most this per request and means a cache miss, never an error |
 | `redis.prefix` | `search:cache:` | key prefix; the keyspace `POST /reload` flushes. Give each environment sharing one Redis its own prefix |
 
@@ -135,6 +139,15 @@ with `debug` are never cached, and neither is a result served without the semant
 slow or failing VPS), so a degradation never outlives its request. After changing any ranking setting, flush by
 hand (see [DEPLOY.md](DEPLOY.md#result-cache-optional-redis-m26)) or wait out the TTL.
 
+**Adaptive TTL (M33).** Every cache lookup (each `/search` that reaches the cache, hit or miss) bumps a
+counter `<redis.prefix>freq:<hash>` (same hash as the result key) in Redis; counting lookups, not writes,
+because writes are rationed by the TTL itself. When an entry is written and its counter is
+`redis.ttl_hot_threshold` or more, it gets `redis.ttl_hot` instead of `redis.ttl`. One hot tier only; no database lookup. A counter error is silent and means the base TTL.
+The effective lifetime is still bounded by the next `POST /reload`, which flushes the whole prefix
+(results **and** counters), so the 7 days rarely bite. Long TTLs are safe: the cache holds product ids
+only, and price / stock are rendered downstream by OpenCart; the only staleness is a newly added product
+missing until the TTL or the next reload.
+
 ### Tooling and storefront
 
 | key | default | meaning |
@@ -142,6 +155,7 @@ hand (see [DEPLOY.md](DEPLOY.md#result-cache-optional-redis-m26)) or wait out th
 | `debug.token` | empty | enables `"debug": 1` on `/search` (`X-Debug-Token`), see [SEARCH-API.md](SEARCH-API.md#search-logs-and-ranking-debug) |
 | `logs.token` | empty | enables `logs.php` and `analytics.php` (`X-Logs-Token`; one token, no second secret) |
 | `logs.page_size` | 50 | rows per page |
+| `logs.refresh_seconds` | `30` | how often the analytics dashboard re-fetches its JSON (M35); `0` disables the auto-refresh |
 | `storefront.store_base`, `storefront.image_base` | empty | absolute bases for `with_details` product links and images; empty keeps the exported values |
 
 `search_logs` is never pruned automatically (no daemon on cPanel); an optional operator-run prune is in [DEPLOY.md](DEPLOY.md#upgrading-to-m31).
@@ -167,6 +181,7 @@ The test page's `PRICE_SUFFIX` is a constant in `server/public/test.html`, not a
 | `SEARCH_PASSAGE_CHAR_LIMIT` | 1000 | cap on the whole embedded passage (0 = none) |
 | `SEARCH_DESC_INDEX_CHARS` | 800 | leading description characters keyword-indexed (0 = whole); `release.py --desc-index-chars` overrides. Build-time only |
 | `SEARCH_ALIASES_FILE` | `pipeline/aliases.json` | the owner's [alias file](SEARCH-BEHAVIOR.md#aliases); `release.py --aliases` overrides |
+| `SEARCH_INTENT_MAP_FILE` | `pipeline/intent_map.json` | the owner's [intent map](SEARCH-BEHAVIOR.md#intent-map) (M34); `release.py --intent-map` overrides |
 | `SEARCH_LOAD_MAX_STATEMENT_BYTES` | 1000000 | largest statement in `products.load.sql` (must fit the host's `max_allowed_packet`) |
 | `SEARCH_MIN_TOKEN_LENGTH` | 2 | tokens shorter than this are ignored when building the dictionaries |
 | `SEARCH_PRODUCTS_TABLE` | `products` | table whose definition seeds the staging DDL |

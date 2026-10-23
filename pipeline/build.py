@@ -7,7 +7,7 @@
 Input is a simple, documented shape (NOT the raw OpenCart export); see docs/PIPELINE.md for
 the columns and how to derive them from OpenCart. Output is the bundle the server
 consumes (CLAUDE.md sec. 4): vectors.bin, vectors.idx, products.load.sql,
-synonyms.json, aliases.json, spellcheck.txt, keymap.json, meta.json.
+synonyms.json, aliases.json, intent_map.json, spellcheck.txt, keymap.json, meta.json.
 """
 
 from __future__ import annotations
@@ -478,6 +478,7 @@ def build_bundle(
     out.mkdir(parents=True, exist_ok=True)
     # Read first: a malformed alias file fails the build before the slow embed.
     aliases = _keyword.load_aliases(config["build"].get("aliases_file", ""))
+    intent_map = _keyword.load_intent_map(config["build"].get("intent_map_file", ""))
 
     dim = int(config["model"]["dim"])
     desc_limit = int(config["build"]["desc_char_limit"])
@@ -514,6 +515,9 @@ def build_bundle(
     )
     (out / "aliases.json").write_text(
         json.dumps(aliases, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+    )
+    (out / "intent_map.json").write_text(
+        json.dumps(intent_map, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
     )
     (out / "spellcheck.txt").write_text(
         "\n".join(_keyword.spellcheck_lines(_keyword.build_spellcheck(server_rows))) + "\n",
@@ -597,6 +601,8 @@ def main(argv: list[str] | None = None) -> int:
                                           "(vps/README.md).")
     parser.add_argument("--aliases", help="Alias file (default SEARCH_ALIASES_FILE, else "
                                           "pipeline/aliases.json).")
+    parser.add_argument("--intent-map", help="Intent map file (default SEARCH_INTENT_MAP_FILE, "
+                                             "else pipeline/intent_map.json).")
     args = parser.parse_args(argv)
     if not (args.out or args.vps_out):
         parser.error("give --out, --vps-out, or both")
@@ -607,8 +613,13 @@ def main(argv: list[str] | None = None) -> int:
         if not Path(args.aliases).is_file():
             parser.error(f"alias file not found: {args.aliases}")
         config["build"]["aliases_file"] = args.aliases
+    if args.intent_map:
+        if not Path(args.intent_map).is_file():
+            parser.error(f"intent map file not found: {args.intent_map}")
+        config["build"]["intent_map_file"] = args.intent_map
     try:
         _keyword.load_aliases(config["build"]["aliases_file"])
+        _keyword.load_intent_map(config["build"]["intent_map_file"])
     except ValueError as exc:
         parser.error(str(exc))
     products = read_products(args.sql or args.csv)

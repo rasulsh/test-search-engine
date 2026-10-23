@@ -104,13 +104,16 @@ abstraction layers.
 │   │   ├── Cache.php              # optional Redis result cache for /search (M26)
 │   │   ├── RedisClient.php        # minimal in-repo RESP client for Cache (no Composer package)
 │   │   ├── Ranker.php             # hybrid merge + business ranking
+│   │   ├── IntentMap.php          # intent word -> category / tag names for the boosts (M34)
 │   │   ├── Logger.php             # search logs (incl. did_you_mean, tier)
 │   │   ├── LogsPage.php           # read-only search_logs view for logs.php (M21)
 │   │   ├── Db.php                 # thin PDO wrapper
 │   │   ├── Config.php             # config schema + every default; load() merges config.php overrides (M29)
 │   │   ├── ConfigDoctor.php       # checks config.php against the schema (M29)
 │   │   ├── Analytics.php          # read-only search_logs aggregates (M31)
-│   │   └── AnalyticsPage.php      # HTML dashboard for analytics.php (M31)
+│   │   ├── AnalyticsPage.php      # dashboard shell for analytics.php (M31, v2 in M35)
+│   │   ├── AnalyticsPage.js       # M35: client-side SVG dashboard + refresh (no third-party code)
+│   │   └── AnalyticsPage.css      # M35: dashboard styles (light / dark)
 │   ├── config.php                # deployer overrides only (gitignored); config.example.php committed
 │   ├── tools/config-check.php    # config doctor CLI (M29): exits non-zero on an ERROR
 │   ├── tools/logs-export.php     # search_logs -> CSV / JSON CLI for the zero-result loop (M36)
@@ -331,6 +334,12 @@ wait for review before starting the next.
   `public/analytics.php` (reuses `logs.token`, same headers as `logs.php`, `?window=`,
   `?format=json`), one new index `idx_ts_result`, retention documented not automated.
 
+- **M35 — Analytics dashboard v2:** `Analytics` gains zero-rate and latency trends, a weekday x
+  hour heatmap, query-length histogram, top brands / categories and the repeat-query rate;
+  `AnalyticsPage` is a shell around `AnalyticsPage.js` (inline SVG charts, sortable tables,
+  window selector, client-side filter, polling `?format=json` every `logs.refresh_seconds`),
+  no third-party request, CSP nonce, token never in the page; JSON additive.
+
 - **M36 — Search-log export + zero-result loop:** `tools/logs-export.php` (CLI over
   `App\LogsExport`: raw or `--grouped` rows, `--window` / `--since` / `--until`, `--zero-only`,
   `--limit`, CSV / JSON, UTF-8, never written under `server/public`, no `customer_id`), packed in
@@ -340,6 +349,11 @@ wait for review before starting the next.
 - **M32 — Runtime flow doc:** `docs/RUNTIME-FLOW.md` documents the actual
   `SearchController::search()` pipeline (after M29-M31); docs only. Keep it in sync
   whenever `search()` changes.
+
+- **M34 — Keyword→category intent boosting:** `intent_map.json` (owner-curated bundle file,
+  keys verified normalized at build), `IntentMap` resolving intent words per query, fed into
+  the Ranker's existing category / tag match boosts (hybrid only, after the floor, no new
+  knob); `search.intent_max_terms`; `/reload` rejects a malformed file (`invalid_intent_map`).
 
 - **M22 — Offline build speed + reliable export:** `pipeline/db_export.py`
   (direct DB -> CSV, replaces the phpMyAdmin export), GPU/fp16/batch-configured

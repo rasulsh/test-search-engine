@@ -170,6 +170,22 @@ final class ReloadTest extends DatabaseTestCase
         self::assertSame(['other:x' => 'keep'], $redis->data);
     }
 
+    public function testSuccessfulSwapAlsoClearsTheFrequencyCounters(): void
+    {
+        $redis = new FakeRedis();
+        $cache = new \App\Cache($redis, 'search:cache:', 60, 600, 5, 300);
+        $cache->registerLookup('search:cache:a');
+        $cache->set('search:cache:a', ['a' => 1]);
+        self::assertArrayHasKey('search:cache:freq:a', $redis->data);
+        $this->createStaging(2);
+        $dataDir = $this->newTempDir('_data');
+        $this->tempDirs[] = $dataDir . '_old';
+
+        (new Reload($this->pdo, $this->config($dataDir, $this->makeIncoming(2)), $cache))->run();
+
+        self::assertSame([], $redis->data);
+    }
+
     public function testRejectedBundleLeavesTheResultCacheAlone(): void
     {
         $redis = new FakeRedis();
@@ -271,6 +287,8 @@ final class ReloadTest extends DatabaseTestCase
             Synonyms::ALIASES_FILE, '[["gta", "grand theft auto"],]', 'invalid_aliases',
         ];
         yield 'alias group not a list' => [Synonyms::ALIASES_FILE, '{"gta": "grand theft auto"}', 'invalid_aliases'];
+        yield 'intent map entry not an object' => [\App\IntentMap::FILE, '{"a": ["x"]}', 'invalid_intent_map'];
+        yield 'intent map unknown field' => [\App\IntentMap::FILE, '{"a": {"colour": ["x"]}}', 'invalid_intent_map'];
         yield 'synonym term not a string' => [Synonyms::SYNONYMS_FILE, '[["laptop", 5]]', 'invalid_synonyms'];
     }
 

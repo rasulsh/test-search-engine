@@ -9,11 +9,11 @@ use RuntimeException;
 
 /**
  * In-memory stand-in for a Redis server, behind the real RedisClient methods
- * (get / set / deleteByPrefix run unchanged; only the wire is replaced). TTLs are
+ * (get / set / incr / expire / deleteByPrefix run unchanged; only the wire is replaced). TTLs are
  * recorded, not enforced. `$down = true` makes every command fail like an
  * unreachable server.
  */
-final class FakeRedis extends RedisClient
+class FakeRedis extends RedisClient
 {
     /** @var array<string, string> */
     public array $data = [];
@@ -44,6 +44,14 @@ final class FakeRedis extends RedisClient
                 $this->ttls[$arguments[1]] = (int) $arguments[4];
 
                 return 'OK';
+            case 'INCR':
+                $this->data[$arguments[1]] = (string) (((int) ($this->data[$arguments[1]] ?? 0)) + 1);
+
+                return (int) $this->data[$arguments[1]];
+            case 'EXPIRE':
+                $this->ttls[$arguments[1]] = (int) $arguments[2];
+
+                return 1;
             case 'SCAN':
                 // One page only is enough for the logic; the real server paging is
                 // covered by RedisClientTest against the RESP server.

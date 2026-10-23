@@ -118,6 +118,34 @@ final class SearchControllerCacheTest extends DatabaseTestCase
         self::assertSame(2, (int) $this->pdo->query('SELECT COUNT(*) FROM search_logs')->fetchColumn());
     }
 
+    public function testEverySearchCountsAsALookupAndTheHotTierIsReachable(): void
+    {
+        $cache = new Cache($this->redis, 'search:cache:', 300, 900, 3, 60);
+        $controller = $this->controller(null, $cache);
+
+        $controller->search(['q' => 'macbook']); // miss
+        $controller->search(['q' => 'macbook']); // hit
+        $counters = array_filter($this->redis->data, static fn ($v, $k) => str_contains($k, 'freq:'), ARRAY_FILTER_USE_BOTH);
+        self::assertSame(['2'], array_values($counters));
+
+        $controller->search(['q' => 'macbook']); // third lookup: reaches the threshold
+        $resultKey = $cache->key('macbook', null, false);
+        // Rewriting the entry (as the next miss after expiry would) now picks the hot TTL.
+        $cache->set($resultKey, ['response' => ['product_ids' => []], 'had_vector' => false]);
+        self::assertSame(900, $this->redis->ttls[$resultKey]);
+    }
+
+    public function testDebugAndEmptyQueriesDoNotCount(): void
+    {
+        $cache = new Cache($this->redis, 'search:cache:', 300, 900, 3, 60);
+        $controller = $this->controller(null, $cache);
+
+        $controller->search(['q' => '']);
+        $controller->search(['q' => 'macbook'], true);
+
+        self::assertSame([], $this->redis->data);
+    }
+
     public function testNormalizedEquivalentQueriesShareAnEntryAndKeepTheirOwnRawText(): void
     {
         $controller = $this->controller();

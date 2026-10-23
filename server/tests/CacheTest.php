@@ -68,31 +68,45 @@ final class CacheTest extends TestCase
         self::assertSame(604800, $redis['freq_window']);
     }
 
-    public function testBelowThresholdUsesBaseTtlAndAtThresholdUsesHotTtl(): void
+    public function testLookupsBelowThresholdKeepBaseTtlAndAtThresholdGoHot(): void
     {
         $redis = new FakeRedis();
         $cache = new Cache($redis, 'p:', 100, 700, 3, 50);
 
-        $cache->set('p:k', ['a' => 1]);
+        $cache->registerLookup('p:k');
+        $cache->registerLookup('p:k');
         $cache->set('p:k', ['a' => 1]);
         self::assertSame(100, $redis->ttls['p:k']);
 
+        $cache->registerLookup('p:k');
         $cache->set('p:k', ['a' => 1]);
         self::assertSame(700, $redis->ttls['p:k']);
-        $cache->set('p:k', ['a' => 1]);
-        self::assertSame(700, $redis->ttls['p:k']);
-        self::assertSame('4', $redis->data['p:freq:k']);
+        self::assertSame('3', $redis->data['p:freq:k']);
     }
 
-    public function testCounterExpiryIsSetOnlyOnFirstWrite(): void
+    public function testWritesDoNotCountOnlyLookupsDo(): void
+    {
+        $redis = new FakeRedis();
+        $cache = new Cache($redis, 'p:', 100, 700, 2, 50);
+
+        for ($i = 0; $i < 5; $i++) {
+            $cache->set('p:k', ['a' => 1]);
+        }
+
+        self::assertSame(100, $redis->ttls['p:k']);
+        self::assertArrayNotHasKey('p:freq:k', $redis->data);
+        self::assertNotContains('INCR', $redis->log);
+    }
+
+    public function testCounterExpiryIsSetOnlyOnFirstLookup(): void
     {
         $redis = new FakeRedis();
         $cache = new Cache($redis, 'p:', 100, 700, 3, 50);
 
-        $cache->set('p:k', ['a' => 1]);
+        $cache->registerLookup('p:k');
         self::assertSame(50, $redis->ttls['p:freq:k']);
-        $cache->set('p:k', ['a' => 1]);
-        $cache->set('p:k', ['a' => 1]);
+        $cache->registerLookup('p:k');
+        $cache->registerLookup('p:k');
 
         self::assertSame(1, count(array_keys($redis->log, 'EXPIRE', true)));
     }
@@ -103,6 +117,7 @@ final class CacheTest extends TestCase
         $cache = new Cache($redis, 'p:', 100, 700, 0, 50);
 
         for ($i = 0; $i < 5; $i++) {
+            $cache->registerLookup('p:k');
             $cache->set('p:k', ['a' => 1]);
         }
 
@@ -110,7 +125,7 @@ final class CacheTest extends TestCase
         self::assertArrayNotHasKey('p:freq:k', $redis->data);
     }
 
-    public function testCounterFailureFallsBackToBaseTtlAndNeverThrows(): void
+    public function testIncrFailureOnLookupNeverThrows(): void
     {
         $redis = new class extends FakeRedis {
             public function incr(string $key): int
@@ -120,16 +135,39 @@ final class CacheTest extends TestCase
         };
         $cache = new Cache($redis, 'p:', 100, 700, 1, 50);
 
+        $cache->registerLookup('p:k');
         $cache->set('p:k', ['a' => 1]);
 
         self::assertSame(100, $redis->ttls['p:k']);
         self::assertStringContainsString('cache counter failed', (string) file_get_contents($this->errorLog));
     }
 
+    public function testCounterReadFailureOnSetFallsBackToBaseTtl(): void
+    {
+        $redis = new class extends FakeRedis {
+            public function get(string $key): ?string
+            {
+                if (str_contains($key, 'freq:')) {
+                    throw new \RuntimeException('redis: GET failed');
+                }
+
+                return parent::get($key);
+            }
+        };
+        $cache = new Cache($redis, 'p:', 100, 700, 1, 50);
+        $cache->registerLookup('p:k');
+
+        $cache->set('p:k', ['a' => 1]);
+
+        self::assertSame(100, $redis->ttls['p:k']);
+        self::assertSame(['a' => 1], $cache->get('p:k'));
+    }
+
     public function testFlushAlsoClearsTheFrequencyCounters(): void
     {
         $redis = new FakeRedis();
         $cache = new Cache($redis, 'search:cache:', 100, 700, 3, 50);
+        $cache->registerLookup('search:cache:a');
         $cache->set('search:cache:a', ['a' => 1]);
         $redis->data['other:x'] = 'keep';
         self::assertArrayHasKey('search:cache:freq:a', $redis->data);

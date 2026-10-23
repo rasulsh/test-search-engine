@@ -14,9 +14,11 @@ use Throwable;
  * Keys are `<prefix><sha1 of the result-affecting inputs>`; the prefix is the
  * keyspace /reload flushes after a successful swap. Values are JSON.
  *
- * Adaptive TTL (M33): every write bumps a per-query counter `<prefix>freq:<hash>`
- * (it expires `freq_window` after its first write, so counts roll off). A query
- * seen at least `ttl_hot_threshold` times lives `ttl_hot` instead of `ttl`. The
+ * Adaptive TTL (M33): every lookup (hit or miss) bumps a per-query counter
+ * `<prefix>freq:<hash>` (it expires `freq_window` after its creation, so counts
+ * roll off). A write only reads it: a query looked up at least
+ * `ttl_hot_threshold` times lives `ttl_hot` instead of `ttl`. Counting lookups,
+ * not writes, matters because writes are themselves rationed by the TTL. The
  * counters sit under the prefix, so the /reload flush clears them too. A
  * counter error only means the base TTL.
  */
@@ -107,18 +109,30 @@ class Cache
         }
     }
 
-    /** Base TTL, or the hot TTL once the query's counter reaches the threshold. */
+    /** Counts one search for this result key (a hit or a miss); best effort, never throws. */
+    public function registerLookup(string $key): void
+    {
+        if ($this->hotThreshold === 0) {
+            return;
+        }
+        try {
+            $counter = $this->counterKey($key);
+            if ($this->redis->incr($counter) === 1) {
+                $this->redis->expire($counter, $this->freqWindow);
+            }
+        } catch (Throwable $e) {
+            error_log('search: cache counter failed: ' . $e->getMessage());
+        }
+    }
+
+    /** Base TTL, or the hot TTL once the query's lookup counter reaches the threshold. */
     private function ttlFor(string $key): int
     {
         if ($this->hotThreshold === 0) {
             return $this->ttl;
         }
         try {
-            $counter = $this->prefix . 'freq:' . substr($key, strlen($this->prefix));
-            $count = $this->redis->incr($counter);
-            if ($count === 1) {
-                $this->redis->expire($counter, $this->freqWindow);
-            }
+            $count = (int) $this->redis->get($this->counterKey($key));
 
             return $count >= $this->hotThreshold ? $this->hotTtl : $this->ttl;
         } catch (Throwable $e) {
@@ -126,6 +140,11 @@ class Cache
 
             return $this->ttl;
         }
+    }
+
+    private function counterKey(string $key): string
+    {
+        return $this->prefix . 'freq:' . substr($key, strlen($this->prefix));
     }
 
     /** Drops every cached result; false when Redis could not be reached. */

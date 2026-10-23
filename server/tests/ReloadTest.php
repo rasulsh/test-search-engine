@@ -174,6 +174,7 @@ final class ReloadTest extends DatabaseTestCase
     {
         $redis = new FakeRedis();
         $cache = new \App\Cache($redis, 'search:cache:', 60, 600, 5, 300);
+        $cache->registerLookup('search:cache:a');
         $cache->set('search:cache:a', ['a' => 1]);
         self::assertArrayHasKey('search:cache:freq:a', $redis->data);
         $this->createStaging(2);

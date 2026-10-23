@@ -111,7 +111,9 @@ abstraction layers.
 │   │   ├── Config.php             # config schema + every default; load() merges config.php overrides (M29)
 │   │   ├── ConfigDoctor.php       # checks config.php against the schema (M29)
 │   │   ├── Analytics.php          # read-only search_logs aggregates (M31)
-│   │   └── AnalyticsPage.php      # HTML dashboard for analytics.php (M31)
+│   │   ├── AnalyticsPage.php      # dashboard shell for analytics.php (M31, v2 in M35)
+│   │   ├── AnalyticsPage.js       # M35: client-side SVG dashboard + refresh (no third-party code)
+│   │   └── AnalyticsPage.css      # M35: dashboard styles (light / dark)
 │   ├── config.php                # deployer overrides only (gitignored); config.example.php committed
 │   ├── tools/config-check.php    # config doctor CLI (M29): exits non-zero on an ERROR
 │   ├── data/                      # active bundle (gitignored)
@@ -330,6 +332,12 @@ wait for review before starting the next.
   did-you-mean share, volume) over the existing `search_logs`, `AnalyticsPage` +
   `public/analytics.php` (reuses `logs.token`, same headers as `logs.php`, `?window=`,
   `?format=json`), one new index `idx_ts_result`, retention documented not automated.
+
+- **M35 — Analytics dashboard v2:** `Analytics` gains zero-rate and latency trends, a weekday x
+  hour heatmap, query-length histogram, top brands / categories and the repeat-query rate;
+  `AnalyticsPage` is a shell around `AnalyticsPage.js` (inline SVG charts, sortable tables,
+  window selector, client-side filter, polling `?format=json` every `logs.refresh_seconds`),
+  no third-party request, CSP nonce, token never in the page; JSON additive.
 
 - **M32 — Runtime flow doc:** `docs/RUNTIME-FLOW.md` documents the actual
   `SearchController::search()` pipeline (after M29-M31); docs only. Keep it in sync

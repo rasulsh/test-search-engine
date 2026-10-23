@@ -2,10 +2,13 @@
 
 /**
  * GET /analytics.php. Read-only, token-protected aggregates over search_logs
- * (M31): most searched and zero-result queries, cache / tier / latency figures
- * and a volume trend (App\Analytics). Same pattern and the same token as
+ * (M31, dashboard M35): most searched and zero-result queries, cache / tier /
+ * latency figures, trends, a weekday x hour heatmap, query lengths and top
+ * brands / categories (App\Analytics). Same pattern and the same token as
  * logs.php (`logs.token`). `?window=24h|7d|30d|90d|all` (default 7d);
- * `?format=json` returns the same data as JSON. UI text is English.
+ * `?format=json` returns the same data as JSON (the dashboard polls it every
+ * `logs.refresh_seconds`). The HTML is a shell drawn client-side without any
+ * third-party request. UI text is English.
  */
 
 declare(strict_types=1);
@@ -58,8 +61,12 @@ if (!hash_equals($configuredToken, $provided)) {
 
 try {
     $db = new Db($config['db']);
-    $report = (new Analytics($db->pdo(), (string) $config['db']['search_logs_table']))
-        ->report((string) ($_GET['window'] ?? ''));
+    $report = (new Analytics(
+        $db->pdo(),
+        (string) $config['db']['search_logs_table'],
+        (string) $config['db']['products_table']
+    ))->report((string) ($_GET['window'] ?? ''));
+    $report['refresh_seconds'] = max(0, (int) $config['logs']['refresh_seconds']);
 } catch (Throwable) {
     $notice(500, 'Internal error');
     return;
@@ -71,6 +78,11 @@ if (($_GET['format'] ?? '') === 'json') {
     return;
 }
 
+// Only this page runs script, and only its own nonce'd block; it may fetch this origin's JSON.
+$nonce = base64_encode(random_bytes(16));
+header(
+    "Content-Security-Policy: default-src 'none'; style-src 'unsafe-inline'; script-src 'nonce-{$nonce}'; "
+    . "connect-src 'self'; base-uri 'none'; form-action 'self'"
+);
 header('Content-Type: text/html; charset=utf-8');
-// The token stays out of links unless it arrived in the URL (no header to resend).
-echo AnalyticsPage::render($report, $fromUrl !== '' && $provided === $fromUrl ? $fromUrl : '');
+echo AnalyticsPage::render($report, $nonce);

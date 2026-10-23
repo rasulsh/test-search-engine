@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App;
 
 use InvalidArgumentException;
+use PDOException;
 use PDO;
 
 /**
@@ -31,15 +32,21 @@ final class Analytics
 
     private const QUERY = "COALESCE(NULLIF(normalized_q, ''), raw_q)";
 
+    /** Trend charts read at most this many daily buckets, so "all" never scans years of logs. */
+    private const TREND_DAYS = 366;
+
     private PDO $pdo;
     private string $table;
+    private ?string $productsTable;
     /** @var array<string, true>|null */
     private ?array $columns = null;
 
-    public function __construct(PDO $pdo, string $searchLogsTable)
+    /** @param string|null $productsTable the catalog table topBrandsCategories() reads; null = no brand figures */
+    public function __construct(PDO $pdo, string $searchLogsTable, ?string $productsTable = null)
     {
         $this->pdo = $pdo;
         $this->table = Identifier::quote($searchLogsTable);
+        $this->productsTable = $productsTable === null ? null : Identifier::quote($productsTable);
     }
 
     /** The window a request names, or the default (7d) for anything unknown. */
@@ -180,11 +187,7 @@ final class Analytics
      */
     public function volume(?string $since, string $bucket = 'day'): array
     {
-        $format = match ($bucket) {
-            'day' => '%Y-%m-%d',
-            'hour' => '%Y-%m-%d %H:00',
-            default => throw new InvalidArgumentException("unknown bucket: {$bucket}"),
-        };
+        $format = self::bucketFormat($bucket);
         [$where, $params] = $this->bound($since, '');
         $stmt = $this->pdo->prepare(
             "SELECT DATE_FORMAT(ts, '{$format}') AS bucket, COUNT(*) AS searches FROM {$this->table}{$where}"
@@ -199,6 +202,178 @@ final class Analytics
     }
 
     /**
+     * Zero-result rate per bucket, oldest first (the trend line).
+     *
+     * @return list<array{bucket: string, searches: int, zero_results: int, zero_rate: float}>
+     */
+    public function zeroRateTrend(?string $since, string $bucket = 'day'): array
+    {
+        $format = self::bucketFormat($bucket);
+        [$where, $params] = $this->trendBound($since, $bucket);
+        $stmt = $this->pdo->prepare(
+            "SELECT DATE_FORMAT(ts, '{$format}') AS bucket, COUNT(*) AS searches,"
+            . " COALESCE(SUM(result_count = 0), 0) AS zero FROM {$this->table}{$where}"
+            . ' GROUP BY bucket ORDER BY bucket DESC LIMIT ' . self::TREND_DAYS
+        );
+        $stmt->execute($params);
+
+        return array_reverse(array_map(
+            static fn (array $r): array => [
+                'bucket' => (string) $r['bucket'], 'searches' => (int) $r['searches'],
+                'zero_results' => (int) $r['zero'], 'zero_rate' => self::pct((int) $r['zero'], (int) $r['searches']),
+            ],
+            $stmt->fetchAll(PDO::FETCH_ASSOC)
+        ));
+    }
+
+    /**
+     * Average and nearest-rank p95 latency per bucket, oldest first. The p95
+     * uses window functions (MariaDB 10.2+ / MySQL 8) over the window's rows. A
+     * database without them (or any error here) yields an empty series, logged
+     * once, so this one chart can never take the whole dashboard down.
+     *
+     * @return list<array{bucket: string, searches: int, avg: float, p95: int}>
+     */
+    public function latencyTrend(?string $since, string $bucket = 'day'): array
+    {
+        $format = self::bucketFormat($bucket);
+        [$where, $params] = $this->trendBound($since, $bucket);
+        try {
+            $stmt = $this->pdo->prepare(
+                'SELECT bucket, COUNT(*) AS searches, AVG(latency_ms) AS avg,'
+                . ' MIN(CASE WHEN rn >= CEIL(0.95 * cnt) THEN latency_ms END) AS p95 FROM ('
+                . 'SELECT bucket, latency_ms, ROW_NUMBER() OVER (PARTITION BY bucket ORDER BY latency_ms) AS rn,'
+                . ' COUNT(*) OVER (PARTITION BY bucket) AS cnt FROM ('
+                . "SELECT DATE_FORMAT(ts, '{$format}') AS bucket, latency_ms FROM {$this->table}{$where}"
+                . ') AS b) AS ranked GROUP BY bucket ORDER BY bucket DESC LIMIT ' . self::TREND_DAYS
+            );
+            $stmt->execute($params);
+            $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
+        } catch (PDOException $e) {
+            error_log('analytics: latency trend unavailable (window functions needed): ' . $e->getMessage());
+
+            return [];
+        }
+
+        return array_reverse(array_map(
+            static fn (array $r): array => [
+                'bucket' => (string) $r['bucket'], 'searches' => (int) $r['searches'],
+                'avg' => round((float) $r['avg'], 1), 'p95' => (int) $r['p95'],
+            ],
+            $rows
+        ));
+    }
+
+    /**
+     * Searches by weekday and hour of day (database clock); only cells with
+     * searches are returned. weekday: 0 = Monday .. 6 = Sunday.
+     *
+     * @return list<array{weekday: int, hour: int, searches: int}>
+     */
+    public function hourlyHeatmap(?string $since): array
+    {
+        [$where, $params] = $this->bound($since, '');
+        $stmt = $this->pdo->prepare(
+            "SELECT WEEKDAY(ts) AS d, HOUR(ts) AS h, COUNT(*) AS searches FROM {$this->table}{$where}"
+            . ' GROUP BY d, h ORDER BY d, h'
+        );
+        $stmt->execute($params);
+
+        return array_map(
+            static fn (array $r): array => [
+                'weekday' => (int) $r['d'], 'hour' => (int) $r['h'], 'searches' => (int) $r['searches'],
+            ],
+            $stmt->fetchAll(PDO::FETCH_ASSOC)
+        );
+    }
+
+    /**
+     * Histogram of query length in words; always the five buckets 1..5, where 5 means "5 or more".
+     *
+     * @return list<array{tokens: int, searches: int}>
+     */
+    public function queryLengthDistribution(?string $since): array
+    {
+        $query = 'TRIM(' . self::QUERY . ')';
+        [$where, $params] = $this->bound($since, "{$query} <> ''");
+        $stmt = $this->pdo->prepare(
+            "SELECT LEAST(5, 1 + CHAR_LENGTH({$query}) - CHAR_LENGTH(REPLACE({$query}, ' ', ''))) AS n,"
+            . " COUNT(*) AS searches FROM {$this->table}{$where} GROUP BY n"
+        );
+        $stmt->execute($params);
+        $counts = array_fill(1, 5, 0);
+        foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $row) {
+            $counts[(int) $row['n']] = (int) $row['searches'];
+        }
+
+        $histogram = [];
+        foreach ($counts as $tokens => $searches) {
+            $histogram[] = ['tokens' => $tokens, 'searches' => $searches];
+        }
+
+        return $histogram;
+    }
+
+    /**
+     * The most searched catalog brands and categories: a search counts for a
+     * brand / category when every word of its normalized name is a word of the
+     * (normalized) query. Matching is per distinct query (the 1000 most
+     * frequent), in PHP, against the catalog's distinct names. Names in a
+     * script the shoppers do not type (Latin brand, Persian query) are only
+     * counted where the query is written like the catalog.
+     *
+     * @return array{brands: list<array{name: string, searches: int}>,
+     *     categories: list<array{name: string, searches: int}>}
+     */
+    public function topBrandsCategories(?string $since, int $limit = 10): array
+    {
+        $empty = ['brands' => [], 'categories' => []];
+        if ($this->productsTable === null) {
+            return $empty;
+        }
+        $queries = [];
+        foreach ($this->grouped($since, 1000, '') as $row) {
+            $queries[] = [array_flip(Tokenizer::split($row['query'])), $row['searches']];
+        }
+        if ($queries === []) {
+            return $empty;
+        }
+
+        return [
+            'brands' => $this->rank('normalized_brand', $queries, $limit),
+            'categories' => $this->rank('normalized_category', $queries, $limit),
+        ];
+    }
+
+    /**
+     * Share of queries searched more than once in the window: `rate` over the
+     * distinct queries, `search_share` over all searches.
+     *
+     * @return array{distinct: int, repeated: int, rate: float, searches: int, repeated_searches: int,
+     *     search_share: float}
+     */
+    public function repeatQueryRate(?string $since): array
+    {
+        [$where, $params] = $this->bound($since, '');
+        $query = self::QUERY;
+        $stmt = $this->pdo->prepare(
+            'SELECT COUNT(*) AS d, COALESCE(SUM(c > 1), 0) AS r, COALESCE(SUM(c), 0) AS s,'
+            . ' COALESCE(SUM(CASE WHEN c > 1 THEN c ELSE 0 END), 0) AS rs FROM ('
+            . "SELECT {$query} AS q, COUNT(*) AS c FROM {$this->table}{$where} GROUP BY q HAVING q <> ''"
+            . ') AS grouped'
+        );
+        $stmt->execute($params);
+        $row = (array) $stmt->fetch(PDO::FETCH_ASSOC);
+
+        return [
+            'distinct' => (int) $row['d'], 'repeated' => (int) $row['r'],
+            'rate' => self::pct((int) $row['r'], (int) $row['d']),
+            'searches' => (int) $row['s'], 'repeated_searches' => (int) $row['rs'],
+            'search_share' => self::pct((int) $row['rs'], (int) $row['s']),
+        ];
+    }
+
+    /**
      * Everything the dashboard and `?format=json` show, for one window.
      *
      * @return array<string, mixed>
@@ -207,6 +382,7 @@ final class Analytics
     {
         $window = self::window($window);
         $since = $this->since($window);
+        $bucket = $window === '24h' ? 'hour' : 'day';
 
         return [
             'window' => $window,
@@ -218,8 +394,73 @@ final class Analytics
             'did_you_mean' => $this->didYouMeanStats($since),
             'top_queries' => $this->topQueries($since, $limit),
             'zero_result_queries' => $this->zeroResultQueries($since, $limit),
-            'volume' => $this->volume($since, $window === '24h' ? 'hour' : 'day'),
+            'volume' => $this->volume($since, $bucket),
+            'zero_rate_trend' => $this->zeroRateTrend($since, $bucket),
+            'latency_trend' => $this->latencyTrend($since, $bucket),
+            'hourly_heatmap' => $this->hourlyHeatmap($since),
+            'query_length' => $this->queryLengthDistribution($since),
+            'top_brands_categories' => $this->topBrandsCategories($since, 10),
+            'repeat_queries' => $this->repeatQueryRate($since),
         ];
+    }
+
+    /**
+     * @param list<array{0: array<string, int>, 1: int}> $queries [word set, searches] per distinct query
+     * @return list<array{name: string, searches: int}>
+     */
+    private function rank(string $column, array $queries, int $limit): array
+    {
+        try {
+            $names = $this->pdo->query(
+                "SELECT DISTINCT {$column} FROM {$this->productsTable} WHERE {$column} <> '' LIMIT 5000"
+            )->fetchAll(PDO::FETCH_COLUMN);
+        } catch (PDOException) {
+            return []; // a catalog without the column: no figures rather than a failed page
+        }
+        $counts = [];
+        foreach ($names as $name) {
+            $words = Tokenizer::split((string) $name);
+            if ($words === []) {
+                continue;
+            }
+            foreach ($queries as [$set, $searches]) {
+                foreach ($words as $word) {
+                    if (!isset($set[$word])) {
+                        continue 2;
+                    }
+                }
+                $counts[(string) $name] = ($counts[(string) $name] ?? 0) + $searches;
+            }
+        }
+        arsort($counts);
+        $top = [];
+        foreach (array_slice($counts, 0, max(1, $limit), true) as $name => $searches) {
+            $top[] = ['name' => (string) $name, 'searches' => $searches];
+        }
+
+        return $top;
+    }
+
+    private static function bucketFormat(string $bucket): string
+    {
+        return match ($bucket) {
+            'day' => '%Y-%m-%d',
+            'hour' => '%Y-%m-%d %H:00',
+            default => throw new InvalidArgumentException("unknown bucket: {$bucket}"),
+        };
+    }
+
+    /**
+     * The window bound plus, for daily trends, the TREND_DAYS cap.
+     *
+     * @return array{string, array<string, string>}
+     */
+    private function trendBound(?string $since, string $bucket): array
+    {
+        return $this->bound(
+            $since,
+            $bucket === 'day' ? 'ts >= NOW() - INTERVAL ' . self::TREND_DAYS . ' DAY' : ''
+        );
     }
 
     /** @return list<array{query: string, searches: int, last_seen: string}> */

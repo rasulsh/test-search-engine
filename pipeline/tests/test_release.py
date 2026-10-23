@@ -298,3 +298,8 @@ def test_release_refuses_to_pack_without_the_safety_nets(tmp_path: Path, dev_tre
         release.main(
             ["--sql", str(INPUT_SQL), "--out", str(out), "--mock", "--server-dir", str(dev_tree)]
         )
+
+
+def test_release_carries_the_analytics_dashboard_assets(tmp_path: Path) -> None:
+    names = {arcname for _, arcname in release.release_entries(tmp_path, REPO_ROOT / "server")}
+    assert {"src/AnalyticsPage.php", "src/AnalyticsPage.js", "src/AnalyticsPage.css"} <= names

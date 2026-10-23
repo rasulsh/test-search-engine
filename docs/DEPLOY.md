@@ -396,6 +396,17 @@ ALTER TABLE search_logs ADD INDEX IF NOT EXISTS idx_ts_result (ts, result_count)
 Without it the pages still work; the zero-result and grouped queries just scan
 more rows on a large log. `db/schema.sql` carries the index for new installs.
 
+<a id="upgrading-to-m35"></a>**Upgrading to M35 (analytics dashboard v2).** Server code only (upload the new
+`server/`, which now carries `src/AnalyticsPage.js` and `src/AnalyticsPage.css`, both in
+`release.zip`); there is no schema change and **no new index**: every new query is
+window-bounded and uses `idx_ts` / `idx_ts_result` (the zero-rate trend is covered by
+`idx_ts_result`). `logs.refresh_seconds` (default 30, `0` = off) is the only new setting. The
+latency trend needs window functions (MariaDB 10.2+). The page makes no request to
+any other host, so it works behind a restrictive network; reopen it as
+`analytics.php?token=…`. If you ever do need a further index, add it by hand like
+the M31 one (`ALTER TABLE search_logs ADD INDEX IF NOT EXISTS ...`): `/reload` never
+touches `search_logs`.
+
 **Log retention (optional, operator-run).** `search_logs` grows with traffic and
 nothing prunes it, on purpose: no daemon runs on the cPanel host. When the table
 gets large, delete old rows by hand or from a cPanel cron you own, for example

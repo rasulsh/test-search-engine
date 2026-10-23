@@ -293,6 +293,40 @@ def test_malformed_alias_file_fails_the_build_before_embedding(
     assert not (tmp_path / "b").exists()
 
 
+def test_bundle_ships_the_intent_map(tmp_path: Path) -> None:
+    intents = tmp_path / "intent_map.json"
+    intents.write_text('{"فرمون": {"category": ["لوازم گیمینگ"]}}', encoding="utf-8")
+    config = _config()
+    config["build"]["intent_map_file"] = str(intents)
+
+    build.build_bundle(build.read_products(INPUT_SQL), tmp_path / "b", config)
+
+    shipped = json.loads((tmp_path / "b" / "intent_map.json").read_text(encoding="utf-8"))
+    assert shipped == {"فرمون": {"category": ["لوازم گیمینگ"]}}
+
+
+def test_bundle_without_an_intent_map_ships_an_empty_one(tmp_path: Path) -> None:
+    config = _config()
+    config["build"]["intent_map_file"] = str(tmp_path / "absent.json")
+
+    build.build_bundle(build.read_products(INPUT_SQL), tmp_path / "b", config)
+
+    assert json.loads((tmp_path / "b" / "intent_map.json").read_text(encoding="utf-8")) == {}
+
+
+def test_unnormalized_intent_key_fails_the_build_before_embedding(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    intents = tmp_path / "intent_map.json"
+    intents.write_text('{"Wheel": {"tags": ["racing wheel"]}}', encoding="utf-8")
+    with pytest.raises(SystemExit) as exc:
+        build.main(["--sql", str(INPUT_SQL), "--out", str(tmp_path / "b"),
+                    "--intent-map", str(intents)])
+    assert exc.value.code == 2
+    assert "not in normalized form" in capsys.readouterr().err
+    assert not (tmp_path / "b").exists()
+
+
 def test_build_stamps_the_code_version_whatever_the_environment_says(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

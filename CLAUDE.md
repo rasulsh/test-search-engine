@@ -104,6 +104,7 @@ abstraction layers.
 │   │   ├── Cache.php              # optional Redis result cache for /search (M26)
 │   │   ├── RedisClient.php        # minimal in-repo RESP client for Cache (no Composer package)
 │   │   ├── Ranker.php             # hybrid merge + business ranking
+│   │   ├── IntentMap.php          # intent word -> category / tag names for the boosts (M34)
 │   │   ├── Logger.php             # search logs (incl. did_you_mean, tier)
 │   │   ├── LogsPage.php           # read-only search_logs view for logs.php (M21)
 │   │   ├── Db.php                 # thin PDO wrapper
@@ -333,6 +334,11 @@ wait for review before starting the next.
 - **M32 — Runtime flow doc:** `docs/RUNTIME-FLOW.md` documents the actual
   `SearchController::search()` pipeline (after M29-M31); docs only. Keep it in sync
   whenever `search()` changes.
+
+- **M34 — Keyword→category intent boosting:** `intent_map.json` (owner-curated bundle file,
+  keys verified normalized at build), `IntentMap` resolving intent words per query, fed into
+  the Ranker's existing category / tag match boosts (hybrid only, after the floor, no new
+  knob); `search.intent_max_terms`; `/reload` rejects a malformed file (`invalid_intent_map`).
 
 - **M22 — Offline build speed + reliable export:** `pipeline/db_export.py`
   (direct DB -> CSV, replaces the phpMyAdmin export), GPU/fp16/batch-configured

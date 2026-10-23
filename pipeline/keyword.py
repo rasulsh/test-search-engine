@@ -147,6 +147,48 @@ def load_aliases(path: str | Path) -> list[list[str]]:
     return groups
 
 
+def load_intent_map(path: str | Path) -> dict[str, dict[str, list[str]]]:
+    """Read the shop owner's intent map (docs/SEARCH-BEHAVIOR.md, intent map): a
+    JSON object from an intent term or phrase to {"category": [...], "tags": [...]}.
+    A missing file means no intents. Keys must already be in normalized form (the
+    server looks them up in the normalized query, so a raw key would never match
+    and the entry would silently do nothing): a key that changes under
+    normalization, malformed JSON or a bad shape raises ValueError and fails the
+    build. Values are normalized the same way; empty ones are dropped."""
+    path = Path(path)
+    if not path.is_file():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"{path}: invalid JSON: {exc}") from exc
+    if not isinstance(data, dict):
+        raise ValueError(f"{path}: expected an object of intent terms")
+
+    intents: dict[str, dict[str, list[str]]] = {}
+    for key, entry in data.items():
+        canonical = " ".join(tokenize(normalize(key)))
+        if not canonical or key != canonical:
+            raise ValueError(
+                f"{path}: key {key!r} is not in normalized form (use {canonical!r})"
+            )
+        if not isinstance(entry, dict) or not set(entry) <= {"category", "tags"} or not entry:
+            raise ValueError(f"{path}: {key!r} must be an object with category and/or tags")
+        resolved: dict[str, list[str]] = {}
+        for field in ("category", "tags"):
+            values = entry.get(field, [])
+            if not isinstance(values, list) or not all(isinstance(v, str) for v in values):
+                raise ValueError(f"{path}: {key!r}.{field} must be a list of strings")
+            names = list(dict.fromkeys(" ".join(tokenize(normalize(v))) for v in values))
+            names = [n for n in names if n]
+            if names:
+                resolved[field] = names
+        if not resolved:
+            raise ValueError(f"{path}: {key!r} maps to no category or tag")
+        intents[key] = resolved
+    return intents
+
+
 def build_keymap() -> dict[str, dict[str, str]]:
     """Return the bidirectional keyboard-layout map for the bundle."""
     en_to_fa = dict(PERSIAN_KEYBOARD)

@@ -229,6 +229,7 @@ final class Config
             'search.category_match_boost'     => ['float', 0.1],
             'search.tag_match_boost'          => ['float', 0.1],
             'search.tag_match_min_tokens'     => ['int', 2],
+            'search.intent_max_terms'         => ['int', 4],
             'search.suggest_min_results'      => ['int', 3],
             'search.suggest_min_frequency'    => ['int', 2],
             'search.suggest_max_distance'     => ['int', 2],

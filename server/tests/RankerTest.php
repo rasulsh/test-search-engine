@@ -257,6 +257,74 @@ final class RankerTest extends TestCase
         self::assertEqualsWithDelta(0.6 * 1.1, $out[0]['score'], 1e-9);
     }
 
+    public function testIntentCategoryActsAsIfTheQueryNamedIt(): void
+    {
+        $signals = self::signals([1 => ['category' => 'موس'], 2 => ['category' => 'لوازم جانبی گیمینگ']]);
+        $cosines = [1 => 0.7, 2 => 0.7];
+        $intent = ['categories' => ['لوازم جانبی گیمینگ']];
+
+        $plain = self::matchRanker()->blend([], $cosines, $signals, 10, [], 0.0, [['فرمون']]);
+        $boosted = self::matchRanker()->blend([], $cosines, $signals, 10, [], 0.0, [['فرمون']], false, $intent);
+
+        self::assertSame([1, 2], self::ids($plain));
+        self::assertSame([2, 1], self::ids($boosted));
+        self::assertEqualsWithDelta(0.6 * 1.1, $boosted[0]['score'], 1e-9); // category_match_boost, nothing new
+    }
+
+    public function testIntentTagMatchesEvenAsOneWordWhereTypedTagsNeedTwo(): void
+    {
+        $signals = self::signals([1 => ['tags' => 'other'], 2 => ['tags' => 'شوتر اکشن']]);
+        $cosines = [1 => 0.7, 2 => 0.7];
+
+        $typed = self::matchRanker()->blend([], $cosines, $signals, 10, [], 0.0, [['شوتر']]);
+        $intent = self::matchRanker()
+            ->blend([], $cosines, $signals, 10, [], 0.0, [['اف', 'پی', 'اس']], false, ['tags' => ['شوتر']]);
+
+        self::assertSame([1, 2], self::ids($typed)); // one typed word: the keyword tier owns it
+        self::assertSame([2, 1], self::ids($intent));
+    }
+
+    public function testIntentNamesNeedTheWholeNameAndDoNotAffectOtherProducts(): void
+    {
+        $signals = self::signals([1 => ['category' => 'گیمینگ'], 2 => ['category' => 'لوازم'], 3 => []]);
+        $cosines = [1 => 0.7, 2 => 0.7, 3 => 0.7];
+
+        $out = self::matchRanker()->blend(
+            [],
+            $cosines,
+            $signals,
+            10,
+            [],
+            0.0,
+            [['x']],
+            false,
+            ['categories' => ['لوازم جانبی گیمینگ'], 'tags' => ['فرمان بازی']]
+        );
+
+        // A product's category words must all be in the mapped name: both partial names qualify,
+        // a product without category / tags does not.
+        self::assertSame([1, 2, 3], self::ids($out));
+        self::assertEqualsWithDelta(0.6 * 1.1, $out[0]['score'], 1e-9);
+        self::assertEqualsWithDelta(0.6, $out[2]['score'], 1e-9);
+    }
+
+    public function testIntentBoostNeverRescuesAnItemTheFloorDropped(): void
+    {
+        $ranker = new Ranker(0.0, 0.0, 0.4, 0.6, 0.45, 1.0, 1.0, 1.0, 1);
+        $signals = self::signals([
+            1 => [],
+            2 => ['category' => 'گیمینگ', 'tags' => 'فرمان'],
+        ]);
+
+        // Product 2's relevance 0.6 * 0.6 = 0.36 is under the floor: dropped however well the intent matches.
+        $out = $ranker->blend([], [1 => 1.0, 2 => 0.6], $signals, 10, [], 0.0, [['x']], false, [
+            'categories' => ['گیمینگ'],
+            'tags' => ['فرمان'],
+        ]);
+
+        self::assertSame([1], self::ids($out));
+    }
+
     public function testTagPhraseBoostNeedsAContiguousMultiWordPhrase(): void
     {
         $tags = 'assassins creed origins no mans sky';

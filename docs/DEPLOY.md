@@ -198,6 +198,8 @@ keyword-indexed (default `SEARCH_DESC_INDEX_CHARS`, else 800; 0 = the whole
 description). It only affects the build; to change it, build and deploy a new
 release. `--aliases FILE` ships another [alias file](SEARCH-BEHAVIOR.md#aliases) instead of
 `pipeline/aliases.json`.
+`--intent-map FILE` likewise ships another [intent map](SEARCH-BEHAVIOR.md#intent-map) instead of
+`pipeline/intent_map.json`.
 
 On Windows: `pipeline\release.bat --csv export.csv --out release.zip`
 (same arguments). The command embeds the VPS vectors with the **real** model
@@ -207,7 +209,7 @@ bundle's `vectors.bin` with the mock embedder (see below) and packs one
 
 | in the zip | what |
 | --- | --- |
-| `data_incoming/` | the bundle: `vectors.bin`, `vectors.idx`, `products.load.sql`, `meta.json`, `spellcheck.txt`, `synonyms.json`, `aliases.json`, `keymap.json` |
+| `data_incoming/` | the bundle: `vectors.bin`, `vectors.idx`, `products.load.sql`, `meta.json`, `spellcheck.txt`, `synonyms.json`, `aliases.json`, `intent_map.json`, `keymap.json` |
 | `bootstrap.php`, `src/`, `public/`, `tools/config-check.php` | the server code (including `public/install.php` and `public/test.html`) and the config doctor |
 | `config.example.php`, `db/schema.sql` | the installer's config template and schema |
 

@@ -1,7 +1,8 @@
 """One-command release: catalog export in -> a single deployable release.zip.
 
     python pipeline/release.py --csv export.csv --out release.zip
-        [--desc-index-chars N] [--aliases aliases.json] [--vps-out DIR | --no-vps]
+        [--desc-index-chars N] [--aliases aliases.json] [--intent-map intent_map.json]
+        [--vps-out DIR | --no-vps]
 
 Builds the bundle and packs, relative to the host's
 `server/` directory, everything the site needs:
@@ -140,6 +141,9 @@ def main(argv: list[str] | None = None) -> int:
                              "Build-time only: the server never re-indexes.")
     parser.add_argument("--aliases", help="Alias file shipped in the bundle (default "
                                           "SEARCH_ALIASES_FILE, else pipeline/aliases.json).")
+    parser.add_argument("--intent-map", help="Intent map file shipped in the bundle (default "
+                                             "SEARCH_INTENT_MAP_FILE, else "
+                                             "pipeline/intent_map.json).")
     vps = parser.add_mutually_exclusive_group()
     vps.add_argument("--vps-out", metavar="DIR",
                      help="Write the VPS product vectors (vps/README.md) to DIR (default: "
@@ -165,8 +169,13 @@ def main(argv: list[str] | None = None) -> int:
         if not Path(args.aliases).is_file():
             parser.error(f"alias file not found: {args.aliases}")
         config["build"]["aliases_file"] = args.aliases
+    if args.intent_map:
+        if not Path(args.intent_map).is_file():
+            parser.error(f"intent map file not found: {args.intent_map}")
+        config["build"]["intent_map_file"] = args.intent_map
     try:
         build._keyword.load_aliases(config["build"]["aliases_file"])
+        build._keyword.load_intent_map(config["build"]["intent_map_file"])
     except ValueError as exc:
         parser.error(str(exc))
 

@@ -38,7 +38,8 @@ swap with no manual `ALTER`; then its rows, normalized columns from the canonica
 split into statements of at most `SEARCH_LOAD_MAX_STATEMENT_BYTES`, 1 MB by
 default, so each fits a shared host's `max_allowed_packet`),
 `synonyms.json`, `aliases.json` (the owner's [alias file](SEARCH-BEHAVIOR.md#aliases),
-normalized), `spellcheck.txt`, `keymap.json`, and `meta.json`
+normalized), `intent_map.json` (the owner's [intent map](SEARCH-BEHAVIOR.md#intent-map), keys checked
+to be normalized), `spellcheck.txt`, `keymap.json`, and `meta.json`
 (`{model, revision, dim, normalization_version, count, built_at, checksum, embedder}`).
 M21 added the `normalized_tags`, `normalized_brand` and `normalized_category`
 columns to `products.load.sql`; `model`, `dim` and `normalization_version` in

@@ -102,6 +102,7 @@ It prints key paths only, never values, and exits non-zero on any ERROR, so a de
 | `search.keyword_weight` / `search.semantic_weight` / `search.min_relevance` | 0.4 / 0.6 / 0.45 | blended relevance and its floor (M20) |
 | `search.stock_boost` / `search.popularity_boost` | 0.1 / 0.1 | light boosts after the floor |
 | `search.brand_match_boost` / `search.category_match_boost` / `search.tag_match_boost` | 0.15 / 0.1 / 0.1 | M21 match boosts (0 disables one) |
+| `search.intent_max_terms` | `4` | most intent-map keys applied to one query ([intent map](SEARCH-BEHAVIOR.md#intent-map), M34). The mapped categories / tags use the two boosts above; there is no separate knob |
 | `search.tag_match_min_tokens` | 2 | shortest query that phrase-matches tags |
 | `search.latency_budget_ms` | 200 | the budget the latency-guard tests assert against |
 
@@ -179,6 +180,7 @@ The test page's `PRICE_SUFFIX` is a constant in `server/public/test.html`, not a
 | `SEARCH_PASSAGE_CHAR_LIMIT` | 1000 | cap on the whole embedded passage (0 = none) |
 | `SEARCH_DESC_INDEX_CHARS` | 800 | leading description characters keyword-indexed (0 = whole); `release.py --desc-index-chars` overrides. Build-time only |
 | `SEARCH_ALIASES_FILE` | `pipeline/aliases.json` | the owner's [alias file](SEARCH-BEHAVIOR.md#aliases); `release.py --aliases` overrides |
+| `SEARCH_INTENT_MAP_FILE` | `pipeline/intent_map.json` | the owner's [intent map](SEARCH-BEHAVIOR.md#intent-map) (M34); `release.py --intent-map` overrides |
 | `SEARCH_LOAD_MAX_STATEMENT_BYTES` | 1000000 | largest statement in `products.load.sql` (must fit the host's `max_allowed_packet`) |
 | `SEARCH_MIN_TOKEN_LENGTH` | 2 | tokens shorter than this are ignored when building the dictionaries |
 | `SEARCH_PRODUCTS_TABLE` | `products` | table whose definition seeds the staging DDL |

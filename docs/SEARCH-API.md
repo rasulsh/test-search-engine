@@ -175,6 +175,33 @@ signal: two rows for one product means an alias is missing.
 - *Did-you-mean share high*: many typos; check the suggestions are accepted
   (the storefront applies them) and that the spellcheck dictionary is current.
 
+## Log export
+
+<a id="log-export"></a>`php server/tools/logs-export.php` (M36) exports `search_logs` to a file for the
+[zero-result loop](ALIASES.md#the-zero-result-loop-m36). It is a **CLI tool**, run on the
+cPanel host like `tools/config-check.php` (it reads the same `config.php` and
+database, needs no token, and answers `404` if ever requested over HTTP). It ships in
+`release.zip`.
+
+| option | meaning |
+| --- | --- |
+| `--out PATH` | **required**; the file to write. Its directory must exist, and it is **refused under `server/public`** (the web root): the file holds shoppers' queries |
+| `--window 24h\|7d\|30d\|90d\|all` | time range counted back from the database clock (same as the analytics page); default all time |
+| `--since`, `--until` | an alternative to `--window`: `YYYY-MM-DD` or `"YYYY-MM-DD HH:MM:SS"`, `--until` exclusive; not combinable with `--window` |
+| `--zero-only` | only searches with `result_count = 0` |
+| `--grouped` | one row per distinct normalized query instead of raw rows |
+| `--limit N` | at most N rows (raw: the newest N; grouped: the N most searched) |
+| `--format csv\|json` | default `csv` |
+
+Raw rows (newest first): `ts, raw_q, normalized_q, had_vector, result_count, latency_ms,
+did_you_mean, tier, cache_hit` (columns a pre-M21 / M26 table lacks are left out).
+`--grouped` rows: `normalized_q, searches, last_seen` (the raw text when the normalized
+form is empty), most searched first. **`customer_id` and `top_ids` are never exported.**
+CSV is written with PHP's `fputcsv` (RFC 4180 quoting, `"` doubled, LF line ends) as
+UTF-8 **without** a BOM, so Persian text, commas, quotes and newlines round-trip;
+`pipeline/gen_aliases.py` also reads a BOM. Exit status: `0` success, `2` usage error,
+`1` any other failure (a one-line reason on stderr). It only runs `SELECT`s.
+
 ## Eval harness
 
 `server/tools/eval.php` runs the labeled queries in `fixtures/eval_queries.json`

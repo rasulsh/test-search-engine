@@ -29,7 +29,8 @@ def dev_tree(tmp_path: Path) -> Path:
                 "public/index.php", "public/reload.php", "public/test.html", "public/install.php",
                 "public/client/model/stale.onnx", "data/vectors.bin",
                 "data_incoming/old.txt", "tests/KeywordTest.php", "tools/eval.php",
-                "tools/config-check.php", "public/.htaccess", "public/app_base.php",
+                "tools/config-check.php", "tools/logs-export.php", "public/.htaccess",
+                "public/app_base.php",
                 ".htaccess", "data/.htaccess", "data_incoming/.htaccess"):
         (server / rel).parent.mkdir(parents=True, exist_ok=True)
         (server / rel).write_text(rel, encoding="utf-8")
@@ -64,8 +65,10 @@ def test_release_packs_bundle_under_data_incoming_and_the_server_code(
     assert "config.example.php" in names  # install.php's template
     assert [n for n in names if n.startswith("data/")] == ["data/.htaccess"]  # no live data
     assert not any(n.startswith("tests/") for n in names)
-    # The one tool shipped: the config doctor, run after unzipping.
-    assert [n for n in names if n.startswith("tools/")] == ["tools/config-check.php"]
+    # The tools shipped (run on the host after unzipping): the config doctor and the log
+    # export (M36); never the dev-only tools/eval.php.
+    assert [n for n in names if n.startswith("tools/")] == [
+        "tools/config-check.php", "tools/logs-export.php"]
     assert "data_incoming/old.txt" not in names
     # M30 layout: unzipped into server/, public/ stays a child of it, with the deny-all nets.
     assert {".htaccess", "data/.htaccess", "data_incoming/.htaccess", "public/.htaccess",

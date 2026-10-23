@@ -58,3 +58,45 @@ well-known Persian forms, not translations; strict JSON out.
 
 Zero-result queries are a recurring input: rerun steps 1-4 now and then with
 fresh queries from the log; already-known groups merge to no change.
+
+## The zero-result loop (M36)
+
+The shoppers' own zero-result searches are the best source of missing aliases
+(`رزیدنت اویل`, `پی اس فایو`, `ولورینگ`). Two pieces close the loop:
+
+1. **Export** them on the cPanel host (the CLI reads the same config / database as
+   the app; see [SEARCH-API.md](SEARCH-API.md#log-export)):
+   `php server/tools/logs-export.php --zero-only --grouped --window 30d --out zero.csv`
+   writes one row per distinct normalized query (`normalized_q,searches,last_seen`,
+   most searched first, UTF-8). Copy `zero.csv` to the build machine (it holds
+   shoppers' search text, so treat it as private).
+2. **Ask for alias candidates** from that file instead of the catalog:
+   `python pipeline/gen_aliases.py --queries-file zero.csv` (add `--csv export.csv`
+   to also generate the catalog's Persian spellings in the same run; `--limit N`
+   caps how many queries are asked about, the file is already ordered by
+   searches). For each query the model is asked, with
+   `pipeline/gen_aliases_queries_prompt.txt`, for the **other forms of the same
+   thing**: the official English name and other Persian spellings or spacing, never
+   a related product, and it skips what it does not recognize. Persian-only queries
+   are kept (unlike catalog names, which need Latin letters). Each answer becomes a
+   candidate group `[query, form, ...]` in `pipeline/aliases.generated.json`; the
+   validation is the one above, except that a form may be in either script.
+
+Then the usual steps: **review** (delete anything wrong, especially generic
+words), `--merge`, rebuild, deploy and reload.
+
+```
+php server/tools/logs-export.php --zero-only --grouped --window 30d --out zero.csv   # on the cPanel host
+python pipeline/gen_aliases.py --queries-file zero.csv        # -> aliases.generated.json
+# review the candidates by hand, then:
+python pipeline/gen_aliases.py --merge                        # -> aliases.json
+python pipeline/release.py --csv export.csv --out release.zip # rebuild
+# deploy + reload (docs/DEPLOY.md)
+```
+
+A query that is really a product the shop does not sell, or a category or
+feature word, will not (and should not) get an alias; for those the answer is the
+catalog or the [intent map](SEARCH-BEHAVIOR.md#intent-map), which is curated by
+hand (a later extension of this generator could propose intent-map entries). The
+rate to watch is the zero-result rate on the [analytics
+dashboard](SEARCH-API.md#analytics): it should fall after each cycle.

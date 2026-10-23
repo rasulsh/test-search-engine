@@ -113,6 +113,7 @@ abstraction layers.
 │   │   └── AnalyticsPage.php      # HTML dashboard for analytics.php (M31)
 │   ├── config.php                # deployer overrides only (gitignored); config.example.php committed
 │   ├── tools/config-check.php    # config doctor CLI (M29): exits non-zero on an ERROR
+│   ├── tools/logs-export.php     # search_logs -> CSV / JSON CLI for the zero-result loop (M36)
 │   ├── data/                      # active bundle (gitignored)
 │   └── tests/
 ├── vps/                          # VPS vector service (Python): query embedding + cosine top-K
@@ -329,6 +330,12 @@ wait for review before starting the next.
   did-you-mean share, volume) over the existing `search_logs`, `AnalyticsPage` +
   `public/analytics.php` (reuses `logs.token`, same headers as `logs.php`, `?window=`,
   `?format=json`), one new index `idx_ts_result`, retention documented not automated.
+
+- **M36 — Search-log export + zero-result loop:** `tools/logs-export.php` (CLI over
+  `App\LogsExport`: raw or `--grouped` rows, `--window` / `--since` / `--until`, `--zero-only`,
+  `--limit`, CSV / JSON, UTF-8, never written under `server/public`, no `customer_id`), packed in
+  `release.zip`; `gen_aliases.py --queries-file` reads the grouped export and writes alias
+  candidates for `--merge`. Documented in `docs/ALIASES.md`.
 
 - **M32 — Runtime flow doc:** `docs/RUNTIME-FLOW.md` documents the actual
   `SearchController::search()` pipeline (after M29-M31); docs only. Keep it in sync

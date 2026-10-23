@@ -2,11 +2,16 @@
 
     python pipeline/gen_aliases.py --csv export.csv [--queries zero_results.txt]
         [--out aliases.generated.json] [--limit N]
+    python pipeline/gen_aliases.py --queries-file zero.csv [--csv export.csv]
     python pipeline/gen_aliases.py --merge [aliases.generated.json]
 
 Step 1 asks an OpenAI-compatible LLM for the Persian spellings shoppers type
 for each distinct English brand / title_en (and optional zero-result queries)
-and writes CANDIDATES to aliases.generated.json for human review. Step 2
+and writes CANDIDATES to aliases.generated.json for human review. With
+--queries-file (M36) it also takes the zero-result queries exported by
+server/tools/logs-export.php (--grouped CSV, a normalized_q column) and asks the
+model for the other forms of each (official English name, other Persian
+spellings): the loop that closes real gaps. Step 2
 (--merge) folds the reviewed file into aliases.json. It runs at prep time only;
 search never calls it. aliases.json is never written without --merge.
 """
@@ -27,6 +32,7 @@ if _sys.path and _os.path.abspath(_sys.path[0]) == _HERE:
     _sys.path.insert(0, _HERE)
 
 import argparse
+import csv
 import importlib.util
 import json
 import re
@@ -46,8 +52,10 @@ _keyword = importlib.util.module_from_spec(_kw_spec)
 _kw_spec.loader.exec_module(_keyword)
 
 PROMPT_PATH = Path(__file__).with_name("gen_aliases_prompt.txt")
+QUERIES_PROMPT_PATH = Path(__file__).with_name("gen_aliases_queries_prompt.txt")
 _PERSIAN = re.compile(r"[؀-ۿ]")
 _LATIN = re.compile(r"[a-z]")
+_LETTER = re.compile(r"[^\W\d_]")
 
 # A chat client: (system prompt, user prompt) -> the model's text reply.
 LLMClient = Callable[[str, str], str]
@@ -86,6 +94,29 @@ def collect_names(
     for query in queries:
         add(query)
     return names
+
+
+def read_queries_file(path: str | Path, max_chars: int) -> list[str]:
+    """Queries from a logs-export.php CSV: the `normalized_q` column (as the
+    --grouped export has it, most searched first) or, for a raw export, `raw_q`.
+    UTF-8 with or without a BOM. Distinct after normalization, empty and
+    over-long ones dropped, file order kept. Unlike clean_name this keeps
+    Persian-only queries: they are exactly the gaps."""
+    with open(path, encoding="utf-8-sig", newline="") as handle:
+        reader = csv.DictReader(handle)
+        fields = reader.fieldnames or []
+        column = next((c for c in ("normalized_q", "raw_q") if c in fields), None)
+        if column is None:
+            raise ValueError(f"{path}: expected a normalized_q (or raw_q) column")
+        seen: set[str] = set()
+        queries: list[str] = []
+        for row in reader:
+            text = " ".join((row.get(column) or "").split())
+            key = normalize(text)
+            if key and len(text) <= max_chars and key not in seen:
+                seen.add(key)
+                queries.append(text)
+    return queries
 
 
 def batches(names: list[str], size: int) -> list[list[str]]:
@@ -158,10 +189,40 @@ def validate_variants(
     return kept
 
 
-def generate(names: list[str], client: LLMClient, settings: dict[str, Any]) -> list[list[str]]:
-    """Candidate groups [english, *persian] for every name the model answered
+def validate_alternatives(
+    query: str, variants: Any, max_variants: int, max_chars: int
+) -> list[str]:
+    """Other forms of a zero-result query worth keeping: strings with letters in
+    either script, within the length cap, distinct after normalization from each
+    other and the query; at most max_variants."""
+    if not isinstance(variants, list):
+        return []
+    seen = {normalize(query)}
+    kept: list[str] = []
+    for variant in variants:
+        if not isinstance(variant, str):
+            continue
+        text = " ".join(variant.split())
+        key = normalize(text)
+        if not text or len(text) > max_chars or not _LETTER.search(text) or key in seen:
+            continue
+        seen.add(key)
+        kept.append(text)
+        if len(kept) >= max_variants:
+            break
+    return kept
+
+
+def generate(
+    names: list[str],
+    client: LLMClient,
+    settings: dict[str, Any],
+    prompt_path: Path = PROMPT_PATH,
+    validate: Callable[[str, Any, int, int], list[str]] = validate_variants,
+) -> list[list[str]]:
+    """Candidate groups [name, *variants] for every name the model answered
     validly. A bad batch reply is skipped (reported on stderr), not fatal."""
-    system = PROMPT_PATH.read_text(encoding="utf-8")
+    system = prompt_path.read_text(encoding="utf-8")
     groups: list[list[str]] = []
     for number, batch in enumerate(batches(names, settings["batch_size"]), start=1):
         try:
@@ -169,13 +230,12 @@ def generate(names: list[str], client: LLMClient, settings: dict[str, Any]) -> l
         except (ValueError, OSError, KeyError) as exc:
             print(f"batch {number}: skipped ({exc})", file=_sys.stderr)
             continue
-        for english in batch:
-            variants = validate_variants(
-                english, reply.get(english),
-                settings["max_variants"], settings["max_variant_chars"],
+        for name in batch:
+            variants = validate(
+                name, reply.get(name), settings["max_variants"], settings["max_variant_chars"]
             )
             if variants:
-                groups.append([english, *variants])
+                groups.append([name, *variants])
     return groups
 
 
@@ -240,6 +300,9 @@ def main(argv: list[str] | None = None, client: LLMClient | None = None) -> int:
     parser = argparse.ArgumentParser(description="Generate Persian alias candidates.")
     parser.add_argument("--csv", help="export.csv (columns brand, title_en).")
     parser.add_argument("--queries", help="Text file, one zero-result query per line.")
+    parser.add_argument("--queries-file", metavar="CSV",
+                        help="Zero-result export of server/tools/logs-export.php --grouped "
+                             "(a normalized_q column); asks for the other forms of each query.")
     parser.add_argument("--out", default=str(default_out), help="Candidate file.")
     parser.add_argument("--limit", type=int, default=0, help="Only the first N names (0 = all).")
     parser.add_argument("--merge", nargs="?", const=str(default_out), metavar="CANDIDATES",
@@ -257,23 +320,37 @@ def main(argv: list[str] | None = None, client: LLMClient | None = None) -> int:
         print(f"merged into {aliases}: {len(existing)} -> {len(merged)} groups")
         return 0
 
-    if not args.csv:
-        parser.error("--csv is required unless --merge is given")
+    if not args.csv and not args.queries_file:
+        parser.error("--csv or --queries-file is required unless --merge is given")
     if client is None:
         missing = [k for k in ("base_url", "model", "api_key") if not settings[k]]
         if missing:
             parser.error("set ALIAS_LLM_BASE_URL, ALIAS_LLM_MODEL and ALIAS_LLM_API_KEY")
         client = openai_client(settings["base_url"], settings["model"], settings["api_key"])
 
-    import build  # heavy import, only needed to read the export
+    names: list[str] = []
+    groups: list[list[str]] = []
+    if args.csv:
+        import build  # heavy import, only needed to read the export
 
-    names = collect_names(build.read_products(args.csv), _read_queries(args.queries),
-                          settings["max_name_chars"])
-    if args.limit:
-        names = names[:args.limit]
-    groups = generate(names, client, settings)
+        names = collect_names(build.read_products(args.csv), _read_queries(args.queries),
+                              settings["max_name_chars"])
+        if args.limit:
+            names = names[:args.limit]
+        groups = generate(names, client, settings)
+
+    gaps: list[str] = []
+    if args.queries_file:
+        try:
+            gaps = read_queries_file(args.queries_file, settings["max_name_chars"])
+        except (OSError, ValueError) as exc:
+            parser.error(str(exc))
+        if args.limit:
+            gaps = gaps[:args.limit]
+        groups += generate(gaps, client, settings, QUERIES_PROMPT_PATH, validate_alternatives)
+
     _write_groups(Path(args.out), groups)
-    print(f"{len(names)} names -> {len(groups)} candidate groups in {args.out}; "
+    print(f"{len(names) + len(gaps)} names -> {len(groups)} candidate groups in {args.out}; "
           "review, then run with --merge")
     return 0
 

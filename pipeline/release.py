@@ -8,7 +8,7 @@ Builds the bundle and packs, relative to the host's
 
     data_incoming/        the bundle (vectors, products.load.sql, meta.json, ...)
     bootstrap.php, config.example.php, src/, public/ (incl. public/install.php),
-    tools/config-check.php (the config doctor, run after unzipping)
+    tools/config-check.php (the config doctor), tools/logs-export.php (log export, M36)
     .htaccess, data/.htaccess, data_incoming/.htaccess (deny-all safety nets)
     db/schema.sql         read by install.php on the first deploy
 
@@ -55,8 +55,10 @@ from normalize import NORMALIZATION_VERSION
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 # config.example.php is the template for a first deploy; config.php is never packed.
-# tools/config-check.php is the only tool shipped: deploy runs it after unzipping.
-SERVER_CODE = ("bootstrap.php", "config.example.php", "src", "public", "tools/config-check.php")
+# Two tools ship (run on the host after unzipping): the config doctor and, since M36, the
+# log export. tools/eval.php is dev-only and stays out.
+SERVER_CODE = ("bootstrap.php", "config.example.php", "src", "public", "tools/config-check.php",
+               "tools/logs-export.php")
 # Deny-all files (M30): a safety net if the tree is ever misplaced under a web root.
 # The bundle's own data_incoming/.htaccess becomes data/.htaccess on reload.
 SAFETY_NET = (".htaccess", "data/.htaccess", "data_incoming/.htaccess")

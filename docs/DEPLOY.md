@@ -208,7 +208,7 @@ bundle's `vectors.bin` with the mock embedder (see below) and packs one
 | in the zip | what |
 | --- | --- |
 | `data_incoming/` | the bundle: `vectors.bin`, `vectors.idx`, `products.load.sql`, `meta.json`, `spellcheck.txt`, `synonyms.json`, `aliases.json`, `keymap.json` |
-| `bootstrap.php`, `src/`, `public/`, `tools/config-check.php` | the server code (including `public/install.php` and `public/test.html`) and the config doctor |
+| `bootstrap.php`, `src/`, `public/`, `tools/config-check.php`, `tools/logs-export.php` | the server code (including `public/install.php` and `public/test.html`), the config doctor and the [log export](SEARCH-API.md#log-export) (M36) |
 | `config.example.php`, `db/schema.sql` | the installer's config template and schema |
 
 `config.php` is **never** in the zip, so unzipping never overwrites the

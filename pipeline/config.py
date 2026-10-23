@@ -89,6 +89,11 @@ def load() -> dict[str, Any]:
             "aliases_file": os.getenv(
                 "SEARCH_ALIASES_FILE", str(Path(__file__).with_name("aliases.json"))
             ),
+            # The shop owner's editable intent map (docs/SEARCH-BEHAVIOR.md, intent
+            # map), shipped in the bundle as intent_map.json. A missing file means none.
+            "intent_map_file": os.getenv(
+                "SEARCH_INTENT_MAP_FILE", str(Path(__file__).with_name("intent_map.json"))
+            ),
             # products.load.sql is split into statements no larger than this so
             # each fits the host's max_allowed_packet (MariaDB default 16 MB).
             "max_statement_bytes": int(os.getenv("SEARCH_LOAD_MAX_STATEMENT_BYTES", "1000000")),

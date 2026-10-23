@@ -162,6 +162,41 @@ for the budget on a full catalog.
 
 ## Hybrid ranking
 
+<a id="intent-map"></a>**Intent map (M34).** Some words a shopper types are in none of a product's
+title, tags, brand, category or specs, yet clearly point at a group of products: `فرمون`
+(steering wheel) should lift the gaming wheels and accessories. The **intent map**
+(`pipeline/intent_map.json`, shipped in the bundle as `intent_map.json`) is a small
+owner-curated file, hand-editable like `aliases.json`, from an intent word or phrase to
+category and / or tag names:
+
+    {
+      "فرمون": { "category": ["لوازم جانبی گیمینگ"], "tags": ["فرمان بازی"] },
+      "شوتر":  { "tags": ["شوتر"] }
+    }
+
+At query time `IntentMap::resolve()` finds every key that occurs **whole** in the query (token
+sequences, longest first, never substrings; at most `search.intent_max_terms`, default 4,
+keys apply) and hands the mapped names to the ranker, which treats them as if the shopper had
+typed that category / tag: products whose category is the mapped one (all words of the
+product's category are in the mapped name) get the existing `category_match_boost`, products
+whose tags contain the mapped tag phrase get `tag_match_boost` (one-word intent tags count,
+since the shopper never typed them, so the keyword tier has not credited them). There is no
+new ranking stage, knob or maths: like every match boost it applies **after** the relevance
+floor, so it only reorders candidates the keyword and semantic tiers already returned and can
+never admit a weak or floor-dropped hit. It applies in hybrid mode only; keyword-only order
+(VPS down or not configured) is unchanged. Without the file, or with `{}`, nothing changes.
+
+Keys must already be in **normalized** form (lower-case Latin, Persian ی/ک, ASCII digits, no
+half-space or diacritics, single spaces; see [normalization](PIPELINE.md)); values are
+normalized by the build. The build fails with a message naming the offending key if a key
+would change under normalization, because such an entry would silently never match. A
+present file that does not parse is rejected by `/reload` (`invalid_intent_map`). To change
+the map: edit `pipeline/intent_map.json`, build a release, deploy and reload as for any
+catalog update (`release.py --intent-map FILE` points at another file). Entries can be
+discovered by hand from the zero-result queries (`logs-export.php`, M36); extending
+`pipeline/gen_aliases.py` to propose `intent_map.json` entries from the catalog through its
+LLM pass is a possible later step and is **not** part of M34.
+
 **Blended hybrid ranking (`server/src/Ranker.php`, M20).** Keyword hits no
 longer form a tier above the semantic results. For every candidate (keyword
 hits, plus the VPS neighbours unless the all-terms rule applies) the ranker

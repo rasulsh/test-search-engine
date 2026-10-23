@@ -104,6 +104,9 @@ final class Ranker
      * @param list<list<string>> $variants normalized query tokens: the literal query first,
      *        then its alias / synonym variants; empty disables the match boosts
      * @param bool $explain add each row's score breakdown as `detail`
+     * @param array{categories?: list<string>, tags?: list<string>} $intent normalized category / tag
+     *        names the query's intent words map to (IntentMap, M34): they count as if the query
+     *        had named that category / tag, through the same boosts (no extra knob)
      * @return list<array{
      *     product_id: int, score: float, keyword: bool, detail?: array<string, mixed>
      * }> best first
@@ -116,8 +119,14 @@ final class Ranker
         array $solid = [],
         float $solidCosine = 0.0,
         array $variants = [],
-        bool $explain = false
+        bool $explain = false,
+        array $intent = []
     ): array {
+        $categoryVariants = $variants;
+        foreach ($intent['categories'] ?? [] as $name) {
+            $categoryVariants[] = Tokenizer::split($name);
+        }
+        $intentTags = array_map([Tokenizer::class, 'split'], $intent['tags'] ?? []);
         $maxKeyword = $keywordScores === [] ? 0.0 : max($keywordScores);
         $maxCosine = $cosines === [] ? 0.0 : max($cosines);
         $maxPopularity = 0;
@@ -138,8 +147,8 @@ final class Ranker
             $inStock = ($signals[$id]['stock'] ?? 0) > 0 ? 1.0 : 0.0;
             $popularity = $maxPopularity > 0 ? ($signals[$id]['popularity'] ?? 0) / $maxPopularity : 0.0;
             $brand = $this->wordsInQuery($signals[$id]['brand'] ?? '', $variants);
-            $category = $this->wordsInQuery($signals[$id]['category'] ?? '', $variants);
-            $tag = $this->phraseInTags($signals[$id]['tags'] ?? '', $variants);
+            $category = $this->wordsInQuery($signals[$id]['category'] ?? '', $categoryVariants);
+            $tag = $this->phraseInTags($signals[$id]['tags'] ?? '', $variants, $intentTags);
             $boosts = [
                 'stock'      => $this->stockBoost * $inStock,
                 'popularity' => $this->popularityBoost * $popularity,
@@ -204,14 +213,23 @@ final class Ranker
      * contiguous run of the product's tag words (the export joins tag names
      * with a space, so a multi-word tag is such a run).
      *
+     * Intent tags (M34) skip the minimum: the shopper never typed them, so the
+     * keyword tier has not credited them and there is nothing to double-count.
+     *
      * @param list<list<string>> $variants
+     * @param list<list<string>> $intentTags
      */
-    private function phraseInTags(string $tags, array $variants): bool
+    private function phraseInTags(string $tags, array $variants, array $intentTags = []): bool
     {
         if ($tags === '') {
             return false;
         }
         $haystack = ' ' . implode(' ', Tokenizer::split($tags)) . ' ';
+        foreach ($intentTags as $tokens) {
+            if ($tokens !== [] && str_contains($haystack, ' ' . implode(' ', $tokens) . ' ')) {
+                return true;
+            }
+        }
         foreach ($variants as $tokens) {
             $phrase = ' ' . implode(' ', $tokens) . ' ';
             if (count($tokens) >= $this->tagMatchMinTokens && str_contains($haystack, $phrase)) {

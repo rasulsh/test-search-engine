@@ -17,7 +17,7 @@ from normalize import NORMALIZATION_VERSION
 REPO_ROOT = Path(__file__).resolve().parents[2]
 INPUT_SQL = REPO_ROOT / "fixtures" / "products.input.sql"
 BUNDLE_FILES = ("vectors.bin", "vectors.idx", "products.load.sql", "synonyms.json",
-                "aliases.json", "spellcheck.txt", "keymap.json", "meta.json")
+                "aliases.json", "intent_map.json", "spellcheck.txt", "keymap.json", "meta.json")
 
 
 @pytest.fixture()
@@ -140,6 +140,24 @@ def test_release_ships_the_alias_file(tmp_path: Path, dev_tree: Path) -> None:
     with zipfile.ZipFile(tmp_path / "out" / "release.zip") as archive:
         shipped = json.loads(archive.read("data_incoming/aliases.json"))
     assert shipped == [["gta", "grand theft auto"]]
+
+
+def test_release_ships_the_intent_map_and_rejects_a_bad_one(
+    tmp_path: Path, dev_tree: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    intents = tmp_path / "my_intents.json"
+    intents.write_text('{"فرمون": {"tags": ["فرمان بازی"]}}', encoding="utf-8")
+    _release(tmp_path, dev_tree, "--intent-map", str(intents))
+    with zipfile.ZipFile(tmp_path / "out" / "release.zip") as archive:
+        shipped = json.loads(archive.read("data_incoming/intent_map.json"))
+    assert shipped == {"فرمون": {"tags": ["فرمان بازی"]}}
+
+    intents.write_text('{"Wheel": {"tags": ["x"]}}', encoding="utf-8")
+    with pytest.raises(SystemExit) as exc:
+        release.main(["--sql", str(INPUT_SQL), "--out", str(tmp_path / "r.zip"),
+                      "--no-model", "--intent-map", str(intents)])
+    assert exc.value.code == 2
+    assert "not in normalized form" in capsys.readouterr().err
 
 
 def test_release_rejects_a_missing_or_malformed_alias_file(

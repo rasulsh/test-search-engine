@@ -86,6 +86,7 @@ final class Reload
 
         // Searches in this worker re-read synonyms.json / aliases.json at once.
         Synonyms::clearCache();
+        IntentMap::clearCache();
 
         // The swap is committed; warming the speller is best-effort. Other
         // workers pick up the new file on their own (the cache key is the file's
@@ -150,8 +151,8 @@ final class Reload
     }
 
     /**
-     * synonyms.json and aliases.json are optional (older bundles have no
-     * aliases.json), but a present one must parse: the shop owner edits
+     * synonyms.json, aliases.json and intent_map.json are optional (older bundles
+     * have no aliases.json), but a present one must parse: the shop owner edits
      * aliases.json by hand, and a typo there should fail the reload loudly
      * rather than silently switch the aliases off.
      */
@@ -162,6 +163,10 @@ final class Reload
         }
         if (!$this->groupsFileParses(Synonyms::ALIASES_FILE)) {
             throw new ReloadException('invalid_aliases', ['file' => Synonyms::ALIASES_FILE]);
+        }
+        $intentPath = $this->incomingDir . '/' . IntentMap::FILE;
+        if (is_file($intentPath) && IntentMap::parse((string) file_get_contents($intentPath)) === null) {
+            throw new ReloadException('invalid_intent_map', ['file' => IntentMap::FILE]);
         }
     }
 

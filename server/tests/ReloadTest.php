@@ -271,6 +271,8 @@ final class ReloadTest extends DatabaseTestCase
             Synonyms::ALIASES_FILE, '[["gta", "grand theft auto"],]', 'invalid_aliases',
         ];
         yield 'alias group not a list' => [Synonyms::ALIASES_FILE, '{"gta": "grand theft auto"}', 'invalid_aliases'];
+        yield 'intent map entry not an object' => [\App\IntentMap::FILE, '{"a": ["x"]}', 'invalid_intent_map'];
+        yield 'intent map unknown field' => [\App\IntentMap::FILE, '{"a": {"colour": ["x"]}}', 'invalid_intent_map'];
         yield 'synonym term not a string' => [Synonyms::SYNONYMS_FILE, '[["laptop", 5]]', 'invalid_synonyms'];
     }
 

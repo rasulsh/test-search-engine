@@ -170,7 +170,7 @@ vendor/bin/phpunit
 - [ ] **M24** — Documentation restructure: the README is a short onboarding with a documentation index; the technical detail lives in `docs/` (this folder), including the new Colab rebuild / retrain runbook `TRAINING-COLAB.md`. Docs only, no behavior change.
 - [ ] **M25** — Offline alias generator: `pipeline/gen_aliases.py` asks an OpenAI-compatible LLM for the Persian spellings of the catalog's English brand / title names, writes candidates for human review and `--merge`s the reviewed ones into `aliases.json` ([ALIASES.md](ALIASES.md)). Prep-time only; the search path is unchanged.
 - [ ] **M26** — Optional Redis result cache for `/search` (`Cache.php`, `RedisClient.php`, config `redis`, `vps/setup.sh --redis`): off by default, any Redis error is a miss, `/reload` flushes it, `search_logs.cache_hit`. Redis runs on the VPS; cPanel runs only the in-repo RESP client.
-
+- [ ] **M34** — Keyword→category intent boosting: an owner-curated `intent_map.json` (bundle file, keys checked normalized at build) maps an intent word to category / tag names; `IntentMap` resolves it per query and the Ranker feeds the names into the existing category / tag match boosts. No new ranking stage or knob; `search.intent_max_terms` ([SEARCH-BEHAVIOR.md](SEARCH-BEHAVIOR.md#intent-map)).
 
 ## Contributing
 

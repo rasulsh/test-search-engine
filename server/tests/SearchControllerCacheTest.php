@@ -125,7 +125,11 @@ final class SearchControllerCacheTest extends DatabaseTestCase
 
         $controller->search(['q' => 'macbook']); // miss
         $controller->search(['q' => 'macbook']); // hit
-        $counters = array_filter($this->redis->data, static fn ($v, $k) => str_contains($k, 'freq:'), ARRAY_FILTER_USE_BOTH);
+        $counters = array_filter(
+            $this->redis->data,
+            static fn ($value, $key): bool => str_contains($key, 'freq:'),
+            ARRAY_FILTER_USE_BOTH
+        );
         self::assertSame(['2'], array_values($counters));
 
         $controller->search(['q' => 'macbook']); // third lookup: reaches the threshold

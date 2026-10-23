@@ -170,6 +170,21 @@ final class ReloadTest extends DatabaseTestCase
         self::assertSame(['other:x' => 'keep'], $redis->data);
     }
 
+    public function testSuccessfulSwapAlsoClearsTheFrequencyCounters(): void
+    {
+        $redis = new FakeRedis();
+        $cache = new \App\Cache($redis, 'search:cache:', 60, 600, 5, 300);
+        $cache->set('search:cache:a', ['a' => 1]);
+        self::assertArrayHasKey('search:cache:freq:a', $redis->data);
+        $this->createStaging(2);
+        $dataDir = $this->newTempDir('_data');
+        $this->tempDirs[] = $dataDir . '_old';
+
+        (new Reload($this->pdo, $this->config($dataDir, $this->makeIncoming(2)), $cache))->run();
+
+        self::assertSame([], $redis->data);
+    }
+
     public function testRejectedBundleLeavesTheResultCacheAlone(): void
     {
         $redis = new FakeRedis();

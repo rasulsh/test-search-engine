@@ -69,6 +69,11 @@ while (true) {
         } elseif ($name === 'SET') {
             $data[$args[1]] = $args[2];
             fwrite($conn, "+OK\r\n");
+        } elseif ($name === 'INCR') {
+            $data[$args[1]] = (string) ((int) ($data[$args[1]] ?? 0) + 1);
+            fwrite($conn, ':' . $data[$args[1]] . "\r\n");
+        } elseif ($name === 'EXPIRE') {
+            fwrite($conn, isset($data[$args[1]]) ? ":1\r\n" : ":0\r\n");
         } elseif ($name === 'DEL') {
             $n = 0;
             foreach (array_slice($args, 1) as $key) {

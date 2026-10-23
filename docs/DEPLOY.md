@@ -474,6 +474,7 @@ talks to it with an in-repo RESP client: no Composer package, no PHP extension.
 `"cache_flushed": true` (or `false`, with the swap still done, when Redis could not be reached: entries then
 expire with their TTL). To flush by hand after a settings change:
 `redis-cli -a <password> --scan --pattern 'search:cache:*' | xargs -r redis-cli -a <password> del`.
+The pattern also covers the `search:cache:freq:*` hit counters of the adaptive TTL (M33).
 
 If Redis stops, searches carry on uncached (each costs at most `redis.timeout_ms` extra, logged with
 `error_log`); to turn the cache off set `SEARCH_REDIS_ENABLED=0`.

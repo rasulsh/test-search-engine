@@ -391,16 +391,21 @@ final class LogsAndDebugEndpointTest extends TestCase
             self::assertStringContainsString($section, $body);
         }
         self::assertStringContainsString('far cry', $body);
-        self::assertStringContainsString('&lt;b&gt;nothing&lt;/b&gt;', $body);
+        // The report is embedded as JSON with markup escaped, and drawn through textContent.
+        self::assertStringContainsString('\u003Cb\u003Enothing', $body);
         self::assertStringNotContainsString('<b>nothing</b>', $body);
-        self::assertStringNotContainsString(self::LOGS_TOKEN, $body, 'a header token is never echoed into links');
+        self::assertStringNotContainsString(self::LOGS_TOKEN, $body, 'the token is never written into the page');
         $all = strtolower(implode("\n", $headers));
         foreach (
             ['cache-control: no-store', 'x-robots-tag: noindex', 'x-frame-options: deny',
-            'content-security-policy: default-src \'none\''] as $header
+            'content-security-policy: default-src \'none\'', "connect-src 'self'"] as $header
         ) {
             self::assertStringContainsString($header, $all);
         }
+        preg_match("/script-src 'nonce-([^']+)'/", $all, $csp);
+        preg_match('/<script nonce="([^"]+)"/', $body, $tag);
+        self::assertSame(strtolower($tag[1] ?? 'x'), strtolower($csp[1] ?? 'y'), 'the CSP nonce is the script tag nonce');
+        self::assertStringNotContainsString('https://', $body, 'no third-party request');
     }
 
     public function testAnalyticsJsonShapeAndWindows(): void
@@ -425,9 +430,15 @@ final class LogsAndDebugEndpointTest extends TestCase
         self::assertSame('<b>nothing</b>', $report['zero_result_queries'][0]['query']);
         self::assertSame(66.7, $report['tier']['hybrid_share']);
         self::assertSame(30, $report['latency']['p50']);
-        foreach (['cache', 'did_you_mean', 'volume', 'since'] as $key) {
+        foreach (
+            ['cache', 'did_you_mean', 'volume', 'since', 'zero_rate_trend', 'latency_trend', 'hourly_heatmap',
+            'query_length', 'top_brands_categories', 'repeat_queries', 'refresh_seconds'] as $key
+        ) {
             self::assertArrayHasKey($key, $report);
         }
+        self::assertSame(30, $report['refresh_seconds']);
+        self::assertCount(5, $report['query_length']);
+        self::assertSame(3, array_sum(array_column($report['zero_rate_trend'], 'searches')));
 
         [, $default] = $this->request('armed', 'GET', '/analytics.php?format=json&window=bogus', [
             'X-Logs-Token: ' . self::LOGS_TOKEN,

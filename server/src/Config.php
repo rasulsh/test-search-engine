@@ -253,6 +253,7 @@ final class Config
             'debug.token'     => ['string', ''],
             'logs.token'      => ['string', ''],
             'logs.page_size'  => ['int', 50],
+            'logs.refresh_seconds' => ['int', 30],
             'reload.token'    => ['string', ''],
 
             'paths.data'          => ['string', $root . '/data'],

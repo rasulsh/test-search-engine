@@ -68,10 +68,49 @@ no new PII surface (it shows queries, never customer ids).
 | `window` | `24h`, `7d` (default), `30d`, `90d`, `all` | the time range, counted back from the database clock; an unknown value means `7d` |
 | `format` | `json` | the same data as JSON instead of the HTML dashboard |
 
-The HTML dashboard (English, tables and numeric tiles, no JavaScript) shows the
-tiles (searches, zero-result rate, cache hit rate, hybrid share, average and p95
-latency), **Top queries**, **Zero-result queries**, the tier / cache breakdown,
-latency (average, p50, p95, max) and volume per day (per hour for `24h`).
+The HTML dashboard (M35, English) is a shell that draws the report client-side and
+**refreshes itself**: every `logs.refresh_seconds` (default 30; `0` turns it off) it
+re-fetches `?format=json` from the same origin and re-renders, with no server push.
+It makes **no third-party request**: the charts are hand-rolled inline SVG, the page
+runs one script under a per-response CSP nonce (`script-src 'nonce-…'`,
+`connect-src 'self'`), and the token is never written into the page (the script reuses
+the page's own query string, so open it as `analytics.php?token=…` or let the form do
+that). It shows
+
+- tiles: searches, zero-result rate, cache hit rate, hybrid share, average and p95
+  latency, repeated-query share;
+- charts: volume, zero-result rate trend, latency trend (average and p95), a
+  weekday × hour heatmap, a query-length histogram, tier and cache splits (hover any
+  mark for its numbers);
+- sortable tables (click a header): top queries, zero-result queries, top brands and
+  top categories, with a window selector and a filter box that narrows them
+  client-side.
+
+Trends are per day (per hour for `24h`) and read at most 366 daily buckets, so
+`all` never scans years of logs for a chart. The weekday × hour heatmap and the
+"Busiest hours" times are in the **database clock**, like `since`.
+
+### Reading the dashboard
+
+- **Volume** shows when shoppers search; a sudden drop to zero is an outage on the
+  storefront side before it is a search problem.
+- **Zero-result rate** is the headline quality number. A step up after a deploy
+  means a regression or a catalog change; a slow drift up means new product words
+  the aliases do not cover. Pair it with the *Zero-result queries* table, the gap
+  list, and close gaps with [aliases or the intent map](SEARCH-BEHAVIOR.md#intent-map).
+- **Latency** is average (blue) and p95 (orange) per period: a p95 that climbs while
+  the average stays flat is the VPS timing out for some searches (check the
+  hybrid share and the cache hit rate next to it).
+- **Busiest hours** is for scheduling reloads and maintenance in the quiet cells.
+- **Query length**: many one-word queries lean on the keyword tier; a growing 4+ word
+  share means shoppers describe needs, where the semantic tier matters most.
+- **Repeated queries** is the share of distinct queries searched more than once in the
+  window (`repeat_queries.rate`; `search_share` is the same over all searches): a high
+  value is what makes the result cache worthwhile.
+- **Top brands / categories** count a search for a catalog brand or category when every
+  word of its (normalized) name is in the query, so they only see names typed in the
+  catalog's script; a Persian query for a Latin brand is counted once the alias file
+  makes the query match.
 
 `?format=json` returns (one object; lists hold at most 20 rows):
 
@@ -86,9 +125,28 @@ latency (average, p50, p95, max) and volume per day (per hour for `24h`).
   "did_you_mean": {"total": 812, "suggested": 29, "share": 3.6},
   "top_queries": [{"query": "far cry", "searches": 41, "last_seen": "2026-10-05 21:40:02"}],
   "zero_result_queries": [{"query": "فارکرای ۶", "searches": 5, "last_seen": "2026-10-05 18:12:44"}],
-  "volume": [{"bucket": "2026-10-04", "searches": 118}]
+  "volume": [{"bucket": "2026-10-04", "searches": 118}],
+  "zero_rate_trend": [{"bucket": "2026-10-04", "searches": 118, "zero_results": 5, "zero_rate": 4.2}],
+  "latency_trend": [{"bucket": "2026-10-04", "searches": 118, "avg": 58.1, "p95": 131}],
+  "hourly_heatmap": [{"weekday": 0, "hour": 21, "searches": 33}],
+  "query_length": [{"tokens": 1, "searches": 301}, {"tokens": 2, "searches": 402}, {"tokens": 3, "searches": 70},
+                   {"tokens": 4, "searches": 30}, {"tokens": 5, "searches": 9}],
+  "top_brands_categories": {"brands": [{"name": "samsung", "searches": 52}],
+                            "categories": [{"name": "ssd", "searches": 61}]},
+  "repeat_queries": {"distinct": 301, "repeated": 74, "rate": 24.6, "searches": 812,
+                     "repeated_searches": 585, "search_share": 72.0},
+  "refresh_seconds": 30
 }
 ```
+
+The M35 keys (`zero_rate_trend` onwards) are **additive**: the M31 keys keep their names and
+shape. `hourly_heatmap` lists only the cells that have searches (`weekday` 0 = Monday ..
+6 = Sunday), `query_length` always has the five buckets (`5` = five or more words),
+`top_brands_categories` is empty when the catalog table cannot be read, and
+`refresh_seconds` echoes `logs.refresh_seconds` for the page. The trend p95 and the
+nearest-rank latency use window functions (MariaDB 10.2+ / MySQL 8). With the dashboard
+open the report is computed every `refresh_seconds` for its window: on a very large log,
+raise `logs.refresh_seconds` or set it to `0`.
 
 `since` is `null` for `all`. Percentiles are nearest-rank over the window.
 **Grouping caveat:** queries are grouped by their *normalized* form (the raw text

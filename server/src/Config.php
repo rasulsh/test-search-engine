@@ -246,7 +246,10 @@ final class Config
             'redis.port'       => ['int', 6379],
             'redis.auth'       => ['string', ''],
             'redis.db'         => ['int', 0],
-            'redis.ttl'        => ['int', 300],
+            'redis.ttl'        => ['int', 86400],
+            'redis.ttl_hot'    => ['int', 604800],
+            'redis.ttl_hot_threshold' => ['int', 20],
+            'redis.freq_window' => ['int', 604800],
             'redis.timeout_ms' => ['int', 100],
             'redis.prefix'     => ['string', 'search:cache:'],
 

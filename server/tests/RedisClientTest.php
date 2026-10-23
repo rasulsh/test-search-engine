@@ -36,6 +36,17 @@ final class RedisClientTest extends TestCase
         self::assertSame("value \u{0645}\r\nwith binary-safe bytes", $client->get('k'));
     }
 
+    public function testIncrCountsAndExpireIsAccepted(): void
+    {
+        $this->startServer();
+        $client = new RedisClient('127.0.0.1', $this->port);
+
+        self::assertSame(1, $client->incr('c'));
+        self::assertSame(2, $client->incr('c'));
+        $client->expire('c', 60);
+        self::assertSame('2', $client->get('c'));
+    }
+
     public function testAuthAndDbSelect(): void
     {
         $this->startServer('s3cret');

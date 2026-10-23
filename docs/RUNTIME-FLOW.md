@@ -113,7 +113,7 @@ One `search_logs` row, best effort: `ts`, `raw_q`, `normalized_q`, `had_vector` 
 
 ### 10. Cache set
 
-The response (and whether it had a vector) is stored under the stage-2 key with TTL `redis.ttl`, unless it is a **degraded** answer: when a VPS is configured but stage 6 returned `null` (down, slow, failing), the keyword-only answer is **not** cached, so a transient failure never outlives its request. Debug responses are never stored. `POST /reload` flushes every key under `redis.prefix` after a successful swap.
+The response (and whether it had a vector) is stored under the stage-2 key with TTL `redis.ttl` (or `redis.ttl_hot` for a query looked up `redis.ttl_hot_threshold`+ times, M33; the counter is bumped by every stage-2 lookup, hit or miss, not by writes), unless it is a **degraded** answer: when a VPS is configured but stage 6 returned `null` (down, slow, failing), the keyword-only answer is **not** cached, so a transient failure never outlives its request. Debug responses are never stored. `POST /reload` flushes every key under `redis.prefix` after a successful swap.
 
 ## Components and data
 

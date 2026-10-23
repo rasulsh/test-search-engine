@@ -8,7 +8,7 @@ use RuntimeException;
 
 /**
  * A minimal RESP2 client over a plain TCP socket: just the commands the result
- * cache needs (AUTH, SELECT, GET, SET .. EX, SCAN, DEL). It exists because the
+ * cache needs (AUTH, SELECT, GET, SET .. EX, INCR, EXPIRE, SCAN, DEL). It exists because the
  * server may add no Composer runtime package (no predis) and a shared cPanel
  * host cannot be assumed to offer the phpredis extension.
  *
@@ -46,6 +46,22 @@ class RedisClient
     public function set(string $key, string $value, int $ttlSeconds): void
     {
         $this->command(['SET', $key, $value, 'EX', (string) max(1, $ttlSeconds)]);
+    }
+
+    /** @return int the counter after the increment */
+    public function incr(string $key): int
+    {
+        $value = $this->command(['INCR', $key]);
+        if (!is_int($value)) {
+            throw new RuntimeException('redis: unexpected INCR reply');
+        }
+
+        return $value;
+    }
+
+    public function expire(string $key, int $seconds): void
+    {
+        $this->command(['EXPIRE', $key, (string) max(1, $seconds)]);
     }
 
     /** Deletes every key starting with $prefix (SCAN + DEL; never KEYS). Returns how many. */

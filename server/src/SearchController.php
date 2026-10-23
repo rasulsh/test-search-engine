@@ -248,6 +248,8 @@ final class SearchController
             ? $this->cache->key($normalized, $limit, $semanticOn)
             : null;
         if ($cacheKey !== null) {
+            // Count before the GET so hits (which return early) and misses both register.
+            $this->cache->registerLookup($cacheKey);
             $hit = $this->cache->get($cacheKey);
             if ($hit !== null && $this->isCachedResponse($hit)) {
                 return $this->serveCached($hit, $raw, $customerId, $start);

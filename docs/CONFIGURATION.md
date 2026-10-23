@@ -126,7 +126,10 @@ queries are then answered from Redis instead of recomputing keyword + VPS + rank
 | `redis.host`, `redis.port` | `127.0.0.1`, `6379` | the Redis server (on the VPS, `vps/setup.sh --redis`; cPanel only runs the client) |
 | `redis.auth` | empty | Redis password (a secret: environment or `config.php`, never the repository) |
 | `redis.db` | `0` | database number |
-| `redis.ttl` | `300` | seconds an entry lives; a catalog reload flushes it earlier |
+| `redis.ttl` | `86400` (1 day) | seconds an entry lives; a catalog reload flushes it earlier |
+| `redis.ttl_hot` | `604800` (7 days) | TTL of a frequently repeated query (see below) |
+| `redis.ttl_hot_threshold` | `20` | lookups (searches) of the same query inside `redis.freq_window` that make it hot; `0` disables the adaptive tier (always `redis.ttl`) |
+| `redis.freq_window` | `604800` (7 days) | lifetime of the per-query counter, set once when the counter is created (its first lookup), so counts roll off |
 | `redis.timeout_ms` | `100` | connect + read budget; a slow or dead Redis costs at most this per request and means a cache miss, never an error |
 | `redis.prefix` | `search:cache:` | key prefix; the keyspace `POST /reload` flushes. Give each environment sharing one Redis its own prefix |
 
@@ -134,6 +137,15 @@ Entries are keyed by the normalized query, the `limit` and whether the semantic 
 with `debug` are never cached, and neither is a result served without the semantic tier that is configured (a
 slow or failing VPS), so a degradation never outlives its request. After changing any ranking setting, flush by
 hand (see [DEPLOY.md](DEPLOY.md#result-cache-optional-redis-m26)) or wait out the TTL.
+
+**Adaptive TTL (M33).** Every cache lookup (each `/search` that reaches the cache, hit or miss) bumps a
+counter `<redis.prefix>freq:<hash>` (same hash as the result key) in Redis; counting lookups, not writes,
+because writes are rationed by the TTL itself. When an entry is written and its counter is
+`redis.ttl_hot_threshold` or more, it gets `redis.ttl_hot` instead of `redis.ttl`. One hot tier only; no database lookup. A counter error is silent and means the base TTL.
+The effective lifetime is still bounded by the next `POST /reload`, which flushes the whole prefix
+(results **and** counters), so the 7 days rarely bite. Long TTLs are safe: the cache holds product ids
+only, and price / stock are rendered downstream by OpenCart; the only staleness is a newly added product
+missing until the TTL or the next reload.
 
 ### Tooling and storefront
 

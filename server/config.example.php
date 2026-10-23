@@ -42,6 +42,8 @@ return [
         'host'    => $setting('SEARCH_REDIS_HOST', '127.0.0.1'),
         'port'    => $setting('SEARCH_REDIS_PORT', ''),
         'auth'    => $setting('SEARCH_REDIS_AUTH', ''),
+        // Lifetime defaults to 1 day; hot queries get 7 days (M33). Override here:
+        // 'ttl' => 86400, 'ttl_hot' => 604800, 'ttl_hot_threshold' => 20, 'freq_window' => 604800,
     ],
 
     // Absolute bases for the product url / image the export holds as relative

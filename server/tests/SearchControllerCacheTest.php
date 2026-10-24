@@ -44,6 +44,17 @@ final class SearchControllerCacheTest extends DatabaseTestCase
         @unlink($this->errorLog);
     }
 
+    /**
+     * @param array<string, mixed> $response
+     * @return array<string, mixed>
+     */
+    private static function withoutUuid(array $response): array
+    {
+        unset($response['search_uuid']);
+
+        return $response;
+    }
+
     private function controller(?VpsClient $vps = null, ?Cache $cache = null): SearchController
     {
         $pdo = $this->pdo;
@@ -107,7 +118,8 @@ final class SearchControllerCacheTest extends DatabaseTestCase
         $this->pdo->exec('DELETE FROM products');
         $hit = $controller->search(['q' => 'macbook']);
 
-        self::assertSame($miss, $hit);
+        self::assertNotSame($miss['search_uuid'], $hit['search_uuid']);
+        self::assertSame(self::withoutUuid($miss), self::withoutUuid($hit));
         self::assertSame([1007, 1011], $hit['product_ids']);
         self::assertCount(1, $calls); // the VPS was not asked again
         $log = $this->lastLog();
@@ -178,8 +190,8 @@ final class SearchControllerCacheTest extends DatabaseTestCase
         $cached->search(['q' => 'macbok']);
         $hit = $cached->search(['q' => 'macbok']);
 
-        self::assertSame($uncached->search(['q' => 'macbok']), $hit);
-        self::assertSame($plain->search(['q' => 'macbok']), $hit);
+        self::assertSame(self::withoutUuid($uncached->search(['q' => 'macbok'])), self::withoutUuid($hit));
+        self::assertSame(self::withoutUuid($plain->search(['q' => 'macbok'])), self::withoutUuid($hit));
     }
 
     public function testLimitIsPartOfTheKey(): void
@@ -244,7 +256,7 @@ final class SearchControllerCacheTest extends DatabaseTestCase
         $second = $controller->search(['q' => 'macbook']);
 
         self::assertSame([1007], $first['product_ids']);
-        self::assertSame($first, $second);
+        self::assertSame(self::withoutUuid($first), self::withoutUuid($second));
         self::assertSame(0, (int) $this->lastLog()['cache_hit']);
         self::assertStringContainsString('cache read failed', (string) file_get_contents($this->errorLog));
     }

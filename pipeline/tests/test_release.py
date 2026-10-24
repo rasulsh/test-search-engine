@@ -290,7 +290,7 @@ def test_release_bundle_stays_reload_compatible_with_the_live_server(
 
     assert (meta["model"], meta["dim"], meta["revision"]) == (
         config["name"], config["dim"], config["revision"])
-    assert meta["normalization_version"] == NORMALIZATION_VERSION == 3
+    assert meta["normalization_version"] == NORMALIZATION_VERSION == 4
 
 
 def test_release_refuses_to_pack_without_the_safety_nets(tmp_path: Path, dev_tree: Path) -> None:

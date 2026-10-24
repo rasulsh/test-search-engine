@@ -520,7 +520,7 @@ def build_bundle(
         json.dumps(intent_map, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
     )
     (out / "spellcheck.txt").write_text(
-        "\n".join(_keyword.spellcheck_lines(_keyword.build_spellcheck(server_rows))) + "\n",
+        "\n".join(_keyword.spellcheck_lines(_keyword.build_spellcheck(server_rows, aliases=aliases))) + "\n",
         encoding="utf-8",
     )
     (out / "keymap.json").write_text(

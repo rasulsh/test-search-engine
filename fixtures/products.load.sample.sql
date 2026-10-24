@@ -45,7 +45,7 @@ VALUES
 REPLACE INTO `products_new`
     (product_id, title, description, normalized_title, normalized_desc, normalized_specs, normalized_tags, normalized_brand, normalized_category, normalized_collapsed, brand, category, model, sku, normalized_sku, price, stock, url, image, popularity)
 VALUES
-    (2002, 'هدفون بی‌سیم سونی Sony WH-1000XM5 Wireless Headphones', 'world''s best noise cancelling, over-ear', 'هدفون بیسیم سونی sony wh1000xm5 wireless headphones snyxm5blk', 'world''s best noise cancelling, overear', '', '', 'sony', 'headphone', 'هدفونبیسیمسونیsonywh1000xm5wirelessheadphones sony', 'Sony', 'Headphone', 'WH-1000XM5', 'SNY-XM5-BLK', 'snyxm5blk', 349.0, 25, '/p/sony-xm5', '/img/xm5.jpg', 500);
+    (2002, 'هدفون بی‌سیم سونی Sony WH-1000XM5 Wireless Headphones', 'world''s best noise cancelling, over-ear', 'هدفون بی سیم سونی sony wh1000xm5 wireless headphones snyxm5blk', 'world''s best noise cancelling, overear', '', '', 'sony', 'headphone', 'هدفونبیسیمسونیsonywh1000xm5wirelessheadphones sony', 'Sony', 'Headphone', 'WH-1000XM5', 'SNY-XM5-BLK', 'snyxm5blk', 349.0, 25, '/p/sony-xm5', '/img/xm5.jpg', 500);
 
 REPLACE INTO `products_new`
     (product_id, title, description, normalized_title, normalized_desc, normalized_specs, normalized_tags, normalized_brand, normalized_category, normalized_collapsed, brand, category, model, sku, normalized_sku, price, stock, url, image, popularity)
@@ -55,12 +55,12 @@ VALUES
 REPLACE INTO `products_new`
     (product_id, title, description, normalized_title, normalized_desc, normalized_specs, normalized_tags, normalized_brand, normalized_category, normalized_collapsed, brand, category, model, sku, normalized_sku, price, stock, url, image, popularity)
 VALUES
-    (2004, 'تلویزیون ال‌جی اولد ۵۵ LG OLED TV 55 C3', '4k smart tv with webos', 'تلویزیون الجی اولد 55 lg oled tv 55 c3', '4k smart tv with webos', '', '', 'lg', 'television', 'تلویزیونالجیاولد55lgoledtv55c3 lg', 'LG', 'Television', 'OLED55C3', '', '', 1499.0, 4, '/p/lg-c3', '', 250);
+    (2004, 'تلویزیون ال‌جی اولد ۵۵ LG OLED TV 55 C3', '4k smart tv with webos', 'تلویزیون ال جی اولد 55 lg oled tv 55 c3', '4k smart tv with webos', '', '', 'lg', 'television', 'تلویزیونالجیاولد55lgoledtv55c3 lg', 'LG', 'Television', 'OLED55C3', '', '', 1499.0, 4, '/p/lg-c3', '', 250);
 
 REPLACE INTO `products_new`
     (product_id, title, description, normalized_title, normalized_desc, normalized_specs, normalized_tags, normalized_brand, normalized_category, normalized_collapsed, brand, category, model, sku, normalized_sku, price, stock, url, image, popularity)
 VALUES
-    (2005, 'مانیتور گیمینگ ۲۷ اینچ Gaming Monitor 27 inch', 'esports monitor with a fast panel', 'مانیتور گیمینگ 27 اینچ gaming monitor 27 inch pg27aqdp', 'esports monitor with a fast panel', 'برند: asus rog | اندازه صفحه نمایش: 27 اینچ | کیفیت تصویر 2k hdr10 | نرخ نوسازی تصویر 540 هرتز | زمان پاسخدهی 002 میلی ثانیه | پنل 27 اینچ tandem oled', 'rog swift esports', 'asus', 'monitor', 'مانیتورگیمینگ27اینچgamingmonitor27inch asus rogswiftesports', 'ASUS', 'Monitor', 'PG27AQDP', 'PG27AQDP', 'pg27aqdp', 1099.0, 3, '/p/pg27', '/img/pg27.jpg', 120);
+    (2005, 'مانیتور گیمینگ ۲۷ اینچ Gaming Monitor 27 inch', 'esports monitor with a fast panel', 'مانیتور گیمینگ 27 اینچ gaming monitor 27 inch pg27aqdp', 'esports monitor with a fast panel', 'برند: asus rog | اندازه صفحه نمایش: 27 اینچ | کیفیت تصویر 2k hdr10 | نرخ نوسازی تصویر 540 هرتز | زمان پاسخ دهی 002 میلی ثانیه | پنل 27 اینچ tandem oled', 'rog swift esports', 'asus', 'monitor', 'مانیتورگیمینگ27اینچgamingmonitor27inch asus rogswiftesports', 'ASUS', 'Monitor', 'PG27AQDP', 'PG27AQDP', 'pg27aqdp', 1099.0, 3, '/p/pg27', '/img/pg27.jpg', 120);
 
 REPLACE INTO `products_new`
     (product_id, title, description, normalized_title, normalized_desc, normalized_specs, normalized_tags, normalized_brand, normalized_category, normalized_collapsed, brand, category, model, sku, normalized_sku, price, stock, url, image, popularity)

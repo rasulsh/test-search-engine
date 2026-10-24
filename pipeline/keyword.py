@@ -15,11 +15,16 @@ from typing import Any
 
 from normalize import normalize
 
-# High-signal fields that feed the "did you mean" dictionary. Descriptions are
-# excluded: on the real catalog they contribute rare incidental words that won
-# corrections over the product names shoppers actually type. Tags (M21) are
+# Fields that feed the "did you mean" dictionary: the product names shoppers
+# type. Descriptions are excluded (rare incidental words won corrections); so are
+# categories and model codes, whose generic words ("کالا") and near-miss codes
+# ("mwe") were offered as corrections for unrelated typos. Tags (M21) are
 # franchise / alternate product names, so the suggester learns them too.
-SPELLCHECK_FIELDS = ("title", "brand", "category", "model", "tags")
+SPELLCHECK_FIELDS = ("title", "brand", "tags")
+
+# Each token of an owner alias counts as at least this many products: the owner
+# wrote it as a name shoppers use, whether or not a title spells it that way.
+ALIAS_TOKEN_COUNT = 5
 
 # Persian (standard) keyboard layout: the Persian letter produced by each US-QWERTY
 # key. Used to recover queries typed with the wrong keyboard layout.
@@ -53,6 +58,7 @@ def build_spellcheck(
     rows: Iterable[dict[str, Any]],
     min_length: int = 2,
     min_count: int = 1,
+    aliases: Iterable[Iterable[str]] = (),
 ) -> list[tuple[str, int]]:
     """Return (token, product frequency) pairs, most frequent first.
 
@@ -67,6 +73,11 @@ def build_spellcheck(
         for field in SPELLCHECK_FIELDS:
             tokens.update(tokenize(normalize(str(row.get(field) or ""))))
         counts.update(token for token in tokens if len(token) >= min_length)
+    for group in aliases:
+        for term in group:
+            for token in tokenize(normalize(term)):
+                if len(token) >= min_length and counts[token] < ALIAS_TOKEN_COUNT:
+                    counts[token] = ALIAS_TOKEN_COUNT
 
     return sorted(
         ((tok, n) for tok, n in counts.items() if n >= min_count),

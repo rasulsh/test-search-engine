@@ -1,5 +1,5 @@
 {
-  "normalization_version": 3,
+  "normalization_version": 4,
   "cases": [
     {
       "name": "empty string",
@@ -14,12 +14,12 @@
     {
       "name": "zwnj half-space",
       "input": "بی‌سیم",
-      "expected": "بیسیم"
+      "expected": "بی سیم"
     },
     {
       "name": "zwnj compound",
       "input": "کتاب‌ها",
-      "expected": "کتابها"
+      "expected": "کتاب ها"
     },
     {
       "name": "arabic yeh and kaf",
@@ -99,7 +99,7 @@
     {
       "name": "zwnj between fa and latin",
       "input": "مدل‌LG ۵۵ اینچ",
-      "expected": "مدلlg 55 اینچ"
+      "expected": "مدل lg 55 اینچ"
     },
     {
       "name": "alef madda",
@@ -139,7 +139,7 @@
     {
       "name": "spec feature title with zwnj and decimal",
       "input": "زمان پاسخ‌دهی 0.02 میلی ثانیه",
-      "expected": "زمان پاسخدهی 002 میلی ثانیه"
+      "expected": "زمان پاسخ دهی 002 میلی ثانیه"
     },
     {
       "name": "spec feature titles joined",
@@ -159,17 +159,17 @@
     {
       "name": "roman numeral single v",
       "input": "Grand Theft Auto V",
-      "expected": "grand theft auto 5"
+      "expected": "grand theft auto v"
     },
     {
-      "name": "roman numerals ii to x",
+      "name": "roman numerals ii to ix, v and x stay letters",
       "input": "II III IV V VI VII VIII IX X",
-      "expected": "2 3 4 5 6 7 8 9 10"
+      "expected": "ii 3 4 v 6 7 8 9 x"
     },
     {
       "name": "roman numeral beside persian",
       "input": "جی تی ای V",
-      "expected": "جی تی ای 5"
+      "expected": "جی تی ای v"
     },
     {
       "name": "roman numeral with punctuation",
@@ -214,17 +214,17 @@
     {
       "name": "roman after half-space",
       "input": "Mark‌IV",
-      "expected": "markiv"
+      "expected": "mark 4"
     },
     {
       "name": "roman after collapsed spaces",
       "input": "Series   X",
-      "expected": "series 10"
+      "expected": "series x"
     },
     {
       "name": "underscore is a boundary",
       "input": "_vi_",
-      "expected": "_6_"
+      "expected": "_vi_"
     },
     {
       "name": "roman after zwnj space",
@@ -244,7 +244,7 @@
     {
       "name": "roman after a spelled numeral",
       "input": "V X",
-      "expected": "5 10"
+      "expected": "v x"
     },
     {
       "name": "tags: franchise names with casing",
@@ -254,12 +254,92 @@
     {
       "name": "tags: persian tag with zwnj and arabic yeh",
       "input": "بازی‌های كامپيوتری Fallout 4",
-      "expected": "بازیهای کامپیوتری fallout 4"
+      "expected": "بازی های کامپیوتری fallout 4"
     },
     {
       "name": "tags: persian digits and english",
       "input": "فار كرای ۵ PS5 GTA V",
-      "expected": "فار کرای 5 ps5 gta 5"
+      "expected": "فار کرای 5 ps5 gta v"
+    },
+    {
+      "name": "single v is never a numeral",
+      "input": "V",
+      "expected": "v"
+    },
+    {
+      "name": "single x is never a numeral",
+      "input": "tom clancys rainbow six siege x",
+      "expected": "tom clancys rainbow six siege x"
+    },
+    {
+      "name": "x after a model token stays",
+      "input": "RAZER KAIRA X PS5",
+      "expected": "razer kaira x ps5"
+    },
+    {
+      "name": "x in a pro name stays",
+      "input": "g pro x",
+      "expected": "g pro x"
+    },
+    {
+      "name": "persian text with x box x",
+      "input": "دسته x box x",
+      "expected": "دسته x box x"
+    },
+    {
+      "name": "xvi stays literal",
+      "input": "final fantasy xvi",
+      "expected": "final fantasy xvi"
+    },
+    {
+      "name": "roman needs a word before it",
+      "input": "vi",
+      "expected": "vi"
+    },
+    {
+      "name": "roman after a number token stays",
+      "input": "12 vi",
+      "expected": "12 vi"
+    },
+    {
+      "name": "roman after a word with a digit",
+      "input": "Sony A7 IV",
+      "expected": "sony a7 4"
+    },
+    {
+      "name": "roman gta vi with persian",
+      "input": "جی تی ای VI",
+      "expected": "جی تی ای 6"
+    },
+    {
+      "name": "zwnj compound becomes two words",
+      "input": "استیل‌بوک",
+      "expected": "استیل بوک"
+    },
+    {
+      "name": "zwnj and plain space agree",
+      "input": "استیل بوک",
+      "expected": "استیل بوک"
+    },
+    {
+      "name": "leading right-to-left mark",
+      "input": "‏evil",
+      "expected": "evil"
+    },
+    {
+      "name": "bidi embeddings and isolates",
+      "input": "‪a‫ ‬b‭‮ ⁦c⁧⁨⁩ ‎d",
+      "expected": "a b c d"
+    },
+    {
+      "name": "byte order mark",
+      "input": "﻿test",
+      "expected": "test"
+    },
+    {
+      "name": "model codes keep their join",
+      "input": "HF-1502 DX-130",
+      "expected": "hf1502 dx130"
     }
   ],
   "sku_cases": [

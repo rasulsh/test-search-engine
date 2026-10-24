@@ -284,6 +284,12 @@ final class Keyword
         return $this->synonyms?->variants($tokens, $this->maxVariants) ?? [$tokens];
     }
 
+    /** The owner's alias spelling of a query written with other spacing, if any ({@see Synonyms::spacingVariant}). */
+    public function spacingAlias(string $normalized): ?string
+    {
+        return $this->synonyms?->spacingVariant($normalized);
+    }
+
     public function requiresAllTerms(): bool
     {
         return $this->requireAllTerms;

@@ -7,17 +7,19 @@ in BOTH files whenever the rules change; build.py stamps it into meta.json and
 the server's config defaults to Normalizer::VERSION, so no config edit follows.
 
 Rules (applied in this order):
-  1. Remove zero-width characters (incl. ZWNJ / half-space).
+  1. ZWNJ (U+200C, the Persian half-space) becomes a space; other zero-width
+     characters and bidi / format marks (U+200E, U+200F, U+202A..U+202E,
+     U+2066..U+2069) are removed.
   2. Remove Arabic diacritics (harakat) and tatweel.
   3. Unify Arabic letters to Persian (yeh, kaf, hamza forms, teh marbuta).
   4. Fold Persian and Arabic-Indic digits to ASCII 0-9.
   5. Lowercase (affects Latin only).
   6. Canonicalize model names: drop -, _, ., / between ASCII alphanumerics.
   7. Collapse whitespace to single ASCII spaces and trim.
-  8. Standalone Roman numerals ii..x become digits ("gta vi" -> "gta 6"): only a
-     whole token (no letter or digit on either side), and not right after a
-     number token and a space, where "x" / "v" are a dimension or a unit
-     ("2 x 4", "12 v"; "a7 iv" still maps). "i" is never mapped (the word).
+  8. Roman numerals ii..ix become digits ("gta vi" -> "gta 6"): only a whole
+     token, and only right after a token holding a letter ("gta vi", "a7 iv";
+     not "12 vi", not at the start). "v" and "x" are never mapped (a variant
+     letter, a dimension, a unit); "i" is never mapped (the word).
 
 collapse() is a derived form, not a rule of normalize(): the normalized text with
 every non-letter/non-digit removed ("far cry" -> "farcry"). normalize() output,
@@ -28,10 +30,11 @@ from __future__ import annotations
 
 import re
 
-NORMALIZATION_VERSION = 3
+NORMALIZATION_VERSION = 4
 
-# 1. Zero-width characters, including ZWNJ (U+200C, the Persian half-space).
-_ZERO_WIDTH = ["​", "‌", "‍", "﻿"]
+_ZERO_WIDTH = [chr(0x200B), chr(0x200D), chr(0xFEFF), chr(0x200E), chr(0x200F)] + [
+    chr(cp) for cp in (*range(0x202A, 0x202F), *range(0x2066, 0x206A))
+]
 
 # 2. Arabic diacritics (harakat U+064B..U+0652, maddah U+0653, hamza above
 #    U+0654), superscript alef (U+0670), and tatweel/kashida (U+0640).
@@ -58,8 +61,10 @@ for _i in range(10):
     _DIGIT_MAP[chr(0x06F0 + _i)] = str(_i)  # Persian digits
     _DIGIT_MAP[chr(0x0660 + _i)] = str(_i)  # Arabic-Indic digits
 
-# 7. Whitespace characters folded to a plain ASCII space.
+# 7. Whitespace characters folded to a plain ASCII space, ZWNJ (the Persian
+#    half-space) included: it separates the two words of a compound.
 _WHITESPACE = [
+    chr(0x200C),
     "\t", "\n", "\x0b", "\x0c", "\r", "\xa0", " ",
     " ", " ", " ", " ", " ", " ",
     " ", " ", " ", " ", " ",
@@ -80,23 +85,23 @@ for _ch in _WHITESPACE:
 _MODEL_SEPARATORS = re.compile(r"(?<=[0-9a-z])[-_./]+(?=[0-9a-z])")
 
 # 8. [^\W_] is a letter or digit (str.isalnum), the same class as the server's
-#    [\p{L}\p{N}]; longest numerals first in the alternation. A preceding
-#    number token is matched (group 1) rather than looked behind for, as a
-#    lookbehind cannot be variable-width; such a match is left unchanged.
-_ROMAN = {"ii": "2", "iii": "3", "iv": "4", "v": "5", "vi": "6",
-          "vii": "7", "viii": "8", "ix": "9", "x": "10"}
-_ROMAN_NUMERAL = re.compile(
-    r"(?<![^\W_])([0-9]+ )?(viii|vii|iii|ix|iv|vi|ii|v|x)(?![^\W_])"
-)
-
-
-def _roman(match: re.Match[str]) -> str:
-    return match.group(0) if match.group(1) else _ROMAN[match.group(2)]
+#    [\p{L}\p{N}]. Only ii..ix: "v" and "x" are never numerals.
+_ROMAN = {"ii": "2", "iii": "3", "iv": "4", "vi": "6", "vii": "7", "viii": "8", "ix": "9"}
+_ROMAN_TOKEN = re.compile(r"^([\W_]*)(viii|vii|iii|iv|vi|ix|ii)([\W_]*)$")
 
 
 def normalize(text: str | None) -> str:
     """Return the canonical normalized form of ``text``."""
-    return _ROMAN_NUMERAL.sub(_roman, _canonical(text))
+    tokens = _canonical(text).split(" ")
+    after_word = False
+    for i, token in enumerate(tokens):
+        match = _ROMAN_TOKEN.match(token) if after_word else None
+        if match:
+            tokens[i] = match.group(1) + _ROMAN[match.group(2)] + match.group(3)
+        # The original token decides, so "gta vi ii" maps both.
+        after_word = any(ch.isalpha() for ch in token)
+
+    return " ".join(tokens)
 
 
 def _canonical(text: str | None) -> str:

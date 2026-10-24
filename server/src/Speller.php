@@ -40,6 +40,10 @@ final class Speller
     private const MAX_CODES = 255;
     private const UNKNOWN_CODE = "\xFF";
     private const SHORT_TOKEN = 4;
+    // Shorter tokens are codes and abbreviations ("mw4"): every near word is a wrong guess.
+    private const MIN_CORRECTED = 4;
+    // Up to this length a typo rarely hits the first letter, so a candidate must share it.
+    private const FIRST_LETTER_UP_TO = 6;
 
     /**
      * Parsed dictionaries for this process, keyed by {@see cacheKey}.
@@ -59,6 +63,8 @@ final class Speller
 
     /** @var array<string, int> token => frequency */
     private array $vocabulary;
+    /** @var array<string, int> generic words never offered as a correction (token => 0) */
+    private array $blocked = [];
     private int $maxDistance;
     private int $minFrequency;
     /** @var array<string, string> character => single-byte code */
@@ -227,25 +233,37 @@ final class Speller
         $texts = [];
         $table = Identifier::quote($productsTable);
         try {
-            // M21 tags are franchise names, learned like the pipeline dictionary does.
-            $rows = $pdo->query('SELECT normalized_title, brand, category, model, normalized_tags FROM ' . $table);
+            // The pipeline dictionary's fields: names (title, brand, tags), not categories or codes.
+            $rows = $pdo->query('SELECT normalized_title, brand, normalized_tags FROM ' . $table);
         } catch (PDOException $e) {
             if ($e->getCode() !== '42S22') {
                 throw $e;
             }
-            $rows = $pdo->query('SELECT normalized_title, brand, category, model FROM ' . $table);
+            $rows = $pdo->query('SELECT normalized_title, brand FROM ' . $table);
         }
         foreach ($rows as $row) {
             $texts[] = implode(' ', array_unique(Tokenizer::split(implode(' ', [
                 $row['normalized_title'],
                 Normalizer::normalize((string) $row['brand']),
-                Normalizer::normalize((string) $row['category']),
-                Normalizer::normalize((string) $row['model']),
                 (string) ($row['normalized_tags'] ?? ''),
             ]))));
         }
 
         return new self(self::buildVocabulary($texts), $maxDistance, null, $minFrequency);
+    }
+
+    /**
+     * The same speller that never offers one of $tokens (generic words such as
+     * "کالا": a catalog-wide word is a poor answer to any typo).
+     *
+     * @param list<string> $tokens
+     */
+    public function withBlocked(array $tokens): self
+    {
+        $copy = clone $this;
+        $copy->blocked = array_fill_keys($tokens, 0);
+
+        return $copy;
     }
 
     /**
@@ -262,7 +280,7 @@ final class Speller
         $changed = false;
         $corrected = [];
         foreach ($tokens as $token) {
-            if (isset($this->vocabulary[$token]) || ctype_digit($token)) {
+            if (isset($this->vocabulary[$token]) || ctype_digit($token) || mb_strlen($token) < self::MIN_CORRECTED) {
                 $corrected[] = $token;
                 continue;
             }
@@ -295,6 +313,13 @@ final class Speller
             $encoded .= $this->codes[$char] ?? self::UNKNOWN_CODE;
         }
 
+        // A swapped pair of neighbours is one slip of the fingers ("battel" -> "battle"),
+        // not the two edits plain Levenshtein counts: it wins over any other candidate.
+        $swapped = $this->transposition($chars);
+        if ($swapped !== null) {
+            return $swapped;
+        }
+
         $bestTerm = null;
         $bestDistance = PHP_INT_MAX;
         $bestFrequency = -1;
@@ -304,7 +329,7 @@ final class Speller
                 $distance = $termEncoded !== null
                     ? levenshtein($encoded, $termEncoded)
                     : self::distance($token, $term);
-                if ($distance > $threshold || $frequency < $this->minFrequency) {
+                if ($distance > $threshold || $frequency < $this->minFrequency || !$this->plausible($token, $chars, $term)) {
                     continue;
                 }
 
@@ -322,6 +347,44 @@ final class Speller
         }
 
         return $bestTerm;
+    }
+
+    /**
+     * @param list<string> $chars the token's characters
+     */
+    private function transposition(array $chars): ?string
+    {
+        $best = null;
+        $bestFrequency = -1;
+        for ($i = 0; $i < count($chars) - 1; $i++) {
+            $swapped = $chars;
+            [$swapped[$i], $swapped[$i + 1]] = [$swapped[$i + 1], $swapped[$i]];
+            $term = implode('', $swapped);
+            $frequency = $this->vocabulary[$term] ?? 0;
+            if ($frequency >= $this->minFrequency && !isset($this->blocked[$term]) && $frequency > $bestFrequency) {
+                $best = $term;
+                $bestFrequency = $frequency;
+            }
+        }
+
+        return $best;
+    }
+
+    /**
+     * Rules that turn a near word into a believable correction: not a generic
+     * (blocked) word, not what is left of the token after dropping letters
+     * ("کالاف" -> "کالا"), and, for a short token, the same first letter
+     * ("gtavi" -> "atari" is a different word).
+     *
+     * @param list<string> $chars the token's characters
+     */
+    private function plausible(string $token, array $chars, string $term): bool
+    {
+        if (isset($this->blocked[$term]) || str_contains($token, $term)) {
+            return false;
+        }
+
+        return count($chars) > self::FIRST_LETTER_UP_TO || mb_substr($term, 0, 1) === $chars[0];
     }
 
     /**

@@ -135,7 +135,8 @@ final class ScaffoldTest extends TestCase
         $this->assertSame(
             [
                 'host' => '127.0.0.1', 'port' => 6379, 'auth' => '', 'db' => 0, 'ttl' => 86400,
-                'ttl_hot' => 604800, 'ttl_hot_threshold' => 20, 'freq_window' => 604800, 'timeout_ms' => 100,
+                'ttl_zero' => 300, 'ttl_hot' => 604800, 'ttl_hot_threshold' => 20, 'freq_window' => 604800,
+                'timeout_ms' => 100,
             ],
             array_diff_key($defaults, ['enabled' => 0, 'prefix' => 0])
         );

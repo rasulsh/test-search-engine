@@ -87,8 +87,10 @@ final class SpellerTest extends TestCase
 
         self::assertNull($speller->suggest('siiy'));          // 2 edits on 4 chars
         self::assertSame('sony', $speller->suggest('sonu'));  // 1 edit
-        self::assertSame('camera', $speller->suggest('camrea')); // 2 edits on 6 chars
-        self::assertNull((new Speller(['camera' => 5], 1))->suggest('camrea')); // max distance 1
+        self::assertSame('camera', $speller->suggest('cumara')); // 2 edits on 6 chars
+        self::assertNull((new Speller(['camera' => 5], 1))->suggest('cumara')); // max distance 1
+        // A swapped neighbour pair is one slip, whatever the maximum distance.
+        self::assertSame('camera', (new Speller(['camera' => 5], 1))->suggest('camrea'));
     }
 
     public function testParseDictionaryReadsPipelineFormat(): void
@@ -227,16 +229,35 @@ final class SpellerTest extends TestCase
         $out = [];
         $changed = false;
         foreach (explode(' ', $query) as $token) {
-            if (isset($vocabulary[$token]) || ctype_digit($token)) {
+            if (isset($vocabulary[$token]) || ctype_digit($token) || mb_strlen($token) < 4) {
                 $out[] = $token;
                 continue;
             }
             $threshold = mb_strlen($token) <= 4 ? 1 : 2;
             $best = null;
+            // A swapped neighbour pair wins: the most frequent such word.
+            $chars = mb_str_split($token);
+            $swap = null;
+            for ($i = 0; $i < count($chars) - 1; $i++) {
+                $swapped = $chars;
+                [$swapped[$i], $swapped[$i + 1]] = [$swapped[$i + 1], $swapped[$i]];
+                $word = implode('', $swapped);
+                if (($vocabulary[$word] ?? 0) >= $minFrequency && ($swap === null || $vocabulary[$word] > $vocabulary[$swap])) {
+                    $swap = $word;
+                }
+            }
+            if ($swap !== null) {
+                $out[] = $swap;
+                $changed = true;
+                continue;
+            }
             foreach ($vocabulary as $term => $frequency) {
                 $term = (string) $term;
                 $distance = self::referenceDistance($token, $term);
-                if ($distance > $threshold || $frequency < $minFrequency) {
+                if ($distance > $threshold || $frequency < $minFrequency || str_contains($token, $term)) {
+                    continue;
+                }
+                if (count($chars) <= 6 && mb_substr($term, 0, 1) !== $chars[0]) {
                     continue;
                 }
                 $key = [$distance, -$frequency, $term];

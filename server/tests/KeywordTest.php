@@ -78,13 +78,12 @@ final class KeywordTest extends DatabaseTestCase
 
     public function testNormalizationFindsZwnjTermViaFulltext(): void
     {
-        // M2: the Normalizer strips ZWNJ from both the indexed columns and the
-        // query, so the joined term is a single FULLTEXT token — the M1 LIKE
-        // workaround is no longer needed.
+        // Normalization v4: ZWNJ is a space on both the indexed columns and the
+        // query, so the half-spaced and the spaced spelling are one query.
         $results = $this->keyword->search('بی‌سیم');
 
-        self::assertSame([1010], $this->ids($results));
-        self::assertSame('fulltext', $results[0]['match_type']);
+        self::assertSame(1010, $this->ids($results)[0]);
+        self::assertSame($this->ids($results), $this->ids($this->keyword->search('بی سیم')));
     }
 
     public function testModelNameCanonicalizationMatchesHyphenatedModel(): void

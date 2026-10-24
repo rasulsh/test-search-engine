@@ -277,7 +277,7 @@ def test_bundle_ships_the_normalized_alias_file(tmp_path: Path) -> None:
     build.build_bundle(build.read_products(INPUT_SQL), tmp_path / "b", config)
 
     shipped = json.loads((tmp_path / "b" / "aliases.json").read_text(encoding="utf-8"))
-    assert shipped == [["gta 5", "grand theft auto 5"]]
+    assert shipped == [["gta v", "grand theft auto 5"]]
 
 
 def test_malformed_alias_file_fails_the_build_before_embedding(

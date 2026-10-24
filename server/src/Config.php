@@ -187,6 +187,7 @@ final class Config
             'db.password'          => ['string', ''],
             'db.products_table'    => ['string', 'products'],
             'db.search_logs_table' => ['string', 'search_logs'],
+            'db.search_events_table' => ['string', 'search_events'],
 
             // The model the bundle's meta.json is stamped with, checked on /reload.
             // /search does not read the bundle's vectors (M18): the semantic model
@@ -233,6 +234,13 @@ final class Config
             'search.suggest_min_results'      => ['int', 3],
             'search.suggest_min_frequency'    => ['int', 2],
             'search.suggest_max_distance'     => ['int', 2],
+            // Generic words never offered as a "did you mean" (comma separated, normalized).
+            'search.suggest_blocklist'        => ['string', 'کالا,عدد,باب,محصول,مدل,نوع,سری,اصل,جدید,قیمت,خرید,فروش'],
+            // A longer query is cut before the spell correction and the VPS call.
+            'search.query_max_chars'          => ['int', 100],
+            'search.query_max_tokens'         => ['int', 8],
+            // A result list this long counts as capped in the log (search_logs.is_capped).
+            'search.result_cap'               => ['int', 300],
             'search.latency_budget_ms'        => ['int', 200],
 
             'storefront.store_base' => ['string', ''],
@@ -248,6 +256,9 @@ final class Config
             'redis.auth'       => ['string', ''],
             'redis.db'         => ['int', 0],
             'redis.ttl'        => ['int', 86400],
+            // A zero-result answer is cached this long only: it may be a gap an alias or a
+            // bundle reload is about to close.
+            'redis.ttl_zero'   => ['int', 300],
             'redis.ttl_hot'    => ['int', 604800],
             'redis.ttl_hot_threshold' => ['int', 20],
             'redis.freq_window' => ['int', 604800],

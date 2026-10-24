@@ -35,11 +35,18 @@ final class Synonyms
 
     /** @var array<string, list<list<string>>> phrase (tokens joined by " ") => alternative token lists */
     private array $alternatives = [];
+    /** @var array<string, string> collapsed phrase => phrase, to meet a spacing variant */
+    private array $byCollapsed = [];
     private int $longestPhrase = 0;
+    private string $version;
 
-    /** @param list<list<string>> $groups */
-    public function __construct(array $groups)
+    /**
+     * @param list<list<string>> $groups
+     * @param string $version identifies the files the groups came from (see {@see version()})
+     */
+    public function __construct(array $groups, string $version = '')
     {
+        $this->version = $version;
         foreach ($groups as $group) {
             $terms = [];
             foreach ($group as $term) {
@@ -49,6 +56,7 @@ final class Synonyms
                 }
             }
             foreach ($terms as $phrase => $tokens) {
+                $this->byCollapsed[Normalizer::collapse($phrase)] ??= (string) $phrase;
                 foreach ($terms as $otherPhrase => $otherTokens) {
                     if ($otherPhrase !== $phrase && !in_array($otherTokens, $this->alternatives[$phrase] ?? [], true)) {
                         $this->alternatives[$phrase][] = $otherTokens;
@@ -80,7 +88,31 @@ final class Synonyms
         ));
         self::$cache = []; // only the live bundle's entry is worth keeping
 
-        return self::$cache[$key] = new self(array_merge($synonyms, self::readGroups($aliasesPath) ?? []));
+        // Content hash, not the identity: it is part of the result-cache key, so it
+        // must change exactly when an answer could (an edit within one mtime tick too).
+        $version = substr(sha1(
+            (string) @sha1_file($synonymsPath) . '|' . (string) @sha1_file($aliasesPath) . '|' . $maxSynonymGroupSize
+        ), 0, 12);
+
+        return self::$cache[$key] = new self(array_merge($synonyms, self::readGroups($aliasesPath) ?? []), $version);
+    }
+
+    /** Short hash of the alias and synonym files this instance was built from ('' when built from groups). */
+    public function version(): string
+    {
+        return $this->version;
+    }
+
+    /**
+     * The alias / synonym term that reads like $normalized once spaces are ignored
+     * ("رزیدنتاویل" for the term "رزیدنت اویل"), or null. A suggestion the owner
+     * wrote beats one guessed by edit distance.
+     */
+    public function spacingVariant(string $normalized): ?string
+    {
+        $phrase = $this->byCollapsed[Normalizer::collapse($normalized)] ?? null;
+
+        return $phrase !== null && $phrase !== $normalized ? $phrase : null;
     }
 
     /** Drop cached maps (POST /reload, after the swap). */

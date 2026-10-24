@@ -77,11 +77,22 @@ def test_build_spellcheck_uses_high_signal_fields_only() -> None:
     freq = dict(kw.build_spellcheck(ROWS))
 
     # Description-only words ("smartphone", "titanium", "هوشمند") never become
-    # suggestions; title/brand/category/model words do.
-    for description_only in ("smartphone", "titanium", "body", "core", "هوشمند"):
-        assert description_only not in freq
-    for high_signal in ("iphone", "apple", "mobile", "x1504", "ip15promax", "vivobook"):
-        assert high_signal in freq
+    # suggestions, and neither do category-only words or model codes ("mobile",
+    # "ip15promax": generic words and near-miss codes made bad corrections);
+    # title and brand words do.
+    for not_a_name in ("smartphone", "titanium", "body", "core", "هوشمند", "ip15promax", "x1504"):
+        assert not_a_name not in freq
+    for name in ("iphone", "apple", "vivobook", "ایسوس"):
+        assert name in freq
+
+
+def test_build_spellcheck_learns_alias_tokens() -> None:
+    freq = dict(kw.build_spellcheck(ROWS, aliases=[["wolverine", "ولورینگ"], ["Apple", "اپل"]]))
+
+    assert freq["wolverine"] == kw.ALIAS_TOKEN_COUNT
+    assert freq["ولورینگ"] == kw.ALIAS_TOKEN_COUNT
+    # A token the catalog already has more often keeps its own count.
+    assert freq["apple"] == kw.ALIAS_TOKEN_COUNT or freq["apple"] > 2
 
 
 def test_build_spellcheck_counts_each_product_once() -> None:
@@ -114,7 +125,7 @@ def test_load_aliases_normalizes_and_drops_empty_groups(tmp_path: Path) -> None:
 
     assert kw.load_aliases(path) == [
         ["gta", "grand theft auto", "جی تی ای"],
-        ["ps5", "پلیاستیشن 5", "playstation 5"],
+        ["ps5", "پلی استیشن 5", "playstation v"],
     ]
 
 

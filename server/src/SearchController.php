@@ -66,6 +66,10 @@ final class SearchController
     private ?Cache $cache;
     private ?IntentMap $intentMap;
     private int $intentMaxTerms;
+    private string $dataVersion;
+    private int $queryMaxChars;
+    private int $queryMaxTokens;
+    private int $resultCap;
 
     /**
      * @param callable(): Speller $spellerFactory Built lazily (a catalog scan),
@@ -91,7 +95,11 @@ final class SearchController
         int $suggestMinResults = 3,
         ?Cache $cache = null,
         ?IntentMap $intentMap = null,
-        int $intentMaxTerms = 4
+        int $intentMaxTerms = 4,
+        string $dataVersion = '',
+        int $queryMaxChars = 100,
+        int $queryMaxTokens = 8,
+        int $resultCap = 300
     ) {
         $this->keyword = $keyword;
         $this->logger = $logger;
@@ -108,6 +116,10 @@ final class SearchController
         $this->cache = $cache;
         $this->intentMap = $intentMap;
         $this->intentMaxTerms = max(1, $intentMaxTerms);
+        $this->dataVersion = $dataVersion;
+        $this->queryMaxChars = $queryMaxChars;
+        $this->queryMaxTokens = $queryMaxTokens;
+        $this->resultCap = $resultCap;
     }
 
     /**
@@ -126,6 +138,7 @@ final class SearchController
         $maxDistance = (int) $search['suggest_max_distance'];
         $minFrequency = (int) $search['suggest_min_frequency'];
 
+        $synonyms = Synonyms::fromDirectory($config['paths']['data'], (int) $search['synonyms_max_group_size']);
         $keyword = new Keyword(
             $pdo,
             $productsTable,
@@ -137,7 +150,7 @@ final class SearchController
             (float) $search['phrase_bonus'],
             (int) $search['sku_prefix_min_length'],
             (float) $search['spec_weight'],
-            Synonyms::fromDirectory($config['paths']['data'], (int) $search['synonyms_max_group_size']),
+            $synonyms,
             (int) $search['alias_max_variants'],
             (bool) $search['require_all_terms'],
             (float) $search['tag_weight'],
@@ -154,9 +167,14 @@ final class SearchController
         // The bundle dictionary is cached per worker (and in APCu); the table scan
         // is only a fallback for a data directory without spellcheck.txt.
         $dictionaryPath = $config['paths']['data'] . '/' . Speller::DICTIONARY_FILE;
-        $spellerFactory = static fn (): Speller =>
+        $blocked = array_values(array_filter(array_map(
+            static fn (string $word): string => Normalizer::normalize($word),
+            explode(',', (string) $search['suggest_blocklist'])
+        ), static fn (string $word): bool => $word !== ''));
+        $spellerFactory = static fn (): Speller => (
             Speller::fromDictionary($dictionaryPath, null, $maxDistance, $minFrequency)
-            ?? Speller::fromProducts($pdo, $productsTable, $maxDistance, $minFrequency);
+            ?? Speller::fromProducts($pdo, $productsTable, $maxDistance, $minFrequency)
+        )->withBlocked($blocked);
 
         // The signals provider both fetches business signals and acts as the
         // existence filter (ids it omits are treated as absent from the catalog).
@@ -222,13 +240,20 @@ final class SearchController
             (int) $search['suggest_min_results'],
             $cache ?? Cache::fromConfig($config),
             IntentMap::fromDirectory($config['paths']['data']),
-            (int) $search['intent_max_terms']
+            (int) $search['intent_max_terms'],
+            $synonyms->version(),
+            (int) $search['query_max_chars'],
+            (int) $search['query_max_tokens'],
+            (int) $search['result_cap']
         );
     }
 
     /**
-     * @param array<string, mixed> $request
+     * @param array<string, mixed> $request `q`, and optionally `limit`, `customer_id`, `session_id`
+     *        (an opaque, already hashed storefront session id), `source`
+     *        (page|autocomplete|filter|paging) and `page`
      * @return array{
+     *     search_uuid: string,
      *     query: array{raw: string, normalized: string},
      *     did_you_mean: ?string,
      *     did_you_mean_applied: bool,
@@ -246,26 +271,44 @@ final class SearchController
         $customerId = isset($request['customer_id']) && is_string($request['customer_id'])
             ? $request['customer_id']
             : null;
+        $context = [
+            'search_uuid' => self::uuid(),
+            'session_id'  => self::sessionId($request['session_id'] ?? null),
+            'source'      => in_array($request['source'] ?? null, self::SOURCES, true) ? $request['source'] : 'page',
+            'page'        => max(1, min(255, (int) ($request['page'] ?? 1))),
+            'customer_id' => $customerId,
+        ];
 
         $start = microtime(true);
-        $normalized = ($this->normalize)($raw);
+        // The decoded, capped text is what every stage below sees; $raw only goes
+        // to the log and back to the caller.
+        $cleaned = QueryPrep::clean($raw);
+        [$query, $queryCapped] = QueryPrep::cap($cleaned, $this->queryMaxChars, $this->queryMaxTokens);
+        $normalized = ($this->normalize)($query);
+
+        if (QueryPrep::isSuspicious($cleaned)) {
+            return $this->suspicious($raw, $context, $start);
+        }
 
         // Result cache (M26): the debug breakdown is never cached or served from it.
         $semanticOn = $this->semanticEnabled();
         $cacheKey = $this->cache !== null && !$debug && $normalized !== ''
-            ? $this->cache->key($normalized, $limit, $semanticOn)
+            ? $this->cache->key($normalized, $limit, $semanticOn, $this->dataVersion)
             : null;
         if ($cacheKey !== null) {
             // Count before the GET so hits (which return early) and misses both register.
             $this->cache->registerLookup($cacheKey);
             $hit = $this->cache->get($cacheKey);
             if ($hit !== null && $this->isCachedResponse($hit)) {
-                return $this->serveCached($hit, $raw, $customerId, $start);
+                return $this->serveCached($hit, $raw, $context, $start);
             }
         }
 
         $multiTerm = count(Tokenizer::split($normalized)) > 1;
-        $results = $this->keyword->search($raw, $limit);
+        $timing = ['keyword' => 0, 'vector' => null, 'spell' => null];
+        $stage = microtime(true);
+        $results = $this->keyword->search($query, $limit);
+        $timing['keyword'] = self::elapsedMs($stage);
         $didYouMean = null;
         $applied = false;
 
@@ -279,7 +322,9 @@ final class SearchController
         // whose other word matches plenty still deserves its correction.
         $literal = $this->fullCoverageCount($results);
         if ($skuIds === [] && $literal < $this->suggestMinResults && $normalized !== '') {
-            [$alternative, $didYouMean] = $this->recover($raw, $normalized, $limit, $literal);
+            $stage = microtime(true);
+            [$alternative, $didYouMean] = $this->recover($query, $normalized, $limit, $literal);
+            $timing['spell'] = self::elapsedMs($stage);
             // A literal match, however thin, is what the shopper typed: keep it
             // and only offer the suggestion. With no literal match (partial
             // ones aside), serve it.
@@ -290,7 +335,9 @@ final class SearchController
         }
 
         if ($results === [] && $multiTerm && $this->keyword->requiresAllTerms()) {
-            $results = $this->keyword->search($raw, $limit, false);
+            $stage = microtime(true);
+            $results = $this->keyword->search($query, $limit, false);
+            $timing['keyword'] += self::elapsedMs($stage);
         }
         $allTermsHits = $multiTerm && $skuIds === [] && $results !== [] && $this->keyword->requiresAllTerms()
             && !in_array(Keyword::MATCH_PARTIAL, array_column($results, 'match_type'), true);
@@ -300,13 +347,16 @@ final class SearchController
         $cosineScores = null;
         $explanation = null;
 
+        // Boost words come from the query that produced the results: the applied
+        // suggestion when the literal query matched nothing.
+        $boostQuery = $applied && $didYouMean !== null ? $didYouMean : $normalized;
+
         // Tier 2 is additive: only reshuffle when the VPS answered. Otherwise the
         // keyword ordering above stands.
-        $semantic = $this->semantic($raw, $normalized);
+        $stage = microtime(true);
+        $semantic = $this->semantic($query, $normalized);
+        $timing['vector'] = $semanticOn && $normalized !== '' ? self::elapsedMs($stage) : null;
         if ($semantic !== null) {
-            // Boost words come from the query that produced the results: the applied
-            // suggestion when the literal query matched nothing.
-            $boostQuery = $applied && $didYouMean !== null ? $didYouMean : $normalized;
             [$productIds, $cosineScores, $explanation] = $this->hybrid(
                 $results,
                 $skuIds,
@@ -320,27 +370,27 @@ final class SearchController
         }
 
         $latencyMs = (int) round((microtime(true) - $start) * 1000);
+        $meta = $this->meta($boostQuery, $didYouMean, count($productIds));
 
         // Logging is best-effort: a rejected log row (e.g. an over-long query
         // under strict SQL mode) must never fail the search itself.
-        try {
-            $this->logger->log([
-                'raw_q'        => $raw,
-                'normalized_q' => $normalized,
-                'had_vector'   => $semantic !== null,
-                'result_count' => count($productIds),
-                'top_ids'      => array_slice($productIds, 0, $this->topIdsLimit),
-                'customer_id'  => $customerId,
-                'latency_ms'   => $latencyMs,
-                'did_you_mean' => $didYouMean,
-                'tier'         => $semantic !== null ? Logger::TIER_HYBRID : Logger::TIER_KEYWORD_ONLY,
-                'cache_hit'    => false,
-            ]);
-        } catch (Throwable $e) {
-            error_log('search: log write failed: ' . $e->getMessage());
-        }
+        $this->writeLog($context + $meta + [
+            'raw_q'          => $raw,
+            'normalized_q'   => $normalized,
+            'had_vector'     => $semantic !== null,
+            'result_count'   => count($productIds),
+            'top_ids'        => array_slice($productIds, 0, $this->topIdsLimit),
+            'latency_ms'     => $latencyMs,
+            'did_you_mean'   => $didYouMean,
+            'tier'           => $semantic !== null ? Logger::TIER_HYBRID : Logger::TIER_KEYWORD_ONLY,
+            'cache_hit'      => false,
+            'lat_keyword_ms' => $timing['keyword'],
+            'lat_vector_ms'  => $timing['vector'],
+            'lat_spell_ms'   => $timing['spell'],
+        ]);
 
         $response = [
+            'search_uuid'          => $context['search_uuid'],
             'query'                => ['raw' => $raw, 'normalized' => $normalized],
             'did_you_mean'         => $didYouMean,
             'did_you_mean_applied' => $applied,
@@ -355,15 +405,100 @@ final class SearchController
         }
 
         // A result served without the semantic tier that is configured (VPS down,
-        // slow) is a degradation: caching it would pin it for the whole TTL.
+        // slow) is a degradation: caching it would pin it for the whole TTL. The
+        // search_uuid belongs to this request, not to the cached answer. An empty
+        // answer is cached briefly: an alias or a reload may be about to fill it.
         if ($cacheKey !== null && (!$semanticOn || $semantic !== null)) {
+            unset($response['search_uuid']);
             $this->cache->set($cacheKey, [
                 'response'   => $response,
                 'had_vector' => $semantic !== null,
-            ]);
+                'meta'       => $meta,
+            ], $productIds === []);
+            $response = ['search_uuid' => $context['search_uuid']] + $response;
         }
 
         return $response;
+    }
+
+    private const SOURCES = ['page', 'autocomplete', 'filter', 'paging'];
+
+    /**
+     * The per-search log facts that do not depend on how the answer was produced:
+     * which alias / synonym variants the query was expanded into, whether a
+     * suggestion was shown, whether the list hit the result cap.
+     *
+     * @return array{expanded_q: ?string, alias_hit: bool, dym_shown: bool, is_capped: bool}
+     */
+    private function meta(string $effectiveQuery, ?string $didYouMean, int $resultCount): array
+    {
+        $variants = array_map(
+            static fn (array $tokens): string => implode(' ', $tokens),
+            array_slice($this->keyword->variants($effectiveQuery), 1)
+        );
+
+        return [
+            'expanded_q' => $variants === [] ? null : implode(' | ', $variants),
+            'alias_hit'  => $variants !== [],
+            'dym_shown'  => $didYouMean !== null,
+            'is_capped'  => $this->resultCap > 0 && $resultCount >= $this->resultCap,
+        ];
+    }
+
+    /**
+     * A probe (SQL fragments in the query) gets an empty answer with no database,
+     * spell or VPS work at all, and a flagged log row.
+     *
+     * @param array<string, mixed> $context
+     * @return array<string, mixed>
+     */
+    private function suspicious(string $raw, array $context, float $start): array
+    {
+        $this->writeLog($context + [
+            'raw_q'         => $raw,
+            'normalized_q'  => ($this->normalize)(QueryPrep::clean($raw)),
+            'latency_ms'    => (int) round((microtime(true) - $start) * 1000),
+            'is_suspicious' => true,
+        ]);
+
+        return [
+            'search_uuid'          => $context['search_uuid'],
+            'query'                => ['raw' => $raw, 'normalized' => ''],
+            'did_you_mean'         => null,
+            'did_you_mean_applied' => false,
+            'count'                => 0,
+            'product_ids'          => [],
+        ];
+    }
+
+    /** @param array<string, mixed> $entry */
+    private function writeLog(array $entry): void
+    {
+        try {
+            $this->logger->log($entry);
+        } catch (Throwable $e) {
+            error_log('search: log write failed: ' . $e->getMessage());
+        }
+    }
+
+    private static function elapsedMs(float $since): int
+    {
+        return (int) round((microtime(true) - $since) * 1000);
+    }
+
+    private static function uuid(): string
+    {
+        $bytes = random_bytes(16);
+        $bytes[6] = chr((ord($bytes[6]) & 0x0f) | 0x40);
+        $bytes[8] = chr((ord($bytes[8]) & 0x3f) | 0x80);
+
+        return vsprintf('%s%s-%s-%s-%s-%s%s%s', str_split(bin2hex($bytes), 4));
+    }
+
+    /** A storefront session hash: letters, digits, "-", "_", ".", at most 64 characters. */
+    private static function sessionId(mixed $value): ?string
+    {
+        return is_string($value) && preg_match('/^[A-Za-z0-9._-]{1,64}$/', $value) === 1 ? $value : null;
     }
 
     private function semanticEnabled(): bool
@@ -387,30 +522,31 @@ final class SearchController
      * as a cache hit). The raw text is the caller's own; the rest is as computed.
      *
      * @param array<string, mixed> $hit
+     * @param array<string, mixed> $context
      * @return array<string, mixed>
      */
-    private function serveCached(array $hit, string $raw, ?string $customerId, float $start): array
+    private function serveCached(array $hit, string $raw, array $context, float $start): array
     {
-        $response = $hit['response'];
+        $response = ['search_uuid' => $context['search_uuid']] + $hit['response'];
         $response['query']['raw'] = $raw;
         $hadVector = (bool) ($hit['had_vector'] ?? false);
+        $meta = is_array($hit['meta'] ?? null) ? $hit['meta'] : [];
 
-        try {
-            $this->logger->log([
-                'raw_q'        => $raw,
-                'normalized_q' => (string) ($response['query']['normalized'] ?? ''),
-                'had_vector'   => $hadVector,
-                'result_count' => count($response['product_ids']),
-                'top_ids'      => array_slice(array_map('intval', $response['product_ids']), 0, $this->topIdsLimit),
-                'customer_id'  => $customerId,
-                'latency_ms'   => (int) round((microtime(true) - $start) * 1000),
-                'did_you_mean' => is_string($response['did_you_mean']) ? $response['did_you_mean'] : null,
-                'tier'         => $hadVector ? Logger::TIER_HYBRID : Logger::TIER_KEYWORD_ONLY,
-                'cache_hit'    => true,
-            ]);
-        } catch (Throwable $e) {
-            error_log('search: log write failed: ' . $e->getMessage());
-        }
+        $this->writeLog($context + [
+            'raw_q'        => $raw,
+            'normalized_q' => (string) ($response['query']['normalized'] ?? ''),
+            'had_vector'   => $hadVector,
+            'result_count' => count($response['product_ids']),
+            'top_ids'      => array_slice(array_map('intval', $response['product_ids']), 0, $this->topIdsLimit),
+            'latency_ms'   => (int) round((microtime(true) - $start) * 1000),
+            'did_you_mean' => is_string($response['did_you_mean']) ? $response['did_you_mean'] : null,
+            'tier'         => $hadVector ? Logger::TIER_HYBRID : Logger::TIER_KEYWORD_ONLY,
+            'cache_hit'    => true,
+            'expanded_q'   => is_string($meta['expanded_q'] ?? null) ? $meta['expanded_q'] : null,
+            'alias_hit'    => (bool) ($meta['alias_hit'] ?? false),
+            'dym_shown'    => is_string($response['did_you_mean']),
+            'is_capped'    => (bool) ($meta['is_capped'] ?? false),
+        ]);
 
         return $response;
     }
@@ -575,9 +711,14 @@ final class SearchController
     }
 
     /**
-     * Try keyboard-layout remaps first, then spell correction. Returns the
-     * alternative's results and the suggestion, or empty + null when no
-     * alternative returns more than $baseline results.
+     * Try the owner's alias spelling first, then keyboard-layout remaps, then spell
+     * correction. Returns the alternative's results and the suggestion, or empty
+     * + null when no alternative returns more than $baseline results.
+     *
+     * A keyboard-layout remap is only credible for a query of plain words (a model
+     * code such as "HF-1502" or "GM 2025" is not mistyped Persian) and only when
+     * a result names the remapped words in its title or tags: matches found in
+     * descriptions alone are coincidences of a few letters.
      *
      * @return array{
      *     0: list<array{product_id: int, score: float, match_type: string}>,
@@ -586,13 +727,25 @@ final class SearchController
      */
     private function recover(string $raw, string $normalized, ?int $limit, int $baseline): array
     {
-        foreach ([Keymap::enToFa($raw), Keymap::faToEn($raw)] as $candidate) {
+        $alias = $this->keyword->spacingAlias($normalized);
+        if ($alias !== null) {
+            $alternative = $this->keyword->search($alias, $limit);
+            if ($this->fullCoverageCount($alternative) > $baseline) {
+                return [$alternative, $alias];
+            }
+        }
+
+        $candidates = preg_match('/[\p{N}-]/u', $raw) === 1 ? [] : [Keymap::enToFa($raw), Keymap::faToEn($raw)];
+        foreach ($candidates as $candidate) {
             $candidateNormalized = ($this->normalize)($candidate);
             if ($candidateNormalized === '' || $candidateNormalized === $normalized) {
                 continue;
             }
             $alternative = $this->keyword->search($candidate, $limit);
-            if ($this->fullCoverageCount($alternative) > $baseline) {
+            if (
+                $this->fullCoverageCount($alternative) > $baseline
+                && in_array(true, array_column($alternative, 'name_all'), true)
+            ) {
                 return [$alternative, $candidateNormalized];
             }
         }

@@ -12,7 +12,10 @@ namespace App;
 final class QueryPrep
 {
     /** SQL-injection probes seen in the logs; they get no search at all. */
-    private const SUSPICIOUS = '/extractvalue|concat\s*\(\s*0x|union\s+(?:all\s+)?select|--|sleep\s*\(/i';
+    private const SUSPICIOUS = '/extractvalue|concat\s*\(\s*0x|union\s+(?:all\s+)?select|sleep\s*\(/i';
+    /** "--" is a SQL comment only next to a quote; alone it is a dash in a shopper's query ("ps5 -- slim"). */
+    private const COMMENT = '/--/';
+    private const QUOTE = '/[\'"`]/';
 
     /**
      * Decodes the HTML entities OpenCart leaves in query strings ("&amp;amp;",
@@ -37,7 +40,8 @@ final class QueryPrep
 
     public static function isSuspicious(string $text): bool
     {
-        return preg_match(self::SUSPICIOUS, $text) === 1;
+        return preg_match(self::SUSPICIOUS, $text) === 1
+            || (preg_match(self::COMMENT, $text) === 1 && preg_match(self::QUOTE, $text) === 1);
     }
 
     /**

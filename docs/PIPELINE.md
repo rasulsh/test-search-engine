@@ -99,19 +99,27 @@ Normalization rules, the parity contract and `normalization_version` are in
 [ARCHITECTURE.md](ARCHITECTURE.md#the-three-contracts). Two rule-adjacent
 features:
 
-<a id="roman-numerals"></a>**Roman numerals (M15, normalization version 3).**
-Product names mix "GTA V" and "GTA 5", "Diablo IV" and "Diablo 4". The
-canonical normalizer (both `normalize.py` and `Normalizer.php`, parity-tested)
-maps a **standalone** Roman numeral `ii`..`x` to its digits, so either form
-matches the other: `GTA VI` → `gta 6`, `Sony A7 IV` → `sony a7 4`. It is
-deliberately narrow: only a whole token (no letter or digit on either side,
-so `xbox`, `vivo`, `mix`, `x2`, `markiv` are untouched), never `i` (the
-English word), and never right after a number and a space, where `x` / `v`
-are a dimension or a unit (`1920 x 1080`, `12 V` stay as they are). The SKU
-canonicalization skips this rule (`X 12` stays the code `x12`). Known trade-off:
-a standalone `x` or `v` that is really a letter becomes a number on both the
-product and the query side (`Xbox Series X` → `xbox series 10`), which still
-matches itself. Needs a rebuild + reload (see [upgrading](DEPLOY.md#upgrading-to-m15)).
+<a id="roman-numerals"></a>**Roman numerals (M15; narrowed in normalization version 4).**
+Product names mix "Diablo IV" and "Diablo 4". The canonical normalizer (both
+`normalize.py` and `Normalizer.php`, parity-tested) maps the Roman numerals
+`ii`, `iii`, `iv`, `vi`, `vii`, `viii`, `ix` to digits, so either form matches the
+other: `GTA VI` → `gta 6`, `Sony A7 IV` → `sony a7 4`. It is deliberately narrow:
+only a whole token, only **right after a token holding a letter** (`gta vi`,
+`a7 iv`; not at the start of the text, not after a bare number: `12 vi` stays),
+never `i` (the English word) and, since version 4, **never `v` or `x`**: a lone
+`x` / `v` is a model letter, a dimension or a unit (`RAZER KAIRA X PS5`, `G Pro X`,
+`دسته x box x`, `Grand Theft Auto V` all keep their letter; `xvi` stays literal).
+The SKU canonicalization skips the rule (`X 12` stays the code `x12`). The catalog
+spelling `Grand Theft Auto V` therefore no longer equals `gta 5` by normalization:
+`pipeline/aliases.json` carries the group `gta 5` = `gta v` = `grand theft auto 5` =
+`grand theft auto v`, and the same pattern is the way to bridge any other title that
+ends in a letter numeral. Needs a rebuild + reload (see [upgrading](DEPLOY.md#upgrading-to-m15)).
+
+**ZWNJ and bidi marks (normalization version 4).** The Persian half-space (U+200C)
+now becomes a **space** instead of being deleted: `استیل‌بوک` is `استیل بوک`
+(two words), so it finds what `استیل بوک` finds; the joined spelling `استیلبوک`
+meets it through the collapsed names below. Invisible direction marks and embeddings
+(U+200E, U+200F, U+202A-U+202E, U+2066-U+2069, and the BOM U+FEFF) are removed.
 
 <a id="collapsed-names"></a>**Collapsed names (M23).** `farcry` and `far cry`,
 `dualsense` and `dual sense`, `پلی استیشن` and `پلی‌استیشن` are one name, but

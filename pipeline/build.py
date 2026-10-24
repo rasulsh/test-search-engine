@@ -519,9 +519,9 @@ def build_bundle(
     (out / "intent_map.json").write_text(
         json.dumps(intent_map, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
     )
+    spellcheck = _keyword.build_spellcheck(server_rows, aliases=aliases)
     (out / "spellcheck.txt").write_text(
-        "\n".join(_keyword.spellcheck_lines(_keyword.build_spellcheck(server_rows, aliases=aliases))) + "\n",
-        encoding="utf-8",
+        "\n".join(_keyword.spellcheck_lines(spellcheck)) + "\n", encoding="utf-8"
     )
     (out / "keymap.json").write_text(
         json.dumps(_keyword.build_keymap(), ensure_ascii=False, indent=2) + "\n",

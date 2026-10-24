@@ -1,0 +1,123 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\Tests;
+
+use App\Logger;
+
+/**
+ * db/migrations/2026-10-24_search_logs_v2.sql: idempotent UP, a rollback that
+ * restores the old shape, and a Logger that upgrades a table nobody migrated.
+ */
+final class LogMigrationTest extends DatabaseTestCase
+{
+    private const OLD_COLUMNS = ['id', 'ts', 'raw_q', 'normalized_q', 'had_vector', 'result_count', 'top_ids',
+        'customer_id', 'latency_ms', 'did_you_mean', 'tier', 'cache_hit'];
+
+    protected function setUp(): void
+    {
+        parent::setUp();
+        $this->pdo->exec('DROP TABLE IF EXISTS search_logs, search_events');
+        $this->pdo->exec(
+            "CREATE TABLE search_logs (
+                id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT, ts DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                raw_q VARCHAR(512) NOT NULL, normalized_q VARCHAR(512) NOT NULL DEFAULT '',
+                had_vector TINYINT(1) NOT NULL DEFAULT 0, result_count INT UNSIGNED NOT NULL DEFAULT 0,
+                top_ids VARCHAR(1024) NOT NULL DEFAULT '', customer_id VARCHAR(64) DEFAULT NULL,
+                latency_ms INT UNSIGNED NOT NULL DEFAULT 0, did_you_mean VARCHAR(512) DEFAULT NULL,
+                tier VARCHAR(16) NOT NULL DEFAULT 'keyword_only', cache_hit TINYINT(1) NOT NULL DEFAULT 0,
+                PRIMARY KEY (id), KEY idx_ts (ts)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4"
+        );
+        $this->pdo->exec("INSERT INTO search_logs (raw_q) VALUES ('old row')");
+    }
+
+    /** @return array{up: string, down: string} */
+    private function sections(): array
+    {
+        $sql = (string) file_get_contents(self::repoRoot() . '/db/migrations/2026-10-24_search_logs_v2.sql');
+        [$head, $down] = explode('-- ==== DOWN (rollback) ====', $sql);
+        [, $up] = explode('-- ==== UP ====', $head);
+
+        return ['up' => $up, 'down' => $down];
+    }
+
+    /** @return list<string> */
+    private function columns(): array
+    {
+        return array_map('strval', $this->pdo->query('SHOW COLUMNS FROM search_logs')->fetchAll(\PDO::FETCH_COLUMN));
+    }
+
+    /** @return list<string> */
+    private function indexes(): array
+    {
+        return array_values(array_unique(array_map(
+            'strval',
+            $this->pdo->query('SHOW INDEX FROM search_logs')->fetchAll(\PDO::FETCH_COLUMN, 2)
+        )));
+    }
+
+    public function testUpIsIdempotentAndKeepsOldRows(): void
+    {
+        $up = $this->sections()['up'];
+        $this->pdo->exec($up);
+        $this->pdo->exec($up);
+
+        self::assertContains('search_uuid', $this->columns());
+        self::assertContains('is_duplicate', $this->columns());
+        self::assertEqualsCanonicalizing(['PRIMARY', 'idx_ts', 'idx_session', 'idx_nq', 'idx_uuid'], $this->indexes());
+        self::assertSame(1, (int) $this->pdo->query('SELECT log_version FROM search_logs')->fetchColumn());
+        self::assertSame(0, (int) $this->pdo->query('SELECT COUNT(*) FROM search_events')->fetchColumn());
+    }
+
+    public function testDownRestoresTheOldShapeAndCanRunAgain(): void
+    {
+        $sections = $this->sections();
+        $this->pdo->exec($sections['up']);
+        $this->pdo->exec($sections['down']);
+        $this->pdo->exec($sections['down']);
+
+        self::assertSame(self::OLD_COLUMNS, $this->columns());
+        self::assertEqualsCanonicalizing(['PRIMARY', 'idx_ts'], $this->indexes());
+        self::assertSame('old row', $this->pdo->query('SELECT raw_q FROM search_logs')->fetchColumn());
+        self::assertSame(
+            [],
+            $this->pdo->query("SHOW TABLES LIKE 'search_events'")->fetchAll()
+        );
+
+        $this->pdo->exec($sections['up']); // and back up again
+        self::assertContains('log_version', $this->columns());
+    }
+
+    public function testTheLoggerUpgradesAnUnmigratedTableOnFirstWrite(): void
+    {
+        (new Logger($this->pdo, 'search_logs'))->log([
+            'raw_q' => 'mafia', 'search_uuid' => '0b6a1d3e-5c52-4f7a-9d77-1c2f3a4b5c6d', 'session_id' => 's',
+            'lat_keyword_ms' => 4,
+        ]);
+
+        $row = $this->pdo->query("SELECT * FROM search_logs WHERE raw_q = 'mafia'")->fetch();
+        self::assertSame(2, (int) $row['log_version']);
+        self::assertSame('s', $row['session_id']);
+        self::assertSame(4, (int) $row['lat_keyword_ms']);
+        self::assertSame(1, (int) $this->pdo->query('SELECT log_version FROM search_logs WHERE raw_q = "old row"')
+            ->fetchColumn());
+    }
+
+    public function testSchemaSqlMatchesTheMigration(): void
+    {
+        $this->pdo->exec('DROP TABLE search_logs');
+        $this->pdo->exec((string) file_get_contents(self::repoRoot() . '/db/schema.sql'));
+        $fromSchema = $this->columns();
+        $schemaIndexes = $this->indexes();
+
+        $this->pdo->exec('DROP TABLE search_logs');
+        $this->pdo->exec('DROP TABLE search_events');
+        $this->setUp();
+        $this->pdo->exec($this->sections()['up']);
+
+        self::assertEqualsCanonicalizing($fromSchema, $this->columns());
+        self::assertEqualsCanonicalizing($schemaIndexes, array_merge($this->indexes(), ['idx_ts_result']));
+    }
+}

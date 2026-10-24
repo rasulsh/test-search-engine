@@ -219,7 +219,10 @@ final class EndpointTest extends TestCase
             ['search_uuid', 'query', 'did_you_mean', 'did_you_mean_applied', 'count', 'product_ids'],
             array_keys($decoded)
         );
-        self::assertMatchesRegularExpression('/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/', $decoded['search_uuid']);
+        self::assertMatchesRegularExpression(
+            '/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/',
+            $decoded['search_uuid']
+        );
     }
 
     public function testSearchWithDetailsReturnsDisplayFieldsInResultOrder(): void

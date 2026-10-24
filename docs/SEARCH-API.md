@@ -8,7 +8,8 @@ The full request path behind `POST /search`: [RUNTIME-FLOW.md](RUNTIME-FLOW.md).
 
 | endpoint | purpose |
 | --- | --- |
-| `POST /search` | `{q, customer_id?, limit?, with_details?, debug?}`, returns ordered `product_ids` + `did_you_mean` / `did_you_mean_applied` (plus `cosine_scores` on hybrid responses, and `products` display fields only with `"with_details": true`). Keyword tier always; hybrid when the configured VPS answers in time. |
+| `POST /search` | `{q, customer_id?, session_id?, source?, page?, limit?, with_details?, debug?}`, returns a `search_uuid`, ordered `product_ids` + `did_you_mean` / `did_you_mean_applied` (plus `cosine_scores` on hybrid responses, and `products` display fields only with `"with_details": true`). Keyword tier always; hybrid when the configured VPS answers in time. |
+| `POST /events` | Log v2 result tracking: `{search_uuid, product_id, position, action}` with `action` `click` / `cart` / `order` / `dym_click`; `204` on success. Feeds the engagement figures of the analytics page. See [INTEGRATION.md](../INTEGRATION.md#post-events). |
 | `GET /health` | Database reachability + live product count, for monitoring. |
 | `GET /logs.php` | M21, read-only, off until `SEARCH_LOGS_TOKEN` is set. Recent searches (newest first, paginated), the zero-result ones, or the slowest; see [Search logs and ranking debug](#search-logs-and-ranking-debug). |
 | `POST /reload` | Token-protected (`X-Reload-Token`). Validates the staged bundle and swaps it in atomically (then flushes the result cache when one is configured, reporting `cache_flushed`). With `?load=1` it first loads `data_incoming/products.load.sql` into the staging table itself. |
@@ -67,6 +68,60 @@ no new PII surface (it shows queries, never customer ids).
 | --- | --- | --- |
 | `window` | `24h`, `7d` (default), `30d`, `90d`, `all` | the time range, counted back from the database clock; an unknown value means `7d` |
 | `format` | `json` | the same data as JSON instead of the HTML dashboard |
+| `compare` | `1` | adds `compare`: the headline figures against the previous window of the same length (not for `all`) |
+
+**Log-v2 keys (added beside the older ones, which are unchanged).** Flagged probes
+(`is_suspicious = 1`) count nowhere; a metric that needs a v2 column reads only
+`log_version = 2` rows; "unique" metrics also leave out repeats (`is_duplicate = 1`).
+Before `db/migrations/2026-10-24_search_logs_v2.sql` ran (or the logger added the
+columns) the report carries `log_v2: {available: false}` and none of the keys below.
+
+| key | content |
+| --- | --- |
+| `log_v2` | `{available, rows}` |
+| `unique` | `{searches, sessions, searches_per_session}` |
+| `zero_result` | `{rate, queries[]}`: rate on unique searches, top zero-result queries by normalized form |
+| `engagement` | `{tracking, searches, ctr, no_click_rate, mean_click_position, mrr, cart_rate, order_rate}` over unique searches with results; `tracking` is false until a click is recorded |
+| `latency_cold` | cache misses only: `{count, p50, p95, max, stages_p95: {keyword, vector, spell}, slowest[]}` (top 20) |
+| `tier_timeline` | `{hours: [{bucket, searches, hybrid, hybrid_share}], outages[]}`: hybrid share per hour, and runs of busy hours with only keyword-only answers (a vector outage) |
+| `capped_share` | `{searches, capped, share}`: lists that reached `search.result_cap` |
+| `did_you_mean` | the old `{total, suggested, share}` plus `{shown, shown_rate, clicked, ctr, zero_result_suggestions, top[]}` (`top`: query → suggestion pairs with shown / clicked counts) |
+| `alias_candidates` | `[{query, then, pairs, clicks}]`: a zero-result query followed within 60 s in the same session by a different query that had results, ranked by clicks on the follow-up, then frequency |
+| `silent_failures` | `[{query, searches, clicks, ctr, avg_results}]`: frequent (5+) queries with results and a click-through of at most 2 %; empty while no click is tracked |
+| `demand_gap` | zero-result queries that appear in no alias candidate (likely products missing from the catalog) |
+| `trending` | `[{query, searches, previous, growth, growth_pct}]` against the previous window |
+| `suspicious` | `{count, samples[]}`: the probes the service refused |
+| `compare` | with `compare=1`: `{previous_since, previous_until, metrics: {name: {current, previous, change, change_pct}}}` for searches, unique searches, zero rate, CTR, cold p95, hybrid share and cache hit rate |
+
+Sample (abridged; the numbers are illustrative, the shape is real):
+
+```json
+{
+  "window": "7d", "since": "2026-10-17 12:00:00",
+  "summary": {"total": 12840, "zero_results": 1020, "zero_rate": 7.9, "avg_results": 41.2},
+  "log_v2": {"available": true, "rows": 9120},
+  "unique": {"searches": 7410, "sessions": 3120, "searches_per_session": 2.31},
+  "zero_result": {"rate": 8.4, "queries": [{"query": "beamng.drive", "searches": 9, "last_seen": "2026-10-23 21:02:11"}]},
+  "engagement": {"tracking": true, "searches": 6790, "ctr": 61.3, "no_click_rate": 38.7, "mean_click_position": 3.42,
+                 "mrr": 0.4127, "cart_rate": 7.8, "order_rate": 2.1},
+  "latency_cold": {"count": 2210, "p50": 38, "p95": 410, "max": 12840,
+                   "stages_p95": {"keyword": 120, "vector": 280, "spell": 45},
+                   "slowest": [{"query": "very long pasted text ...", "max_ms": 12840, "searches": 1}]},
+  "tier_timeline": {"hours": [{"bucket": "2026-10-22 18:00", "searches": 41, "hybrid": 0, "hybrid_share": 0.0}],
+                    "outages": [{"from": "2026-10-22 18:00", "to": "2026-10-22 18:00", "hours": 1, "searches": 41}]},
+  "capped_share": {"searches": 9120, "capped": 3, "share": 0.0},
+  "did_you_mean": {"total": 12840, "suggested": 610, "share": 4.8, "shown": 402, "shown_rate": 5.4, "clicked": 96,
+                   "ctr": 23.9, "zero_result_suggestions": 2,
+                   "top": [{"query": "gtavi", "suggestion": "atari", "shown": 7, "clicked": 0}]},
+  "alias_candidates": [{"query": "ولورینگ", "then": "wolvering", "pairs": 4, "clicks": 3}],
+  "silent_failures": [{"query": "gtavi", "searches": 7, "clicks": 0, "ctr": 0.0, "avg_results": 34.0}],
+  "demand_gap": [{"query": "phasmophobia", "searches": 6, "last_seen": "2026-10-23 16:40:02"}],
+  "trending": [{"query": "gta 6", "searches": 44, "previous": 12, "growth": 32, "growth_pct": 266.7}],
+  "suspicious": {"count": 2, "samples": [{"ts": "2026-10-22 03:14:15", "query": "1 AND extractvalue(1,concat(0x7e,..."}]},
+  "compare": {"previous_since": "2026-10-10 12:00:00", "previous_until": "2026-10-17 12:00:00",
+              "metrics": {"searches": {"current": 12840, "previous": 11100, "change": 1740, "change_pct": 15.7}}}
+}
+```
 
 The HTML dashboard (M35, English) is a shell that draws the report client-side and
 **refreshes itself**: every `logs.refresh_seconds` (default 30; `0` turns it off) it

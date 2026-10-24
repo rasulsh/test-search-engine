@@ -50,7 +50,8 @@ final class QueryPrep
     {
         $words = preg_split('/\s+/u', trim($text), -1, PREG_SPLIT_NO_EMPTY) ?: [];
         $whole = implode(' ', $words);
-        $capped = trim(mb_substr(implode(' ', array_slice($words, 0, max(1, $maxTokens))), 0, max(1, $maxChars), 'UTF-8'));
+        $kept = implode(' ', array_slice($words, 0, max(1, $maxTokens)));
+        $capped = trim(mb_substr($kept, 0, max(1, $maxChars), 'UTF-8'));
 
         return [$capped, $capped !== $whole];
     }

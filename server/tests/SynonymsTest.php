@@ -50,6 +50,51 @@ final class SynonymsTest extends TestCase
         );
     }
 
+    public function testVersionChangesWithTheFilesContentOnly(): void
+    {
+        $dir = $this->dataDir(null, '[["mafia","مافیا"]]');
+        $first = Synonyms::fromDirectory($dir, 4)->version();
+        self::assertMatchesRegularExpression('/^[0-9a-f]{12}$/', $first);
+
+        self::assertSame($first, Synonyms::fromDirectory($dir, 4)->version());
+
+        // A same-size edit within the same second still changes the version and the groups.
+        $path = $dir . '/' . Synonyms::ALIASES_FILE;
+        $mtime = (int) filemtime($path);
+        file_put_contents($path, '[["mafia","مافیه"]]');
+        touch($path, $mtime);
+        $second = Synonyms::fromDirectory($dir, 4)->version();
+
+        self::assertNotSame($first, $second);
+        self::assertSame(
+            [['مافیه'], ['mafia']],
+            Synonyms::fromDirectory($dir, 4)->variants(['مافیه'], 4)
+        );
+    }
+
+    public function testAnEditedAliasFileIsPickedUpByTheNextCall(): void
+    {
+        $dir = $this->dataDir(null, '[]');
+        self::assertCount(1, Synonyms::fromDirectory($dir, 4)->variants(['مافیا'], 4));
+
+        file_put_contents($dir . '/' . Synonyms::ALIASES_FILE, '[["mafia","مافیا"]]');
+
+        self::assertSame(
+            [['مافیا'], ['mafia']],
+            Synonyms::fromDirectory($dir, 4)->variants(['مافیا'], 4)
+        );
+    }
+
+    public function testSpacingVariantFindsTheAliasWrittenWithOtherSpacing(): void
+    {
+        $synonyms = new Synonyms([['Resident Evil', 'رزیدنت اویل']]);
+
+        self::assertSame('رزیدنت اویل', $synonyms->spacingVariant('رزیدنتاویل'));
+        self::assertSame('resident evil', $synonyms->spacingVariant('residentevil'));
+        self::assertNull($synonyms->spacingVariant('resident evil'), 'the same spelling is no variant');
+        self::assertNull($synonyms->spacingVariant('resident'));
+    }
+
     public function testTermsAreNormalizedLikeQueries(): void
     {
         // Persian digits, half-space and a hyphenated model name, as an owner

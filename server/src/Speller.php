@@ -329,7 +329,10 @@ final class Speller
                 $distance = $termEncoded !== null
                     ? levenshtein($encoded, $termEncoded)
                     : self::distance($token, $term);
-                if ($distance > $threshold || $frequency < $this->minFrequency || !$this->plausible($token, $chars, $term)) {
+                if (
+                    $distance > $threshold || $frequency < $this->minFrequency
+                    || !$this->plausible($token, $chars, $term)
+                ) {
                     continue;
                 }
 

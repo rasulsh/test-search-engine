@@ -93,6 +93,52 @@ final class SpellerTest extends TestCase
         self::assertSame('camera', (new Speller(['camera' => 5], 1))->suggest('camrea'));
     }
 
+    public function testASwappedPairBeatsAnEquallyDistantWord(): void
+    {
+        // Plain Levenshtein ties "battle" and "battery" at 2 and picks the frequent one.
+        $speller = new Speller(['battery' => 50, 'battle' => 3]);
+
+        self::assertSame('battle', $speller->suggest('battel'));
+    }
+
+    public function testShortTokensAndCodesAreNeverCorrected(): void
+    {
+        $speller = new Speller(['mwe' => 40, 'atari' => 30, 'ps5' => 90, 'مدل' => 9]);
+
+        self::assertNull($speller->suggest('mw4'));  // a code, one edit from a word
+        self::assertNull($speller->suggest('ps4'));
+    }
+
+    public function testACandidateShouldShareTheFirstLetterOfAShortTypo(): void
+    {
+        $speller = new Speller(['atari' => 30]);
+
+        self::assertNull($speller->suggest('gtavi'));
+        // A long token may hit its first letter wrong.
+        self::assertSame('playstation', (new Speller(['playstation' => 9]))->suggest('blaystation'));
+    }
+
+    public function testADroppedLetterWordIsNotACorrection(): void
+    {
+        $speller = new Speller(['کالا' => 500, 'باب' => 200]);
+
+        self::assertNull($speller->suggest('کالاف')); // "کالا" is what is left after dropping a letter
+        self::assertNull($speller->suggest('لبتاب'));
+    }
+
+    public function testBlockedGenericWordsAreNotOffered(): void
+    {
+        $speller = new Speller(['item' => 300, 'redd' => 2, 'reds' => 5]);
+
+        self::assertSame('item', $speller->suggest('itam'));
+        self::assertNull($speller->withBlocked(['item'])->suggest('itam'));
+        // The next best candidate is offered when the best is blocked.
+        self::assertSame('reds', $speller->suggest('redz'));
+        self::assertSame('redd', $speller->withBlocked(['reds'])->suggest('redz'));
+        // withBlocked() leaves the original speller alone.
+        self::assertSame('item', $speller->suggest('itam'));
+    }
+
     public function testParseDictionaryReadsPipelineFormat(): void
     {
         // Format written by pipeline/keyword.py: "token<TAB>count", trailing newline.
@@ -242,7 +288,8 @@ final class SpellerTest extends TestCase
                 $swapped = $chars;
                 [$swapped[$i], $swapped[$i + 1]] = [$swapped[$i + 1], $swapped[$i]];
                 $word = implode('', $swapped);
-                if (($vocabulary[$word] ?? 0) >= $minFrequency && ($swap === null || $vocabulary[$word] > $vocabulary[$swap])) {
+                $frequency = $vocabulary[$word] ?? 0;
+                if ($frequency >= $minFrequency && ($swap === null || $frequency > $vocabulary[$swap])) {
                     $swap = $word;
                 }
             }

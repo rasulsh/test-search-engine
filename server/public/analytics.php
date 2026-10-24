@@ -6,6 +6,7 @@
  * latency figures, trends, a weekday x hour heatmap, query lengths and top
  * brands / categories (App\Analytics). Same pattern and the same token as
  * logs.php (`logs.token`). `?window=24h|7d|30d|90d|all` (default 7d);
+ * `?compare=1` adds the previous window's headline figures (JSON);
  * `?format=json` returns the same data as JSON (the dashboard polls it every
  * `logs.refresh_seconds`). The HTML is a shell drawn client-side without any
  * third-party request. UI text is English.
@@ -64,8 +65,9 @@ try {
     $report = (new Analytics(
         $db->pdo(),
         (string) $config['db']['search_logs_table'],
-        (string) $config['db']['products_table']
-    ))->report((string) ($_GET['window'] ?? ''));
+        (string) $config['db']['products_table'],
+        (string) $config['db']['search_events_table']
+    ))->report((string) ($_GET['window'] ?? ''), 20, in_array($_GET['compare'] ?? '', ['1', 'true'], true));
     $report['refresh_seconds'] = max(0, (int) $config['logs']['refresh_seconds']);
 } catch (Throwable) {
     $notice(500, 'Internal error');

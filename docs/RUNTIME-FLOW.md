@@ -10,7 +10,7 @@ Related: the tiers and contracts in [ARCHITECTURE.md](ARCHITECTURE.md), how matc
 storefront JS ── {q, limit?} ──► public/search.php  (or index.php -> search.php)
                                         │  parse JSON, debug-token check, SearchController::fromConfig()
                                         ▼
- 1  normalize q ───────────────────────────────────────────── Normalizer (parity with the pipeline)
+ 1  prepare q: decode entities · cap · probe check · normalize ── QueryPrep, Normalizer (parity with the pipeline)
  2  result cache?  ── hit ───────────────────────────────────► log (cache_hit=1) ─► response
         │ miss/off                       Redis (optional, on the VPS LAN)
         ▼
@@ -19,7 +19,8 @@ storefront JS ── {q, limit?} ──► public/search.php  (or index.php -> s
         │              · soft-AND top-up · facet flag                         MySQL products
         ▼
  4  did-you-mean ── only when < suggest_min_results full-coverage hits and no SKU hit:
-        │             keyboard layout, then spell correction (applied only with 0 literal hits)
+        │             owner alias spelling, keyboard layout (plain words only), then spell correction
+        │             (applied only with 0 literal hits)
         ▼
  5  any-terms fallback ── multi-word, strict AND found nothing → search again, most words first
         ▼
@@ -27,30 +28,33 @@ storefront JS ── {q, limit?} ──► public/search.php  (or index.php -> s
         ▼
  7  Ranker hybrid ── only if step 6 answered: blend + min_relevance floor + boosts + SKU pin
         ▼
- 8  log to search_logs (best effort)
- 9  build response {query, did_you_mean, did_you_mean_applied, count, product_ids, cosine_scores?, debug?}
+ 8  log to search_logs (best effort; v2 columns: uuid, session, stage latencies, alias, flags)
+ 9  build response {search_uuid, query, did_you_mean, did_you_mean_applied, count, product_ids, cosine_scores?, debug?}
 10  cache set (unless degraded) ─► (search.php adds `products` for with_details) ─► JSON
 ```
 
 ## Entry
 
 - **Endpoint:** `POST /search` through the front controller (`public/index.php` routes by file name, so `/search` and `/search.php` both work, at a web root or under a subfolder) or `public/search.php` directly. Both resolve the app through `public/app_base.php` (M30) and load the config with `App\Config::load` (M29, [below](#configuration)).
-- **Request body (JSON):** `{q, limit?, customer_id?, with_details?, debug?}`.
+- **Request body (JSON):** `{q, limit?, customer_id?, session_id?, source?, page?, with_details?, debug?}`.
   - `q` is the raw query text. **The storefront sends only the text: the VPS embeds it.** Nothing embeds in the browser (no model ships to shoppers since M18) and cPanel never runs a model. The `q_vector` mentioned in older material (and in CLAUDE.md's request line) is legacy: a stale client may still send it, and it is ignored.
   - `limit`: the number of ids wanted (default `search.default_limit`). It is clamped to at least 1 and is not capped above.
+  - `session_id` (log v2): an opaque, already hashed storefront session id (letters, digits, `.`, `_`, `-`, at most 64; anything else is dropped), used to group a shopper's searches and flag repeats. `source` (`page`, `autocomplete`, `filter`, `paging`; default `page`) and `page` (1-255) are logged as sent.
   - `customer_id` (string) is only logged. `with_details: true` adds display fields to the response (step 9). `debug: 1` needs the `X-Debug-Token` header matching `debug.token` (`403 debug_forbidden` otherwise) and is never cached or logged.
 - `405` for a non-`POST`, `400 invalid_json` for a body that is not a JSON object, `500 internal_error` for any other failure. A failing Tier 2 never produces an error.
 - `SearchController::fromConfig()` wires the controller from the merged config: the `Keyword` engine (weights, soft-AND, facet knobs), the `Ranker`, the VPS client (`null` when `vps.url` is empty), the optional `Cache` (`null` unless `redis.enabled`), the spell-checker and the business-signal provider.
 
 ## Stages in the order `search()` runs them
 
-### 1. Normalize
+### 1. Prepare and normalize
 
-`Normalizer::normalize($raw)` (ZWNJ / half-space, ی/ک, digit folding, diacritics, model-name canonicalization, whitespace). It mirrors `pipeline/normalize.py` exactly (contract 1), so a query and the indexed `normalized_*` columns agree. An empty normalized query skips the cache and the VPS and returns whatever the keyword tier does with no tokens (nothing).
+A fresh `search_uuid` is drawn first. `QueryPrep::clean()` decodes the HTML entities OpenCart leaves in query strings (twice, so `&amp;#039;` is safe, and the forms whose `&` / `;` were already stripped upstream: `Assassin#039s`, `ampamp`, `ampquot`). A query holding SQL probe fragments (`extractvalue`, `concat(0x`, `union select`, `--`, `sleep(`) is **refused here**: an empty answer, a log row with `is_suspicious = 1`, and no database, spell or VPS work. `QueryPrep::cap()` then cuts the text to `search.query_max_chars` (100) characters and `search.query_max_tokens` (8) words, and **that** text is what every later stage (keyword, recovery, VPS) sees; the caller's `raw` is only echoed and logged.
+
+`Normalizer::normalize()` (ZWNJ becomes a space, bidi marks removed, ی/ک, digit folding, diacritics, model-name canonicalization, whitespace, Roman numerals `ii`-`ix` after a word; version 4). It mirrors `pipeline/normalize.py` exactly (contract 1), so a query and the indexed `normalized_*` columns agree. An empty normalized query skips the cache and the VPS and returns whatever the keyword tier does with no tokens (nothing).
 
 ### 2. Result cache check (M26)
 
-Only when the cache is configured, the request is not `debug` and the normalized query is not empty. The key is the sha1 of `[normalized query, limit, semantic configured?]` under `redis.prefix`. A valid hit returns the stored response immediately: the raw text and `customer_id` are the caller's own, the row is logged with `cache_hit = 1` (and the original `tier` / `had_vector`), and none of stages 3-8 run. A miss, a Redis error, a timeout (`redis.timeout_ms`) or a malformed entry is simply a miss: the search recomputes. Redis is never required.
+Only when the cache is configured, the request is not `debug` and the normalized query is not empty. The key is the sha1 of `[normalized query, limit, semantic configured?, data version]` under `redis.prefix`; the data version is a hash of the contents of `aliases.json` and `synonyms.json` (`Synonyms::version()`), so editing an alias file makes every earlier entry unreachable at once (the files are re-read on each request when their content changed, no restart). A valid hit returns the stored response immediately: the raw text and `customer_id` are the caller's own, the row is logged with `cache_hit = 1` (and the original `tier` / `had_vector`), and none of stages 3-8 run. A miss, a Redis error, a timeout (`redis.timeout_ms`) or a malformed entry is simply a miss: the search recomputes. Redis is never required.
 
 ### 3. Tier 1: keyword (`Keyword::search()`)
 
@@ -71,8 +75,9 @@ A live table that predates the M21 columns (tags, brand, category) or M13 specs 
 
 Tried only when there is **no SKU hit**, the query is not empty and fewer than `search.suggest_min_results` (3) **full-coverage** hits came back (soft-AND partial hits do not count). `recover()` tries, in order:
 
-1. the keyboard-layout remaps (Latin typed on a Persian layout and the reverse, `Keymap`, hard-coded layout), then
-2. the spell-checker (`Speller`: dictionary from the bundle's `spellcheck.txt`, cached per worker and in APCu when available; a data directory without it falls back to a scan of the `products` table), within `search.suggest_max_distance` edits for candidates seen in at least `search.suggest_min_frequency` products.
+1. the owner's alias spelling of the query with other spacing (`Synonyms::spacingVariant()`: `رزیدنتاویل` for the alias `رزیدنت اویل`), then
+2. the keyboard-layout remaps (Latin typed on a Persian layout and the reverse, `Keymap`, hard-coded layout). Only for a query of plain words: any digit or hyphen (`HF-1502`, `GM 2025`) skips it, only purely alphabetic words are remapped, and the remapped query must have a hit naming all its words in the title or tags (a match in descriptions alone is a coincidence of letters), then
+3. the spell-checker (`Speller`: dictionary from the bundle's `spellcheck.txt`, cached per worker and in APCu when available; a data directory without it falls back to a scan of the `products` table), within `search.suggest_max_distance` edits for candidates seen in at least `search.suggest_min_frequency` products. A swapped neighbour pair (`battel` → `battle`) wins over any other candidate; tokens under 4 characters are never corrected; a short token's candidate must share its first letter (`gtavi` is no `atari`); a candidate that is what is left of the token after dropping letters (`کالاف` → `کالا`) or is in `search.suggest_blocklist` (generic words) is skipped. The dictionary holds title, brand and tag words plus the tokens of the owner's aliases.
 
 An alternative is accepted only if it returns **more** full-coverage hits than the literal query. The suggestion is always reported as `did_you_mean`. It is **applied** (its results replace the literal ones, `did_you_mean_applied = true`) only when the literal query had **zero** full-coverage hits; with a thin literal match the shopper's own results stay and the suggestion is only offered.
 
@@ -100,20 +105,20 @@ If stage 6 returned `null`, the keyword order of stages 3-5 is the answer. If it
 
 ### 8. Log
 
-One `search_logs` row, best effort: `ts`, `raw_q`, `normalized_q`, `had_vector` (stage 6 answered), `result_count`, `top_ids` (the first ten), `customer_id`, `latency_ms`, `did_you_mean`, `tier` (`hybrid` when stage 6 answered, else `keyword_only`) and `cache_hit`. A failed write (missing table, a rejected value) goes to `error_log` and never fails the search. A table without `did_you_mean`, `tier` or `cache_hit` is back-filled with `ALTER TABLE` on the first write that needs it, falling back to the columns it has.
+One `search_logs` row, best effort: `ts`, `raw_q`, `normalized_q`, `had_vector` (stage 6 answered), `result_count`, `top_ids` (the first ten), `customer_id`, `latency_ms`, `did_you_mean`, `tier` (`hybrid` when stage 6 answered, else `keyword_only`) and `cache_hit`, plus the log-v2 columns (`log_version = 2`): `search_uuid`, `session_id`, `source`, `page`, `expanded_q` (the alias / synonym variants searched, ` | `-separated) with `alias_hit`, `dym_shown`, `is_capped` (the list reached `search.result_cap`), the per-stage latencies `lat_keyword_ms` / `lat_vector_ms` / `lat_spell_ms` (null on a cache hit or when the stage did not run), `is_suspicious` and `is_duplicate` (the same session, normalized query and page within the last 30 s). The flags and expansion are stored with a cached answer, so a cache hit logs them too. A failed write (missing table, a rejected value) goes to `error_log` and never fails the search. A table without `did_you_mean`, `tier` or `cache_hit` is back-filled with `ALTER TABLE` on the first write that needs it, falling back to the columns it has.
 
 ### 9. Response
 
 ```
-{ "query": {"raw", "normalized"}, "did_you_mean": ?string, "did_you_mean_applied": bool,
+{ "search_uuid": string, "query": {"raw", "normalized"}, "did_you_mean": ?string, "did_you_mean_applied": bool,
   "count": int, "product_ids": [int…], "cosine_scores"?: [?float…], "debug"?: {…} }
 ```
 
-`cosine_scores` appears only on hybrid answers. `debug` (token-guarded) adds `{tier, settings, results[]}` with each id's keyword hit, pin flag and blend detail. `search.php` then adds `products` when `with_details` is true: `ProductDetails` reads `{id, title, url, image, price}` for the returned ids, with `url` / `image` made absolute through `storefront.store_base` / `image_base` when set.
+`search_uuid` is new per request (also on a cache hit); the storefront echoes it to `POST /events`. `cosine_scores` appears only on hybrid answers. `debug` (token-guarded) adds `{tier, settings, results[]}` with each id's keyword hit, pin flag and blend detail. `search.php` then adds `products` when `with_details` is true: `ProductDetails` reads `{id, title, url, image, price}` for the returned ids, with `url` / `image` made absolute through `storefront.store_base` / `image_base` when set.
 
 ### 10. Cache set
 
-The response (and whether it had a vector) is stored under the stage-2 key with TTL `redis.ttl` (or `redis.ttl_hot` for a query looked up `redis.ttl_hot_threshold`+ times, M33; the counter is bumped by every stage-2 lookup, hit or miss, not by writes), unless it is a **degraded** answer: when a VPS is configured but stage 6 returned `null` (down, slow, failing), the keyword-only answer is **not** cached, so a transient failure never outlives its request. Debug responses are never stored. `POST /reload` flushes every key under `redis.prefix` after a successful swap.
+The response (and whether it had a vector) is stored under the stage-2 key with TTL `redis.ttl` (an answer with **no results** lives `redis.ttl_zero`, 300 s, instead: it may be a gap an alias or a reload is about to close; otherwise `redis.ttl_hot` for a query looked up `redis.ttl_hot_threshold`+ times, M33; the counter is bumped by every stage-2 lookup, hit or miss, not by writes), unless it is a **degraded** answer: when a VPS is configured but stage 6 returned `null` (down, slow, failing), the keyword-only answer is **not** cached, so a transient failure never outlives its request. Debug responses are never stored. `POST /reload` flushes every key under `redis.prefix` after a successful swap.
 
 ## Components and data
 

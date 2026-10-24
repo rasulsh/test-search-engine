@@ -265,6 +265,9 @@ final class Config
             'redis.timeout_ms' => ['int', 100],
             'redis.prefix'     => ['string', 'search:cache:'],
 
+            // Origin the storefront runs on, for a fetch()-based events call; sendBeacon needs none.
+            'events.allowed_origin' => ['string', ''],
+
             'debug.token'     => ['string', ''],
             'logs.token'      => ['string', ''],
             'logs.page_size'  => ['int', 50],

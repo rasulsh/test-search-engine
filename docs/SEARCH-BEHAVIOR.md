@@ -144,11 +144,19 @@ query has fewer than `search.suggest_min_results` keyword hits, and a
 suggestion is returned only if it has more hits than the literal query (with no
 literal hit, its results are served; see `did_you_mean_applied` in
 INTEGRATION.md). Its vocabulary is the bundle's `spellcheck.txt`, built from
-product titles, brand, category and model only (descriptions contribute rare
-incidental words that won corrections on the real catalog), with one count per
-product. Candidates must appear in at least `search.suggest_min_frequency`
+product titles, brand and tags plus the tokens of the owner's aliases (descriptions,
+categories and model codes contributed rare or generic words that won corrections
+on the real catalog: `کالا`, `mwe`), with one count per product. Candidates must appear in at least `search.suggest_min_frequency`
 products and lie within `search.suggest_max_distance` edits (1 edit for tokens
-of 4 characters or fewer). A known word, however rare, is never corrected.
+of 4 characters or fewer). A known word, however rare, is never corrected, and
+neither is a token under 4 characters (a code such as `mw4`). Among candidates a
+swapped neighbour pair (`battel` → `battle`) wins; a short token's candidate must
+share its first letter (`gtavi` is not `atari`); what is left after dropping letters
+from the token (`کالاف` → `کالا`) and the words of `search.suggest_blocklist` are
+never offered. An owner alias written with other spacing (`رزیدنتاویل` for
+`رزیدنت اویل`) is tried before any of this, and the keyboard-layout fix only runs
+for a query of plain words (no digit or hyphen) and needs a result naming the
+remapped words in its title or tags.
 Bundles built before M9 still work, but their dictionary includes description
 words; rebuild to get the high-signal one. The dictionary is cached
 like the vectors: parsed once per PHP worker, and stored in APCu (about 3 MB for

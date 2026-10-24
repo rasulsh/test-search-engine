@@ -78,7 +78,8 @@ abstraction layers.
 ├── .gitignore
 ├── .github/workflows/ci.yml
 ├── db/
-│   └── schema.sql                # products (+FULLTEXT), search_logs
+│   ├── schema.sql                # products (+FULLTEXT), search_logs, search_events
+│   └── migrations/               # idempotent one-off SQL with a rollback section (M37)
 ├── pipeline/                     # OFFLINE, developer GPU machine (Python 3.11+)
 │   ├── build.py                  # orchestrator: SQL in -> bundle out
 │   ├── normalize.py              # Persian normalization (canonical rules)
@@ -95,6 +96,7 @@ abstraction layers.
 │   │   ├── search.php            # POST /search
 │   │   ├── health.php            # GET /health
 │   │   ├── reload.php            # POST /reload (token-protected, atomic swap)
+│   │   ├── events.php            # POST /events (M37: click / cart / order / dym_click by search_uuid)
 │   │   └── logs.php              # GET /logs.php (M21: token-protected, read-only search_logs view)
 │   │   ├── analytics.php         # GET /analytics.php (M31: logs.token, read-only aggregates, ?format=json)
 │   ├── src/
@@ -105,12 +107,15 @@ abstraction layers.
 │   │   ├── RedisClient.php        # minimal in-repo RESP client for Cache (no Composer package)
 │   │   ├── Ranker.php             # hybrid merge + business ranking
 │   │   ├── IntentMap.php          # intent word -> category / tag names for the boosts (M34)
-│   │   ├── Logger.php             # search logs (incl. did_you_mean, tier)
+│   │   ├── QueryPrep.php          # entity decode, query cap, SQL-probe refusal (M37)
+│   │   ├── Events.php             # search_events writer for events.php (M37)
+│   │   ├── Logger.php             # search logs (incl. did_you_mean, tier; v2 columns, M37)
 │   │   ├── LogsPage.php           # read-only search_logs view for logs.php (M21)
 │   │   ├── Db.php                 # thin PDO wrapper
 │   │   ├── Config.php             # config schema + every default; load() merges config.php overrides (M29)
 │   │   ├── ConfigDoctor.php       # checks config.php against the schema (M29)
 │   │   ├── Analytics.php          # read-only search_logs aggregates (M31)
+│   │   ├── AnalyticsInsights.php  # log-v2 metrics: engagement, alias candidates, compare, ... (M37)
 │   │   ├── AnalyticsPage.php      # dashboard shell for analytics.php (M31, v2 in M35)
 │   │   ├── AnalyticsPage.js       # M35: client-side SVG dashboard + refresh (no third-party code)
 │   │   └── AnalyticsPage.css      # M35: dashboard styles (light / dark)
@@ -354,6 +359,12 @@ wait for review before starting the next.
   keys verified normalized at build), `IntentMap` resolving intent words per query, fed into
   the Ranker's existing category / tag match boosts (hybrid only, after the floor, no new
   knob); `search.intent_max_terms`; `/reload` rejects a malformed file (`invalid_intent_map`).
+
+- **M37 — Search fixes round:** normalization version 4 (ZWNJ → space, bidi marks stripped, `v` / `x`
+  never numerals, `ii`-`ix` only after a word; both normalizers + fixture), `QueryPrep` (entities, query
+  cap, probe refusal), alias-versioned result-cache key + `redis.ttl_zero`, "did you mean" quality rules,
+  `search_logs` v2 + `search_events` (`db/migrations/`, `POST /events`), `AnalyticsInsights` (new analytics
+  keys, `compare=1`), seed aliases. Needs a bundle rebuild (version 4) and the log migration.
 
 - **M22 — Offline build speed + reliable export:** `pipeline/db_export.py`
   (direct DB -> CSV, replaces the phpMyAdmin export), GPU/fp16/batch-configured

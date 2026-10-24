@@ -108,6 +108,43 @@ final class EventsEndpointTest extends TestCase
         self::assertSame($answer['product_ids'][0], (int) $row['product_id']);
     }
 
+    public function testServerSideCartAndOrderAsApplicationJsonAreRecorded(): void
+    {
+        [, $body] = $this->call('POST', '/search', '{"q":"sony"}', 'application/json');
+        $answer = json_decode($body, true);
+
+        foreach (['cart', 'order'] as $action) {
+            [$status] = $this->call('POST', '/events', (string) json_encode([
+                'search_uuid' => $answer['search_uuid'], 'product_id' => $answer['product_ids'][0],
+                'position' => 1, 'action' => $action,
+            ]), 'application/json');
+            self::assertSame(204, $status, $action);
+        }
+        $actions = $this->pdo?->query('SELECT action FROM search_events ORDER BY id')->fetchAll(PDO::FETCH_COLUMN);
+        self::assertSame(['cart', 'order'], $actions);
+    }
+
+    public function testTheOriginOfTheCallerIsNeverChecked(): void
+    {
+        // pspro.ir is not the configured allowed_origin: a beacon is write-only, so the
+        // browser needs no CORS answer and the server gates on the search_uuid alone.
+        [, $body] = $this->call('POST', '/search', '{"q":"sony"}', 'application/json');
+        $answer = json_decode($body, true);
+        $context = stream_context_create(['http' => [
+            'method' => 'POST', 'ignore_errors' => true, 'timeout' => 10,
+            'header' => "Content-Type: text/plain;charset=UTF-8\r\nOrigin: https://pspro.ir\r\n",
+            'content' => (string) json_encode([
+                'search_uuid' => $answer['search_uuid'], 'product_id' => 0, 'position' => 0, 'action' => 'dym_click',
+            ]),
+        ]]);
+        file_get_contents($this->baseUrl . '/events.php', false, $context);
+        preg_match('#HTTP/\S+ (\d+)#', implode("\n", $http_response_header ?? []), $m);
+
+        self::assertSame('204', $m[1]);
+        self::assertSame(1, (int) $this->pdo?->query("SELECT COUNT(*) FROM search_events WHERE action='dym_click'")
+            ->fetchColumn());
+    }
+
     public function testBadRequestsAreRefused(): void
     {
         self::assertSame(400, $this->call('POST', '/events', 'not json', 'text/plain')[0]);

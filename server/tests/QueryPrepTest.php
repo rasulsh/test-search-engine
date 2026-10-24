@@ -43,6 +43,8 @@ final class QueryPrepTest extends TestCase
             ['mafia; select sleep(5)'],
             ['SLEEP (3)'],
             ["mafia' -- "],
+            ['admin" --'],
+            ['x` -- y'],
             ['concat( 0x41'],
         ];
     }
@@ -55,7 +57,10 @@ final class QueryPrepTest extends TestCase
 
     public function testOrdinaryQueriesAreNotFlagged(): void
     {
-        foreach (['gta v', 'PS5 slim - white', 'selection of unions', 'sleeping bag', 'مافیا', "o'reilly"] as $query) {
+        foreach (
+            ['gta v', 'PS5 slim - white', 'selection of unions', 'sleeping bag', 'مافیا', "o'reilly",
+            'ps5 -- slim', 'a--b', '-- 5', 'ps4 --'] as $query
+        ) {
             self::assertFalse(QueryPrep::isSuspicious($query), $query);
         }
     }

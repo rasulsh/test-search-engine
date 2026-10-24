@@ -7,15 +7,14 @@
 -- your config.php before running if you changed them.
 --
 -- Apply:    mysql search_db < db/migrations/2026-10-24_search_logs_v2.sql
--- Rollback: run only the DOWN section (everything after the marker line below).
---           It drops the new columns, so v2 data is lost; take a dump first.
+-- Rollback: mysql search_db < db/migrations/2026-10-24_search_logs_v2.down.sql
+--           (a separate file, so applying this one never undoes itself). It drops the
+--           new columns, so v2 data is lost; take a dump first.
 --
 -- The app also adds the missing COLUMNS itself on its first log write (Logger),
 -- when its database user may ALTER. The indexes only come from this file.
 
 SET NAMES utf8mb4;
-
--- ==== UP ====
 
 ALTER TABLE search_logs
   ADD COLUMN IF NOT EXISTS log_version    TINYINT UNSIGNED NOT NULL DEFAULT 1,
@@ -46,26 +45,3 @@ CREATE TABLE IF NOT EXISTS search_events (
   KEY idx_search (search_uuid),
   KEY idx_ts (ts)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-
--- ==== DOWN (rollback) ====
-
-DROP TABLE IF EXISTS search_events;
-
-ALTER TABLE search_logs
-  DROP INDEX IF EXISTS idx_uuid,
-  DROP INDEX IF EXISTS idx_nq,
-  DROP INDEX IF EXISTS idx_session,
-  DROP COLUMN IF EXISTS is_duplicate,
-  DROP COLUMN IF EXISTS is_suspicious,
-  DROP COLUMN IF EXISTS lat_spell_ms,
-  DROP COLUMN IF EXISTS lat_vector_ms,
-  DROP COLUMN IF EXISTS lat_keyword_ms,
-  DROP COLUMN IF EXISTS is_capped,
-  DROP COLUMN IF EXISTS dym_shown,
-  DROP COLUMN IF EXISTS alias_hit,
-  DROP COLUMN IF EXISTS expanded_q,
-  DROP COLUMN IF EXISTS page,
-  DROP COLUMN IF EXISTS source,
-  DROP COLUMN IF EXISTS session_id,
-  DROP COLUMN IF EXISTS search_uuid,
-  DROP COLUMN IF EXISTS log_version;

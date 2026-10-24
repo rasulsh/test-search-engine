@@ -7,8 +7,9 @@ namespace App\Tests;
 use App\Logger;
 
 /**
- * db/migrations/2026-10-24_search_logs_v2.sql: idempotent UP, a rollback that
- * restores the old shape, and a Logger that upgrades a table nobody migrated.
+ * db/migrations/2026-10-24_search_logs_v2.sql: the idempotent UP file (run whole, as
+ * `mysql db < file`), the separate .down file that restores the old shape, and a
+ * Logger that upgrades a table nobody migrated.
  */
 final class LogMigrationTest extends DatabaseTestCase
 {
@@ -33,14 +34,27 @@ final class LogMigrationTest extends DatabaseTestCase
         $this->pdo->exec("INSERT INTO search_logs (raw_q) VALUES ('old row')");
     }
 
-    /** @return array{up: string, down: string} */
-    private function sections(): array
-    {
-        $sql = (string) file_get_contents(self::repoRoot() . '/db/migrations/2026-10-24_search_logs_v2.sql');
-        [$head, $down] = explode('-- ==== DOWN (rollback) ====', $sql);
-        [, $up] = explode('-- ==== UP ====', $head);
+    private const V2_COLUMNS = ['log_version', 'search_uuid', 'session_id', 'source', 'page', 'expanded_q',
+        'alias_hit', 'dym_shown', 'is_capped', 'lat_keyword_ms', 'lat_vector_ms', 'lat_spell_ms',
+        'is_suspicious', 'is_duplicate'];
+    private const V2_INDEXES = ['idx_session', 'idx_nq', 'idx_uuid'];
 
-        return ['up' => $up, 'down' => $down];
+    private function file(string $suffix): string
+    {
+        return (string) file_get_contents(
+            self::repoRoot() . '/db/migrations/2026-10-24_search_logs_v2' . $suffix . '.sql'
+        );
+    }
+
+    /** The whole file, exactly what `mysql db < file` would run. */
+    private function up(): string
+    {
+        return $this->file('');
+    }
+
+    private function down(): string
+    {
+        return $this->file('.down');
     }
 
     /** @return list<string> */
@@ -58,35 +72,48 @@ final class LogMigrationTest extends DatabaseTestCase
         )));
     }
 
-    public function testUpIsIdempotentAndKeepsOldRows(): void
+    public function testTheUpFileHoldsNoRollback(): void
     {
-        $up = $this->sections()['up'];
-        $this->pdo->exec($up);
-        $this->pdo->exec($up);
-
-        self::assertContains('search_uuid', $this->columns());
-        self::assertContains('is_duplicate', $this->columns());
-        self::assertEqualsCanonicalizing(['PRIMARY', 'idx_ts', 'idx_session', 'idx_nq', 'idx_uuid'], $this->indexes());
-        self::assertSame(1, (int) $this->pdo->query('SELECT log_version FROM search_logs')->fetchColumn());
-        self::assertSame(0, (int) $this->pdo->query('SELECT COUNT(*) FROM search_events')->fetchColumn());
+        // Piping the file into mysql must never undo itself.
+        self::assertDoesNotMatchRegularExpression('/^\s*(DROP|TRUNCATE)\b/mi', $this->up());
+        self::assertDoesNotMatchRegularExpression('/DROP\s+(COLUMN|INDEX)/i', $this->up());
     }
 
-    public function testDownRestoresTheOldShapeAndCanRunAgain(): void
+    public function testTheWholeUpFileTwiceLeavesEveryV2ColumnIndexAndTable(): void
     {
-        $sections = $this->sections();
-        $this->pdo->exec($sections['up']);
-        $this->pdo->exec($sections['down']);
-        $this->pdo->exec($sections['down']);
+        $this->pdo->exec($this->up());
+        $this->pdo->exec($this->up());
+
+        self::assertSame([], array_diff(self::V2_COLUMNS, $this->columns()));
+        self::assertCount(14, array_intersect(self::V2_COLUMNS, $this->columns()));
+        self::assertSame([], array_diff(self::V2_INDEXES, $this->indexes()));
+        self::assertEqualsCanonicalizing(['PRIMARY', 'idx_ts', 'idx_session', 'idx_nq', 'idx_uuid'], $this->indexes());
+        self::assertSame(
+            ['search_events'],
+            $this->pdo->query("SHOW TABLES LIKE 'search_events'")->fetchAll(\PDO::FETCH_COLUMN)
+        );
+        self::assertSame(
+            ['search_uuid', 'product_id', 'position', 'action', 'ts'],
+            array_slice(array_map(
+                'strval',
+                $this->pdo->query('SHOW COLUMNS FROM search_events')->fetchAll(\PDO::FETCH_COLUMN)
+            ), 1)
+        );
+        self::assertSame(1, (int) $this->pdo->query('SELECT log_version FROM search_logs')->fetchColumn());
+    }
+
+    public function testTheDownFileRestoresTheOldShapeAndCanRunAgain(): void
+    {
+        $this->pdo->exec($this->up());
+        $this->pdo->exec($this->down());
+        $this->pdo->exec($this->down());
 
         self::assertSame(self::OLD_COLUMNS, $this->columns());
         self::assertEqualsCanonicalizing(['PRIMARY', 'idx_ts'], $this->indexes());
         self::assertSame('old row', $this->pdo->query('SELECT raw_q FROM search_logs')->fetchColumn());
-        self::assertSame(
-            [],
-            $this->pdo->query("SHOW TABLES LIKE 'search_events'")->fetchAll()
-        );
+        self::assertSame([], $this->pdo->query("SHOW TABLES LIKE 'search_events'")->fetchAll());
 
-        $this->pdo->exec($sections['up']); // and back up again
+        $this->pdo->exec($this->up()); // and back up again
         self::assertContains('log_version', $this->columns());
     }
 
@@ -115,7 +142,7 @@ final class LogMigrationTest extends DatabaseTestCase
         $this->pdo->exec('DROP TABLE search_logs');
         $this->pdo->exec('DROP TABLE search_events');
         $this->setUp();
-        $this->pdo->exec($this->sections()['up']);
+        $this->pdo->exec($this->up());
 
         self::assertEqualsCanonicalizing($fromSchema, $this->columns());
         self::assertEqualsCanonicalizing($schemaIndexes, array_merge($this->indexes(), ['idx_ts_result']));

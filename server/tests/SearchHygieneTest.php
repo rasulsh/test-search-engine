@@ -191,7 +191,7 @@ final class SearchHygieneTest extends DatabaseTestCase
         self::assertSame(2, (int) $log['log_version']);
         self::assertSame($result['search_uuid'], $log['search_uuid']);
 
-        foreach (['x union select 1', 'a sleep(5)', 'a -- b', 'x concat(0x41)'] as $other) {
+        foreach (['x union select 1', 'a sleep(5)', "a' -- b", 'x concat(0x41)'] as $other) {
             self::assertSame(0, $this->controller()->search(['q' => $other])['count'], $other);
             self::assertSame(1, (int) $this->lastLog()['is_suspicious']);
         }
@@ -216,6 +216,18 @@ final class SearchHygieneTest extends DatabaseTestCase
         self::assertNotNull($log['lat_keyword_ms']);
         self::assertNull($log['lat_vector_ms'], 'no VPS configured');
         self::assertSame(0, (int) $log['is_suspicious']);
+    }
+
+    public function testTheFutureStorefrontRequestIsLoggedAsSent(): void
+    {
+        $session = md5('php-session-id');
+        $this->controller()->search([
+            'q' => "Assassin's Creed", 'limit' => 300, 'customer_id' => '7',
+            'session_id' => $session, 'source' => 'paging', 'page' => 3,
+        ]);
+        $log = $this->lastLog();
+
+        self::assertSame([$session, 'paging', 3], [$log['session_id'], $log['source'], (int) $log['page']]);
     }
 
     public function testBadSessionSourceAndPageFallBackToDefaults(): void

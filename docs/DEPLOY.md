@@ -392,8 +392,9 @@ the normalization rules (version 4), the code, the log schema and the storefront
    the old code ignores them): `mysql search_db < db/migrations/2026-10-24_search_logs_v2.sql`
    (also in `release.zip` under `db/migrations/`). It is idempotent. The service also adds the
    missing *columns* itself on its first log write when its database user may `ALTER`; the three
-   new indexes only come from the file. Rollback: run the part of the file after
-   `==== DOWN (rollback) ====` (drops the v2 columns and `search_events`; their data is lost).
+   new indexes only come from the file. Rollback: `mysql search_db <
+   db/migrations/2026-10-24_search_logs_v2.down.sql` (a separate file; drops the v2 columns,
+   their indexes and `search_events`; their data is lost).
 3. **Rebuild and deploy code and bundle in one step.** Normalization version 4 changes the
    indexed columns (ZWNJ is a space now), so build with `release.py` on the GPU machine, then
    extract `release.zip` and immediately `POST /reload?load=1`. The bundle refuses to load

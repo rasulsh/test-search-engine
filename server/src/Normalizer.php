@@ -12,13 +12,15 @@ namespace App;
  * Bump VERSION here and NORMALIZATION_VERSION there together when rules change;
  * config and meta.json follow the constants, so nothing else needs editing.
  *
- * Rules, in order: remove zero-width chars (incl. ZWNJ), remove Arabic diacritics
- * and tatweel, unify Arabic letters to Persian, fold Persian/Arabic-Indic digits,
- * lowercase (Latin), canonicalize model names (drop -, _, ., / between ASCII
- * alphanumerics), collapse whitespace and trim, then map standalone Roman
- * numerals ii..x to digits (whole tokens only, never right after a number
- * token and a space, where "x" / "v" are a dimension or a unit: "2 x 4",
- * "12 v"; "a7 iv" still maps; "i" is never mapped).
+ * Rules, in order: turn ZWNJ (the Persian half-space) into a space, remove other
+ * zero-width and bidi / format chars, remove Arabic diacritics and tatweel,
+ * unify Arabic letters to Persian, fold Persian/Arabic-Indic digits, lowercase
+ * (Latin), canonicalize model names (drop -, _, ., / between ASCII
+ * alphanumerics), collapse whitespace and trim, then map the Roman numerals
+ * ii..ix (but never "v" / "x", which are a variant letter, a dimension or a
+ * unit) to digits: whole tokens only, and only right after a token holding a
+ * letter ("gta vi", "a7 iv"; not "12 vi", not at the start). "i" is never
+ * mapped.
  *
  * collapse() is a derived form, not a rule of normalize(): the normalized text
  * with every non-letter/non-digit removed ("far cry" -> "farcry"). normalize()
@@ -26,22 +28,28 @@ namespace App;
  */
 final class Normalizer
 {
-    public const VERSION = 3;
+    public const VERSION = 4;
 
     private const ROMAN = [
-        'ii' => '2', 'iii' => '3', 'iv' => '4', 'v' => '5', 'vi' => '6',
-        'vii' => '7', 'viii' => '8', 'ix' => '9', 'x' => '10',
+        'ii' => '2', 'iii' => '3', 'iv' => '4', 'vi' => '6', 'vii' => '7', 'viii' => '8', 'ix' => '9',
     ];
 
     public static function normalize(?string $text): string
     {
-        return (string) preg_replace_callback(
-            // A preceding number token is matched (group 1) and left unchanged;
-            // mirrors normalize.py, whose lookbehind cannot be variable-width.
-            '/(?<![\p{L}\p{N}])([0-9]+ )?(viii|vii|iii|ix|iv|vi|ii|v|x)(?![\p{L}\p{N}])/u',
-            static fn (array $m): string => $m[1] !== '' ? $m[0] : self::ROMAN[$m[2]],
-            self::canonical($text)
-        );
+        $tokens = explode(' ', self::canonical($text));
+        $afterWord = false;
+        foreach ($tokens as $i => $token) {
+            if (
+                $afterWord
+                && preg_match('/^([^\p{L}\p{N}]*)(viii|vii|iii|iv|vi|ix|ii)([^\p{L}\p{N}]*)$/u', $token, $m) === 1
+            ) {
+                $tokens[$i] = $m[1] . self::ROMAN[$m[2]] . $m[3];
+            }
+            // The original token decides, so "gta vi ii" maps both.
+            $afterWord = preg_match('/\p{L}/u', $token) === 1;
+        }
+
+        return implode(' ', $tokens);
     }
 
     /**
@@ -100,12 +108,15 @@ final class Normalizer
         $search = [];
         $replace = [];
 
-        // Removed: zero-width chars, Arabic diacritics (harakat U+064B..U+0652,
-        // maddah U+0653, hamza above U+0654), superscript alef (U+0670),
-        // tatweel (U+0640).
-        $remove = [0x200B, 0x200C, 0x200D, 0xFEFF, 0x0670, 0x0640];
-        for ($cp = 0x064B; $cp <= 0x0654; $cp++) {
-            $remove[] = $cp;
+        // Removed: zero-width chars (not ZWNJ, which becomes a space below), bidi
+        // marks and embeddings / isolates (U+200E, U+200F, U+202A..U+202E,
+        // U+2066..U+2069), Arabic diacritics (harakat U+064B..U+0652, maddah
+        // U+0653, hamza above U+0654), superscript alef (U+0670), tatweel (U+0640).
+        $remove = [0x200B, 0x200D, 0xFEFF, 0x200E, 0x200F, 0x0670, 0x0640];
+        foreach ([[0x202A, 0x202E], [0x2066, 0x2069], [0x064B, 0x0654]] as [$from, $to]) {
+            for ($cp = $from; $cp <= $to; $cp++) {
+                $remove[] = $cp;
+            }
         }
         foreach ($remove as $cp) {
             $search[] = self::chr($cp);
@@ -139,9 +150,10 @@ final class Normalizer
             $replace[] = (string) $i;
         }
 
-        // Whitespace variants -> plain ASCII space.
+        // Whitespace variants -> plain ASCII space (ZWNJ included: the half-space
+        // separates the two words of a Persian compound).
         $whitespace = [
-            0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0xA0, 0x1680,
+            0x200C, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0xA0, 0x1680,
             0x2000, 0x2001, 0x2002, 0x2003, 0x2004, 0x2005,
             0x2006, 0x2007, 0x2008, 0x2009, 0x200A,
             0x2028, 0x2029, 0x202F, 0x205F, 0x3000,

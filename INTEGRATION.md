@@ -68,6 +68,7 @@ Request headers: `Content-Type: application/json`.
 {
   "q": "لپ تاپ سبک",
   "customer_id": "42",
+  "session_id": "5d41402abc4b2a76b9719d911017c592",
   "limit": 20
 }
 ```
@@ -76,6 +77,9 @@ Request headers: `Content-Type: application/json`.
 | --- | --- | --- | --- |
 | `q` | string | yes | Raw query text as the shopper typed it. It is also what the service sends to the VPS for the semantic tier. A missing, non-string or blank `q` is treated as `""` and returns no results (the VPS is not asked). |
 | `customer_id` | string | no | Stored in `search_logs` only. **Must be a JSON string.** A number is silently logged as `NULL`, so send `String(id)`. Longer than 64 characters: the search is answered but its log row is dropped. |
+| `session_id` | string | no | Log v2. An opaque **hash** of the OpenCart session id (`md5($this->session->getId())` is enough; never send the raw id): letters, digits, `.`, `_`, `-`, at most 64 characters, anything else is ignored. It groups one shopper's searches (searches per session, the zero-result → reformulation pairs behind the alias candidates) and flags a repeated submit (`is_duplicate`: same session, normalized query and page within 30 s). |
+| `source` | string | no | Where the search came from: `page` (default), `autocomplete`, `filter` or `paging`. Logged only; anything else becomes `page`. |
+| `page` | int | no | The results page the shopper is on (1-255, default 1). Logged only: `limit` still decides how many ids come back. |
 | `limit` | int | no | Maximum number of ids to return. Values below 1, or non-numeric values, are treated as 1. The default is `search.default_limit` (20). There is no server-side maximum, so the storefront should keep it at 50 or less. |
 | `with_details` | bool | no | Only the JSON value `true` enables it (a string `"true"` or `1` is ignored). Adds a `products` array with display fields. Omit it and the response is exactly as below. Used by the search test page; the storefront renders from OpenCart and does not need it. |
 | `debug` | `1` / `true` | no | M21, operator tooling, not for the storefront. Adds a per-result score breakdown (`debug`, below). Needs the header `X-Debug-Token` equal to the configured `SEARCH_DEBUG_TOKEN`; without a configured token, or with a wrong or missing header, the request is refused `403 debug_forbidden` and not run. The breakdown is never logged. |
@@ -84,6 +88,7 @@ Response `200`:
 
 ```json
 {
+  "search_uuid": "0b6a1d3e-5c52-4f7a-9d77-1c2f3a4b5c6d",
   "query": { "raw": "لپ تاپ سبک", "normalized": "لپ تاپ سبک" },
   "did_you_mean": null,
   "did_you_mean_applied": false,
@@ -94,6 +99,7 @@ Response `200`:
 
 | field | meaning |
 | --- | --- |
+| `search_uuid` | A new random UUID for every request (also for an answer served from the cache). Echo it to `POST /events` with what the shopper does with the results. |
 | `query.raw` | `q` echoed back. |
 | `query.normalized` | `q` after Persian normalization (the canonical rules, contract 1). |
 | `did_you_mean` | `null`, or a keyboard-layout fix (`ئشزذخخن` → `macbook`) or spelling fix (`macbok` → `macbook`). Only tried when the literal query has fewer than `search.suggest_min_results` (3) keyword hits, and only returned when the suggestion itself has **more** keyword hits than the literal query, so it never points to an empty result. It derives from shopper input, so render it as text, never as HTML. |
@@ -130,8 +136,11 @@ Semantics the storefront should know:
   description does not match.
 - Name forms are matched across the bundle's synonyms and the shop's aliases
   (`gta 5` also finds "Grand Theft Auto V" and "جی تی ای ۵"), and standalone
-  Roman numerals equal digits (`GTA V` = `GTA 5`, so `query.normalized` shows
-  `gta 5`). The response shape is unchanged.
+  Roman numerals `ii`-`ix` equal digits after a word (`GTA VI` = `GTA 6`; a lone `v` or `x`
+  is never a number, so `query.normalized` of `GTA V` is `gta v`, and the owner alias group
+  `gta 5` = `gta v` keeps the two spellings together). A query is also cut to 100 characters
+  and 8 words before it is searched, HTML entities in it are decoded, and a query that
+  contains SQL fragments gets an empty answer. The response shape is unchanged.
 - **Hybrid** (the VPS answered): cosine neighbours below
   `search.semantic_min_score` are dropped, and so are keyword hits that match
   only in the description (not the title or specs) with a cosine below it
@@ -162,6 +171,23 @@ debug_forbidden` (`debug` asked without a valid debug token), `405
 method_not_allowed` (not a `POST`), `500 internal_error` (such as a database
 outage). On any non-`200`, fall back to OpenCart's native search. See the
 snippet below.
+
+### `POST /events`
+
+Result tracking (log v2). The page that received a `search_uuid` reports what the shopper did, one small call per event; the numbers feed `analytics.php` (click-through, MRR, cart and order rates, silent failures, alias candidates). No token: the unguessable `search_uuid` is the capability, and the endpoint refuses unknown ids, unknown actions and a repeat of the same event within 5 seconds.
+
+```json
+{ "search_uuid": "0b6a1d3e-5c52-4f7a-9d77-1c2f3a4b5c6d", "product_id": 43, "position": 3, "action": "click" }
+```
+
+| field | meaning |
+| --- | --- |
+| `search_uuid` | from the `/search` response (required) |
+| `product_id` | the product (required, at least 1; send `0` for `dym_click`) |
+| `position` | 1-based place in the results (0-65535), for the mean click position and MRR |
+| `action` | `click` (default), `cart`, `order` or `dym_click` (the "did you mean" link) |
+
+Answers `204` (recorded, or a repeat), `400` (malformed), `404` (unknown `search_uuid`), `405`. Send it with `navigator.sendBeacon(url, JSON.stringify(body))`: the body goes as `text/plain`, which a browser sends cross-origin without a preflight, and survives the page unloading. For a `fetch()` from another origin set `events.allowed_origin`. The table is `search_events` (`db/schema.sql`, `db/migrations/2026-10-24_search_logs_v2.sql`).
 
 ### `GET /logs.php`
 
@@ -350,6 +376,26 @@ What the storefront does per search:
 | VPS configured and answering within `vps.timeout_ms` | `q` | hybrid |
 | No VPS configured, or VPS down, slow, or erroring | `q` | keyword-only (still `200`) |
 | Search service down or non-`200` | redirect | OpenCart native search |
+
+**Result tracking (optional, log v2).** Keep the `search_uuid` of the answer the page was rendered from and report to `/events`:
+
+1. *Session.* Send `session_id` with the search (a hash of the OpenCart session id).
+2. *Click.* Give every product link on the results page `data-search-pid` and `data-search-pos` and add one listener (no framework):
+
+   ```js
+   document.addEventListener('click', function (e) {
+     var a = e.target.closest('a[data-search-pid]');
+     if (a) {
+       navigator.sendBeacon(EVENTS_URL, JSON.stringify({
+         search_uuid: SEARCH_UUID, product_id: +a.dataset.searchPid,
+         position: +a.dataset.searchPos, action: 'click'
+       }));
+     }
+   }, true);
+   ```
+
+   The "did you mean" link sends `{search_uuid, product_id: 0, position: 0, action: 'dym_click'}` the same way.
+3. *Cart and order.* Put `&search_uuid=…&search_pos=…` on the product link; the OpenCart `product/product` controller keeps `$this->session->data['search_hits'][$product_id] = [uuid, pos]`. The add-to-cart handler (and the cart button on the results page itself) reports `cart` for that product, and `checkout/success` reports `order` for every ordered product found in `search_hits`. Both are one server-side `file_get_contents` / curl `POST` of the JSON above with a 1-second timeout and the error ignored: tracking must never delay a page.
 
 The snippet expects a form with a text input and two output elements. The
 OpenCart module prints the logged-in customer id (or nothing) into

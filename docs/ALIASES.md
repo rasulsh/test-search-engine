@@ -100,3 +100,26 @@ catalog or the [intent map](SEARCH-BEHAVIOR.md#intent-map), which is curated by
 hand (a later extension of this generator could propose intent-map entries). The
 rate to watch is the zero-result rate on the [analytics
 dashboard](SEARCH-API.md#analytics): it should fall after each cycle.
+
+## Editing the live alias file (M37)
+
+The service re-reads `aliases.json` and `synonyms.json` on every request when their
+**content** changed: an edit of `server/data/aliases.json` is live on the next search with no
+restart, and the result-cache key carries a hash of the two files, so no cached answer from
+before the edit is served. A key is normalized with the same function as a query
+(Arabic ي/ك, ZWNJ, capitals, digits), so a hand-typed entry matches. The file must stay valid
+JSON (a list of lists of strings): an unreadable file is skipped, not fatal.
+
+`server/data/` is replaced by the bundle's copy on every `/reload`. Make a lasting edit in
+`pipeline/aliases.json` and rebuild; an edit made only on the server is a stop-gap.
+
+Since normalization version 4 a lone `v` / `x` is not a number, so a title that ends in one
+needs a group of its own: `["gta 5", "gta v", "grand theft auto 5", "grand theft auto v", …]`
+(shipped). `gta vi` still normalizes to `gta 6`.
+
+The seed groups for the zero-result queries seen in the first real logs (`مافیا`, `ولورینگ`,
+`گادوار`, `رزیدنت اویل`, `مورتال`, `ردد`, `کالاف`, `شیفتر`, `فرمون`, `گوست`, `زلدا`, `ویچر`,
+`اساسین`, `ماینکرافت`, `آیینه`, `بازی اکانتی`, `پی اس فایو`, `جی تی ای شیش`, …) are in
+`pipeline/aliases.json`. They were **not** checked against the live catalog (not available
+here): confirm each with the zero-result list of `analytics.php` after a week, and prefer
+removing a group that pulls unrelated products over keeping it.

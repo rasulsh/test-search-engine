@@ -384,6 +384,44 @@ once, so this never recurs: delete the `'normalization_version'` line from
 code default then follows the deployed rules. `php tools/config-check.php --verbose`
 shows it as a code default.
 
+<a id="upgrading-to-m37"></a>**Upgrading to the search-fixes round (M37).** Four things change together:
+the normalization rules (version 4), the code, the log schema and the storefront. Order:
+
+1. **Back up the log table** (`mysqldump search_db search_logs > search_logs.sql`).
+2. **Migrate the log schema** (safe on the running service: the new columns have defaults,
+   the old code ignores them): `mysql search_db < db/migrations/2026-10-24_search_logs_v2.sql`
+   (also in `release.zip` under `db/migrations/`). It is idempotent. The service also adds the
+   missing *columns* itself on its first log write when its database user may `ALTER`; the three
+   new indexes only come from the file. Rollback: run the part of the file after
+   `==== DOWN (rollback) ====` (drops the v2 columns and `search_events`; their data is lost).
+3. **Rebuild and deploy code and bundle in one step.** Normalization version 4 changes the
+   indexed columns (ZWNJ is a space now), so build with `release.py` on the GPU machine, then
+   extract `release.zip` and immediately `POST /reload?load=1`. The bundle refuses to load
+   against old code (`normalization_version_mismatch`) and the old bundle against the new
+   code; until the reload finishes a Persian query with a half-space is normalized the new way
+   against columns indexed the old way, so keep the gap short. Reload the VPS vectors from the
+   same export (`vps_vectors/`, as in [Every catalog update](#every-catalog-update)); the
+   product texts they embed changed with the rules.
+4. **Cache.** `POST /reload` flushes the result cache. Nothing else to do: from now on the cache
+   key also carries a hash of `aliases.json` / `synonyms.json`, so an alias edit is live on the
+   very next request without a flush, and an answer with no results is cached for 300 s
+   (`redis.ttl_zero`) only.
+5. **Restart.** Nothing to restart on cPanel (PHP reads the new files; if OPcache is set to
+   revalidate rarely, wait for it or reset it from cPanel's PHP selector). The VPS service only
+   restarts if you also changed its code (`systemctl restart search-vectors`).
+6. **Storefront (OpenCart).** Upload the changed OpenCart files described in
+   [INTEGRATION.md](../INTEGRATION.md#storefront-reference) ("Result tracking"): the search
+   controller sends `session_id` (hashed) and renders the returned `search_uuid`; the results
+   template gets the click listener and the `data-search-*` link attributes; the product
+   controller, the add-to-cart handler and `checkout/success` report `cart` / `order`. The
+   storefront works unchanged without any of it (no tracking, the engagement figures stay empty).
+7. **Aliases.** `server/data/aliases.json` is replaced by the bundle's on every reload, so an
+   alias you edit **on the server** is lost at the next catalog update. Keep `pipeline/aliases.json`
+   as the single source (this release seeds the zero-result fixes there) and use the server
+   file only for an urgent, temporary edit.
+8. **Check.** `curl -s -X POST .../search -d '{"q":"مافیا"}'` returns the same ids as `mafia`;
+   `config-check.php` is clean; `analytics.php?format=json` shows `"log_v2":{"available":true,...}`.
+
 <a id="upgrading-to-m31"></a>**Upgrading to M31 (search analytics).** Server code
 only (upload the new `server/`); the page `analytics.php` reuses `logs.token`, so an
 installation that already has a logs token needs no config edit. `/reload` never

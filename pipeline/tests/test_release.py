@@ -76,6 +76,7 @@ def test_release_packs_bundle_under_data_incoming_and_the_server_code(
     assert not (tmp_path / "out" / "release.zip.tmp").exists()
     # First deploy needs nothing else: the web installer, its template, the schema.
     assert {"public/install.php", "config.example.php", "db/schema.sql"} <= set(names)
+    assert "db/migrations/2026-10-24_search_logs_v2.sql" in names
     with zipfile.ZipFile(tmp_path / "out" / "release.zip") as archive:
         schema = archive.read("db/schema.sql").decode("utf-8")
     assert schema == (REPO_ROOT / "db" / "schema.sql").read_text(encoding="utf-8")
@@ -290,7 +291,7 @@ def test_release_bundle_stays_reload_compatible_with_the_live_server(
 
     assert (meta["model"], meta["dim"], meta["revision"]) == (
         config["name"], config["dim"], config["revision"])
-    assert meta["normalization_version"] == NORMALIZATION_VERSION == 3
+    assert meta["normalization_version"] == NORMALIZATION_VERSION == 4
 
 
 def test_release_refuses_to_pack_without_the_safety_nets(tmp_path: Path, dev_tree: Path) -> None:

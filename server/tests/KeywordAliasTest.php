@@ -169,14 +169,14 @@ final class KeywordAliasTest extends DatabaseTestCase
         $this->pdo->exec('ALTER TABLE products DROP INDEX idx_title_scan');
         $keyword = $this->keyword();
 
-        // "5" is shorter than a FULLTEXT token, so every variant of these queries is
+        // "v" is shorter than a FULLTEXT token, so every variant of these queries is
         // the title-only covering-index scan (variants of FULLTEXT-sized tokens, M23,
         // use the FULLTEXT index instead and never need it).
         self::assertSame(
-            $this->ids('grand theft auto 5', $this->keyword(false)),
-            $this->ids('grand theft auto 5', $keyword)
+            $this->ids('grand theft auto v', $this->keyword(false)),
+            $this->ids('grand theft auto v', $keyword)
         );
-        self::assertContains(self::GTA_EN, $this->ids('grand theft auto 5', $keyword));
+        self::assertContains(self::GTA_EN, $this->ids('grand theft auto v', $keyword));
         self::assertSame([], $this->ids('gta 5', $keyword));
     }
 
@@ -190,7 +190,7 @@ final class KeywordAliasTest extends DatabaseTestCase
 
         $response = SearchController::fromConfig($this->pdo, $config)->search(['q' => 'GTA V']);
 
-        self::assertSame('gta 5', $response['query']['normalized']);
+        self::assertSame('gta v', $response['query']['normalized']);
         self::assertSame([self::GTA_EN, self::GTA_FA], array_slice($response['product_ids'], 0, 2));
         self::assertNull($response['did_you_mean']);
     }

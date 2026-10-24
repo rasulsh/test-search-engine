@@ -125,7 +125,7 @@ final class SearchControllerVpsTest extends DatabaseTestCase
         // What cPanel sent: the raw query text, K and the floor, to /search-vectors.
         self::assertCount(1, $calls);
         self::assertSame('http://vps.test/search-vectors', $calls[0]['url']);
-        self::assertSame(' macbook ', $calls[0]['q']);
+        self::assertSame('macbook', $calls[0]['q']); // trimmed, like every stage's query
         self::assertSame(50, $calls[0]['limit']);
         self::assertSame(0.5, $calls[0]['min_score']);
         self::assertArrayNotHasKey('customer_id', $calls[0]);

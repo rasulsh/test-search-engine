@@ -7,7 +7,9 @@ namespace App;
 /**
  * Keyboard-layout tolerance. Recovers queries typed with the wrong layout:
  * Persian text typed on a US layout comes out as Latin gibberish (and vice
- * versa). The layout mirrors pipeline/keyword.py's PERSIAN_KEYBOARD.
+ * versa). The layout mirrors pipeline/keyword.py's PERSIAN_KEYBOARD. Only purely
+ * alphabetic words are remapped: a model code ("HF-1502", "x2") is no mistyped
+ * Persian.
  */
 final class Keymap
 {
@@ -44,9 +46,15 @@ final class Keymap
     private static function remap(string $text, array $map, bool $lowercaseKeys): string
     {
         $out = '';
-        foreach (mb_str_split($text) as $char) {
-            $key = $lowercaseKeys ? mb_strtolower($char, 'UTF-8') : $char;
-            $out .= $map[$key] ?? $char;
+        foreach (preg_split('/(\s+)/u', $text, -1, PREG_SPLIT_DELIM_CAPTURE) ?: [] as $word) {
+            if (preg_match('/^\p{L}+$/u', $word) !== 1) {
+                $out .= $word;
+                continue;
+            }
+            foreach (mb_str_split($word) as $char) {
+                $key = $lowercaseKeys ? mb_strtolower($char, 'UTF-8') : $char;
+                $out .= $map[$key] ?? $char;
+            }
         }
 
         return $out;

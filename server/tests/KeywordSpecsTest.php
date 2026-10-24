@@ -104,9 +104,9 @@ final class KeywordSpecsTest extends DatabaseTestCase
 
     public function testNormalizedSpecTextMatchesNormalizedQuery(): void
     {
-        // ZWNJ and the decimal point are normalized the same way on both sides.
+        // ZWNJ (a space since normalization v4) and the decimal point are normalized the same way on both sides.
         self::assertSame([self::SPEC], array_column($this->keyword()->search('پاسخ‌دهی 0.02'), 'product_id'));
-        self::assertSame([self::SPEC], array_column($this->keyword()->search('پاسخدهی'), 'product_id'));
+        self::assertSame([self::SPEC], array_column($this->keyword()->search('پاسخ دهی'), 'product_id'));
     }
 
     public function testLikeFallbackSearchesSpecs(): void

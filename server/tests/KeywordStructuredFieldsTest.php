@@ -143,9 +143,9 @@ final class KeywordStructuredFieldsTest extends DatabaseTestCase
             ['product_id' => 20, 'title' => 'بازی', 'tags' => 'GTA V Online', 'popularity' => 1],
         ]);
 
-        // "gta v" -> normalized "gta 5": the 1-character token forces the LIKE scan.
+        // The 1-character token "v" (never a numeral) forces the LIKE scan.
         self::assertSame(1, $hits);
-        self::assertSame([20], array_column($this->keyword()->search('gta 5'), 'product_id'));
+        self::assertSame([20], array_column($this->keyword()->search('gta v'), 'product_id'));
     }
 
     public function testExistingBandsStayAbovePlainDescriptionHits(): void

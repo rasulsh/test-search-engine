@@ -30,16 +30,23 @@ final class Synonyms
     public const SYNONYMS_FILE = 'synonyms.json';
     public const ALIASES_FILE = 'aliases.json';
 
-    /** @var array<string, self> keyed by the files' identity and the group cap */
+    /** @var array<string, self> keyed by the files' content hashes and the group cap */
     private static array $cache = [];
 
     /** @var array<string, list<list<string>>> phrase (tokens joined by " ") => alternative token lists */
     private array $alternatives = [];
+    /** @var array<string, string> collapsed phrase => phrase, to meet a spacing variant */
+    private array $byCollapsed = [];
     private int $longestPhrase = 0;
+    private string $version;
 
-    /** @param list<list<string>> $groups */
-    public function __construct(array $groups)
+    /**
+     * @param list<list<string>> $groups
+     * @param string $version identifies the files the groups came from (see {@see version()})
+     */
+    public function __construct(array $groups, string $version = '')
     {
+        $this->version = $version;
         foreach ($groups as $group) {
             $terms = [];
             foreach ($group as $term) {
@@ -49,6 +56,7 @@ final class Synonyms
                 }
             }
             foreach ($terms as $phrase => $tokens) {
+                $this->byCollapsed[Normalizer::collapse($phrase)] ??= (string) $phrase;
                 foreach ($terms as $otherPhrase => $otherTokens) {
                     if ($otherPhrase !== $phrase && !in_array($otherTokens, $this->alternatives[$phrase] ?? [], true)) {
                         $this->alternatives[$phrase][] = $otherTokens;
@@ -63,13 +71,17 @@ final class Synonyms
      * Synonyms and aliases of the bundle in $dataDir; absent files contribute
      * nothing and an unreadable one is skipped (search must never fail on it —
      * /reload validates the files before they go live). Cached per worker,
-     * keyed by the files' identity, so the reload swap is picked up unaided.
+     * keyed by the files' content hashes, so the reload swap is picked up unaided.
      */
     public static function fromDirectory(string $dataDir, int $maxSynonymGroupSize): self
     {
         $synonymsPath = $dataDir . '/' . self::SYNONYMS_FILE;
         $aliasesPath = $dataDir . '/' . self::ALIASES_FILE;
-        $key = self::identity($synonymsPath) . '|' . self::identity($aliasesPath) . '|' . $maxSynonymGroupSize;
+        // Content hashes, not stat identities: the key is also part of the result-cache
+        // key, so it must change exactly when an answer could, an edit that keeps the size
+        // and lands in the same mtime tick included. Both files are small next to a query.
+        $key = (string) @sha1_file($synonymsPath) . '|' . (string) @sha1_file($aliasesPath)
+            . '|' . $maxSynonymGroupSize;
         if (isset(self::$cache[$key])) {
             return self::$cache[$key];
         }
@@ -80,7 +92,27 @@ final class Synonyms
         ));
         self::$cache = []; // only the live bundle's entry is worth keeping
 
-        return self::$cache[$key] = new self(array_merge($synonyms, self::readGroups($aliasesPath) ?? []));
+        $version = substr(sha1($key), 0, 12);
+
+        return self::$cache[$key] = new self(array_merge($synonyms, self::readGroups($aliasesPath) ?? []), $version);
+    }
+
+    /** Short hash of the alias and synonym files this instance was built from ('' when built from groups). */
+    public function version(): string
+    {
+        return $this->version;
+    }
+
+    /**
+     * The alias / synonym term that reads like $normalized once spaces are ignored
+     * ("رزیدنتاویل" for the term "رزیدنت اویل"), or null. A suggestion the owner
+     * wrote beats one guessed by edit distance.
+     */
+    public function spacingVariant(string $normalized): ?string
+    {
+        $phrase = $this->byCollapsed[Normalizer::collapse($normalized)] ?? null;
+
+        return $phrase !== null && $phrase !== $normalized ? $phrase : null;
     }
 
     /** Drop cached maps (POST /reload, after the swap). */
@@ -203,13 +235,5 @@ final class Synonyms
         $json = is_file($path) ? @file_get_contents($path) : false;
 
         return $json === false ? null : self::parseGroups($json);
-    }
-
-    private static function identity(string $path): string
-    {
-        clearstatcache(true, $path);
-        $stat = @stat($path);
-
-        return $stat === false ? '-' : $path . ':' . $stat['ino'] . ':' . $stat['size'] . ':' . $stat['mtime'];
     }
 }

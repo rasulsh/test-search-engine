@@ -12,6 +12,7 @@ Builds the bundle and packs, relative to the host's
     tools/config-check.php (the config doctor), tools/logs-export.php (log export, M36)
     .htaccess, data/.htaccess, data_incoming/.htaccess (deny-all safety nets)
     db/schema.sql         read by install.php on the first deploy
+    db/migrations/        one-off SQL for an existing database (apply by hand, see docs/DEPLOY.md)
 
 No browser model ships (M18): queries are embedded on the VPS. Since M18 /search
 does not read the bundle's vectors.bin either (/reload only checks meta, size
@@ -78,6 +79,10 @@ def release_entries(bundle_dir: Path, server_dir: Path) -> list[tuple[Path, str]
     """(source file, path inside the zip) for every file the release carries."""
     entries = [(f, f"data_incoming/{f.name}") for f in sorted(bundle_dir.iterdir()) if f.is_file()]
     entries.append((build.SCHEMA_PATH, "db/schema.sql"))
+    entries.extend(
+        (migration, f"db/migrations/{migration.name}")
+        for migration in sorted((build.SCHEMA_PATH.parent / "migrations").glob("*.sql"))
+    )
     for relative in SERVER_CODE:
         for source, arcname in _files(server_dir, relative):
             # public/client is a leftover local copy of the pre-M18 browser model.

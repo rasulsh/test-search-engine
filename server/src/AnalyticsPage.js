@@ -258,15 +258,50 @@
       card('Top categories', [table('cats', ['Category', 'Searches'], names(r.top_brands_categories.categories), true)]),
     ]);
 
+    // Log-v2 figures: only when the migration ran and the logger writes the new columns.
+    var quality = [];
+    if (r.log_v2 && r.log_v2.available) {
+      var e = r.engagement, c = r.latency_cold, delta = r.compare ? r.compare.metrics : null;
+      var extra = [tile('Unique searches', num(r.unique.searches)), tile('Searches / session', r.unique.searches_per_session),
+        tile('Zero-result rate (unique)', pct(r.zero_result.rate)), tile('Cold p95', ms(c.p95)),
+        tile('Capped (300)', pct(r.capped_share.share))];
+      if (e.tracking) { extra.push(tile('Click-through', pct(e.ctr)), tile('MRR', e.mrr), tile('To cart', pct(e.cart_rate))); }
+      tiles.append.apply(tiles, extra);
+      if (delta) {
+        quality.push(card('Versus previous window', [table('compare', ['Metric', 'Now', 'Before', 'Change'],
+          Object.keys(delta).map(function (k) { var d = delta[k]; return [k, d.current, d.previous, d.change_pct === null ? 'new' : d.change_pct + '%']; }), false)]));
+      }
+      if (r.tier_timeline.outages.length) {
+        quality.push(card('Vector outages', [table('outages', ['From', 'To', 'Hours', 'Searches'], r.tier_timeline.outages.map(function (o) {
+          return [o.from, o.to, o.hours, o.searches]; }), false)], 'Hours with only keyword-only answers.'));
+      }
+      quality.push(
+        card('Alias candidates', [table('alias', ['Zero-result query', 'Then searched', 'Pairs', 'Clicks'], r.alias_candidates.map(function (a) {
+          return [a.query, a.then, a.pairs, a.clicks]; }), true)], 'Zero results, then a different query that worked within a minute.'),
+        card('Silent failures', [table('silent', ['Query', 'Searches', 'Clicks', 'CTR'], r.silent_failures.map(function (q) {
+          return [q.query, q.searches, q.clicks, pct(q.ctr)]; }), true)], e.tracking ? 'Frequent queries with results nobody clicks.' : 'Needs click tracking (events endpoint).'),
+        card('Demand gap', [table('gap', ['Query', 'Searches', 'Last seen'], rowsOf(r.demand_gap), true)], 'Zero results and no reformulation worked: likely missing products.'),
+        card('Trending', [table('trend', ['Query', 'Searches', 'Before', 'Growth'], r.trending.map(function (t) {
+          return [t.query, t.searches, t.previous, t.growth]; }), true)]),
+        card('Suggestions', [table('dym', ['Query', 'Suggested', 'Shown', 'Clicked'], r.did_you_mean.top.map(function (d) {
+          return [d.query, d.suggestion, d.shown, d.clicked]; }), true)],
+          'Shown ' + pct(r.did_you_mean.shown_rate) + ', clicked ' + pct(r.did_you_mean.ctr) + '; ' + r.did_you_mean.zero_result_suggestions + ' lead to zero results.'),
+        card('Slowest cold queries', [table('slow', ['Query', 'Max ms', 'Searches'], c.slowest.map(function (q) {
+          return [q.query, q.max_ms, q.searches]; }), true)]),
+        card('Flagged probes', [table('probes', ['Time', 'Query'], r.suspicious.samples.map(function (p) { return [p.ts, p.query]; }), false)],
+          r.suspicious.count + ' refused in this window; they count nowhere else.'));
+    }
+
     root.replaceChildren(el('header', {}, [el('h1', { text: 'Search analytics' }),
       el('p', { 'class': 'note', text: (r.since ? 'Since ' + r.since : 'All time') + ' (database clock)' })]),
-    controls, tiles, grid, tables);
+    controls, tiles, grid, tables, el('div', { 'class': 'grid2' }, quality));
     if (focus) { var again = document.getElementById(focus); if (again) { again.focus(); if (again.setSelectionRange && again.value) { again.setSelectionRange(again.value.length, again.value.length); } } }
   }
 
   function url(window_, json) {
     var p = new URLSearchParams(location.search);
     p.set('window', window_);
+    if (new URLSearchParams(location.search).get('compare')) { p.set('compare', '1'); }
     if (json) { p.set('format', 'json'); } else { p.delete('format'); }
     return location.pathname + '?' + p.toString();
   }

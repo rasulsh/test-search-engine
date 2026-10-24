@@ -53,7 +53,7 @@ Breaking any of these produces silently wrong results; each is enforced by tests
 
 1. **Normalization parity.** `pipeline/normalize.py` and `server/src/Normalizer.php`
    produce identical output; both suites run `fixtures/normalization_cases.json`
-   (since M23 including the space-collapse cases). Bump `normalization_version`
+   (since M23 including the space-collapse cases; version 4: ZWNJ is a space, bidi marks are stripped, `v` / `x` are never numerals). Bump `normalization_version`
    in both when a rule changes.
 2. **Model parity.** Product vectors (`pipeline/embed.py`, `--vps-out`) and the
    VPS query embedder use the same model, revision, pooling, prefixes and
@@ -185,4 +185,5 @@ See `CLAUDE.md` §9–§11 for the full workflow and coding standards.
 - [ ] **M31** — Search analytics: `App\Analytics` / `analytics.php` (read-only aggregates over `search_logs`, `logs.token`, `?format=json`), the `idx_ts_result` index; see [SEARCH-API.md](SEARCH-API.md#analytics).
 - [ ] **M35** — Analytics dashboard v2: `Analytics` gains `zeroRateTrend`, `latencyTrend`, `hourlyHeatmap`, `queryLengthDistribution`, `topBrandsCategories` and `repeatQueryRate` (the data layer stays the only source of numbers); `AnalyticsPage` becomes a shell with a hand-rolled SVG dashboard (no third-party request, CSP nonce) that polls `?format=json` every `logs.refresh_seconds`; the JSON is additive. See [SEARCH-API.md](SEARCH-API.md#analytics).
 - [ ] **M36** — Search-log export + zero-result loop: `server/tools/logs-export.php` (CLI, `App\LogsExport`: raw or `--grouped` rows, windows, `--zero-only`, CSV / JSON, never under the web root, no `customer_id`), `gen_aliases.py --queries-file` (the grouped export in, alias candidates out), documented end to end in [ALIASES.md](ALIASES.md#the-zero-result-loop-m36).
+- [ ] **M37** — Search fixes round: normalization version 4 (ZWNJ is a space, bidi marks stripped, `v` / `x` never numerals, `ii`-`ix` only after a word); `QueryPrep` (entity decode, query cap, SQL-probe refusal); the result-cache key carries the alias / synonym content hash and empty answers live `redis.ttl_zero`; "did you mean" quality (transposition first, blocklist, first-letter and dropped-letter rules, title / brand / tag + alias dictionary, owner spacing aliases first); the keyboard-layout fix only for plain words with a title match; `search_logs` v2 (`db/migrations/2026-10-24_search_logs_v2.sql`: uuid, session, source, stage latencies, alias / suggestion / cap / probe / repeat flags) and `search_events` (`POST /events`); `AnalyticsInsights` (unique, engagement, cold latency, tier timeline, alias candidates, silent failures, demand gap, trending, `compare=1`) beside the older analytics keys.
 - [ ] **M32** — `docs/RUNTIME-FLOW.md`: the actual `POST /search` pipeline (cache, keyword, did-you-mean, VPS, hybrid ranking, log) with the component map and degradation ladder. Docs only; keep it in sync with `SearchController::search()`.

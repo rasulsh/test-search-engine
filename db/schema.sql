@@ -75,8 +75,41 @@ CREATE TABLE IF NOT EXISTS search_logs (
     tier         VARCHAR(16)     NOT NULL DEFAULT 'keyword_only',
     -- M26: 1 when the result came from the Redis result cache (Logger.php adds it).
     cache_hit    TINYINT(1)      NOT NULL DEFAULT 0,
+    -- Log v2 (db/migrations/2026-10-24_search_logs_v2.sql; Logger.php adds the
+    -- columns to an older table): rows written by the app carry log_version 2.
+    log_version    TINYINT UNSIGNED NOT NULL DEFAULT 1,
+    search_uuid    CHAR(36)        NOT NULL DEFAULT '',
+    session_id     VARCHAR(64)     DEFAULT NULL,
+    source         VARCHAR(16)     NOT NULL DEFAULT 'page',  -- page|autocomplete|filter|paging
+    page           TINYINT UNSIGNED NOT NULL DEFAULT 1,
+    expanded_q     VARCHAR(512)    DEFAULT NULL,
+    alias_hit      TINYINT(1)      NOT NULL DEFAULT 0,
+    dym_shown      TINYINT(1)      NOT NULL DEFAULT 0,
+    is_capped      TINYINT(1)      NOT NULL DEFAULT 0,
+    lat_keyword_ms INT UNSIGNED    DEFAULT NULL,
+    lat_vector_ms  INT UNSIGNED    DEFAULT NULL,
+    lat_spell_ms   INT UNSIGNED    DEFAULT NULL,
+    is_suspicious  TINYINT(1)      NOT NULL DEFAULT 0,
+    is_duplicate   TINYINT(1)      NOT NULL DEFAULT 0,
     PRIMARY KEY (id),
     KEY idx_ts (ts),
     -- M31: keeps the analytics zero-result window scan and grouped counts cheap.
-    KEY idx_ts_result (ts, result_count)
+    KEY idx_ts_result (ts, result_count),
+    KEY idx_session (session_id, ts),
+    KEY idx_nq (normalized_q(64), ts),
+    KEY idx_uuid (search_uuid)
+) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_unicode_ci;
+
+-- Result clicks, add-to-carts, orders and suggestion clicks, keyed by the
+-- search_uuid /search returned (public/events.php writes it).
+CREATE TABLE IF NOT EXISTS search_events (
+    id          BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+    search_uuid CHAR(36)        NOT NULL,
+    product_id  INT UNSIGNED    NOT NULL,
+    position    SMALLINT UNSIGNED NOT NULL,
+    action      VARCHAR(12)     NOT NULL DEFAULT 'click',  -- click|cart|order|dym_click
+    ts          DATETIME        NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (id),
+    KEY idx_search (search_uuid),
+    KEY idx_ts (ts)
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_unicode_ci;

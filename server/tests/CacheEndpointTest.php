@@ -112,7 +112,8 @@ final class CacheEndpointTest extends TestCase
         $second = $this->search('{"q":"sony"}');
 
         self::assertNotSame([], json_decode($first, true)['product_ids']);
-        self::assertSame($first, $second);
+        self::assertSame($this->withoutUuid($first), $this->withoutUuid($second));
+        self::assertNotSame(json_decode($first, true)['search_uuid'], json_decode($second, true)['search_uuid']);
         self::assertSame(['0', '1'], $this->cacheHits());
     }
 
@@ -123,7 +124,16 @@ final class CacheEndpointTest extends TestCase
 
         $second = $this->search('{"q":"sony"}');
 
-        self::assertSame($first, $second);
+        self::assertSame($this->withoutUuid($first), $this->withoutUuid($second));
         self::assertSame(['0', '0'], $this->cacheHits());
+    }
+
+    /** Every request gets its own search_uuid; the rest of a cached body is identical. */
+    private function withoutUuid(string $body): string
+    {
+        $decoded = json_decode($body, true);
+        unset($decoded['search_uuid']);
+
+        return (string) json_encode($decoded, JSON_UNESCAPED_UNICODE);
     }
 }

@@ -54,6 +54,8 @@ It prints key paths only, never values, and exits non-zero on any ERROR, so a de
 | `db.user`, `db.password` | none (user required), empty | credentials (secret; the password may be empty) |
 | `db.products_table` | `products` | live table (the load file stages into `<table>_new`) |
 | `db.search_logs_table` | `search_logs` | log table |
+| `db.search_events_table` | `search_events` | click / cart / order events table (`POST /events`) |
+| `events.allowed_origin` | empty | storefront origin for a `fetch()`-based events call (CORS); `sendBeacon` needs none |
 | `paths.data` | `server/data` | active bundle (spellcheck, synonyms, aliases, keymap) |
 | `paths.data_incoming` | `server/data_incoming` | staging directory for the atomic reload swap |
 | `reload.token` | empty | enables `POST /reload` (`X-Reload-Token`); set a strong random value |
@@ -65,7 +67,7 @@ It prints key paths only, never values, and exits non-zero on any ERROR, so a de
 | `model.name` | `intfloat/multilingual-e5-small` | model stamped in the cPanel bundle's `meta.json` |
 | `model.revision` | `main` | its revision |
 | `model.dim` | `384` | its dimension |
-| `model.normalization_version` | the code's `Normalizer::VERSION` (3) | set only to pin a version; a rules bump then needs no config edit |
+| `model.normalization_version` | the code's `Normalizer::VERSION` (4) | set only to pin a version; a rules bump then needs no config edit |
 
 `/search` does not read the bundle's vectors since M18 (the semantic tier's model, bge-m3, runs on the VPS); `/reload` still checks model, dim, normalization version, file size and checksum.
 
@@ -92,6 +94,10 @@ It prints key paths only, never values, and exits non-zero on any ERROR, so a de
 | `search.suggest_min_results` | 3 | "did you mean" runs below this many keyword hits |
 | `search.suggest_min_frequency` | 2 | a candidate must occur in this many products |
 | `search.suggest_max_distance` | 2 | maximum edits (1 for tokens of 4 characters or fewer) |
+| `search.suggest_blocklist` | `کالا,عدد,باب,…` | comma-separated generic words never offered as "did you mean" |
+| `search.query_max_chars` | 100 | longer queries are cut before the keyword, spell and VPS stages |
+| `search.query_max_tokens` | 8 | likewise, in words |
+| `search.result_cap` | 300 | a result list this long is logged with `is_capped = 1` |
 
 ### Hybrid ranking (semantic tier)
 
@@ -128,6 +134,7 @@ queries are then answered from Redis instead of recomputing keyword + VPS + rank
 | `redis.auth` | empty | Redis password (a secret: environment or `config.php`, never the repository) |
 | `redis.db` | `0` | database number |
 | `redis.ttl` | `86400` (1 day) | seconds an entry lives; a catalog reload flushes it earlier |
+| `redis.ttl_zero` | `300` | TTL of an answer with no results (an alias or reload may fix it soon) |
 | `redis.ttl_hot` | `604800` (7 days) | TTL of a frequently repeated query (see below) |
 | `redis.ttl_hot_threshold` | `20` | lookups (searches) of the same query inside `redis.freq_window` that make it hot; `0` disables the adaptive tier (always `redis.ttl`) |
 | `redis.freq_window` | `604800` (7 days) | lifetime of the per-query counter, set once when the counter is created (its first lookup), so counts roll off |

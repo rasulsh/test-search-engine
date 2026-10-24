@@ -70,11 +70,11 @@ final class ProductLoaderTest extends DatabaseTestCase
             ->fetchAll();
 
         self::assertCount(2, $stored);
-        // Default normalizer canonicalizes: lowercase Latin, strip ZWNJ.
+        // Default normalizer canonicalizes: lowercase Latin, ZWNJ becomes a space.
         self::assertSame('wireless mouse', $stored[0]['normalized_title']);
         self::assertSame('a wireless optical mouse', $stored[0]['normalized_desc']);
-        self::assertSame('موس بیسیم', $stored[1]['normalized_title']);
-        self::assertSame('موس نوری بیسیم', $stored[1]['normalized_desc']);
+        self::assertSame('موس بی سیم', $stored[1]['normalized_title']);
+        self::assertSame('موس نوری بی سیم', $stored[1]['normalized_desc']);
         self::assertSame(9.99, (float) $stored[0]['price']);
     }
 

@@ -199,10 +199,10 @@ final class EndpointTest extends TestCase
 
     public function testDidYouMeanComesFromBundleDictionary(): void
     {
-        // "sody" is one edit from both "sony" (catalog frequency 4) and "body"
-        // (catalog frequency 1). The table scan would pick "sony"; the bundle
-        // dictionary ranks "body" higher.
-        [$status, $body] = $this->request('POST', '/search', '{"q":"sody"}');
+        // "bodz" is one edit from "body", a word only the bundle dictionary
+        // (spellcheck.txt) holds: the table-scan fallback has no such word. A
+        // short typo keeps its first letter, so "sony" is never a candidate.
+        [$status, $body] = $this->request('POST', '/search', '{"q":"bodz"}');
 
         self::assertSame(200, $status);
         $decoded = json_decode((string) $body, true);
@@ -216,8 +216,12 @@ final class EndpointTest extends TestCase
 
         $decoded = json_decode((string) $body, true);
         self::assertSame(
-            ['query', 'did_you_mean', 'did_you_mean_applied', 'count', 'product_ids'],
+            ['search_uuid', 'query', 'did_you_mean', 'did_you_mean_applied', 'count', 'product_ids'],
             array_keys($decoded)
+        );
+        self::assertMatchesRegularExpression(
+            '/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/',
+            $decoded['search_uuid']
         );
     }
 

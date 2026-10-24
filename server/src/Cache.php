@@ -30,6 +30,7 @@ class Cache
     private int $hotTtl;
     private int $hotThreshold;
     private int $freqWindow;
+    private int $zeroTtl;
 
     /** A $hotThreshold of 0 disables the adaptive tier (always the base TTL). */
     public function __construct(
@@ -38,7 +39,8 @@ class Cache
         int $ttlSeconds,
         int $hotTtlSeconds = 0,
         int $hotThreshold = 0,
-        int $freqWindowSeconds = 0
+        int $freqWindowSeconds = 0,
+        int $zeroTtlSeconds = 300
     ) {
         $this->redis = $redis;
         $this->prefix = $prefix;
@@ -46,6 +48,7 @@ class Cache
         $this->hotTtl = max(1, $hotTtlSeconds);
         $this->hotThreshold = max(0, $hotThreshold);
         $this->freqWindow = max(1, $freqWindowSeconds);
+        $this->zeroTtl = max(1, $zeroTtlSeconds);
     }
 
     /** @param array<string, mixed> $config the server config array; null when the cache is off */
@@ -68,19 +71,22 @@ class Cache
             (int) $redis['ttl'],
             (int) $redis['ttl_hot'],
             (int) $redis['ttl_hot_threshold'],
-            (int) $redis['freq_window']
+            (int) $redis['freq_window'],
+            (int) $redis['ttl_zero']
         );
     }
 
     /**
-     * Everything that changes a result: the normalized query, the limit and
-     * whether the semantic tier is on. (/search has no filters; add any new
-     * result-affecting request parameter here.) The raw text, customer id,
-     * `debug` and `with_details` do not change the cached product list.
+     * Everything that changes a result: the normalized query, the limit, whether
+     * the semantic tier is on and the version of the alias / synonym files (so an
+     * edited alias file never serves answers computed with the old one).
+     * (/search has no filters; add any new result-affecting request parameter
+     * here.) The raw text, customer id, `debug` and `with_details` do not change
+     * the cached product list.
      */
-    public function key(string $normalizedQuery, ?int $limit, bool $semantic): string
+    public function key(string $normalizedQuery, ?int $limit, bool $semantic, string $dataVersion = ''): string
     {
-        return $this->prefix . sha1((string) json_encode([$normalizedQuery, $limit, $semantic]));
+        return $this->prefix . sha1((string) json_encode([$normalizedQuery, $limit, $semantic, $dataVersion]));
     }
 
     /** @return array<string, mixed>|null the stored value; null on a miss or any Redis error */
@@ -98,12 +104,15 @@ class Cache
         }
     }
 
-    /** @param array<string, mixed> $value */
-    public function set(string $key, array $value): void
+    /**
+     * @param array<string, mixed> $value
+     * @param bool $empty the answer holds no results: it lives the short zero-result TTL
+     */
+    public function set(string $key, array $value, bool $empty = false): void
     {
         try {
             $json = (string) json_encode($value, JSON_UNESCAPED_UNICODE | JSON_PRESERVE_ZERO_FRACTION);
-            $this->redis->set($key, $json, $this->ttlFor($key));
+            $this->redis->set($key, $json, $empty ? $this->zeroTtl : $this->ttlFor($key));
         } catch (Throwable $e) {
             error_log('search: cache write failed: ' . $e->getMessage());
         }

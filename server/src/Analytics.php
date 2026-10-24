@@ -17,7 +17,9 @@ use PDO;
  * empty): spelling variants that normalize alike merge, but cross-script aliases
  * ("far cry" and "فارکرای") stay separate. That is expected, and next to the alias
  * file it is itself a signal. A table from before M21 / M26 lacks did_you_mean,
- * tier or cache_hit; those figures then read as zero / keyword-only.
+ * tier or cache_hit; those figures then read as zero / keyword-only. Flagged probes
+ * (is_suspicious) count nowhere. The log-v2 metrics live in AnalyticsInsights and
+ * are merged in by report().
  */
 final class Analytics
 {
@@ -38,15 +40,24 @@ final class Analytics
     private PDO $pdo;
     private string $table;
     private ?string $productsTable;
+    private AnalyticsInsights $insights;
     /** @var array<string, true>|null */
     private ?array $columns = null;
 
-    /** @param string|null $productsTable the catalog table topBrandsCategories() reads; null = no brand figures */
-    public function __construct(PDO $pdo, string $searchLogsTable, ?string $productsTable = null)
-    {
+    /**
+     * @param string|null $productsTable the catalog table topBrandsCategories() reads; null = no brand figures
+     * @param string $searchEventsTable the click / cart / order events the engagement figures read
+     */
+    public function __construct(
+        PDO $pdo,
+        string $searchLogsTable,
+        ?string $productsTable = null,
+        string $searchEventsTable = 'search_events'
+    ) {
         $this->pdo = $pdo;
         $this->table = Identifier::quote($searchLogsTable);
         $this->productsTable = $productsTable === null ? null : Identifier::quote($productsTable);
+        $this->insights = new AnalyticsInsights($pdo, $searchLogsTable, $searchEventsTable);
     }
 
     /** The window a request names, or the default (7d) for anything unknown. */
@@ -374,17 +385,20 @@ final class Analytics
     }
 
     /**
-     * Everything the dashboard and `?format=json` show, for one window.
+     * Everything the dashboard and `?format=json` show, for one window. The log-v2 keys
+     * (see AnalyticsInsights) are added beside the older ones; `$compare` adds `compare`, the
+     * headline figures against the previous window of the same length (not for "all").
      *
      * @return array<string, mixed>
      */
-    public function report(string $window, int $limit = 20): array
+    public function report(string $window, int $limit = 20, bool $compare = false): array
     {
         $window = self::window($window);
         $since = $this->since($window);
         $bucket = $window === '24h' ? 'hour' : 'day';
+        $previous = $this->previousSince($since, $window);
 
-        return [
+        $report = [
             'window' => $window,
             'since' => $since,
             'summary' => $this->resultHealth($since),
@@ -402,6 +416,36 @@ final class Analytics
             'top_brands_categories' => $this->topBrandsCategories($since, 10),
             'repeat_queries' => $this->repeatQueryRate($since),
         ];
+        $insights = $this->insights->report($since, null, $previous, $limit);
+        $report['did_you_mean'] += $insights['did_you_mean'] ?? [];
+        unset($insights['did_you_mean']);
+        $report += $insights;
+
+        if ($compare && $since !== null && $previous !== null && $this->insights->available()) {
+            $report['compare'] = [
+                'previous_since' => $previous,
+                'previous_until' => $since,
+                'metrics' => AnalyticsInsights::compare(
+                    $this->insights->headline($since, null),
+                    $this->insights->headline($previous, $since)
+                ),
+            ];
+        }
+
+        return $report;
+    }
+
+    /** The start of the window before $since that has the same length, or null for "all". */
+    private function previousSince(?string $since, string $window): ?string
+    {
+        $interval = self::WINDOWS[$window] ?? null;
+        if ($since === null || $interval === null) {
+            return null;
+        }
+        $stmt = $this->pdo->prepare("SELECT CAST(:since AS DATETIME) - INTERVAL {$interval}");
+        $stmt->execute(['since' => $since]);
+
+        return (string) $stmt->fetchColumn();
     }
 
     /**
@@ -518,6 +562,9 @@ final class Analytics
     private function bound(?string $since, string $condition): array
     {
         $conditions = $condition === '' ? [] : [$condition];
+        if ($this->hasColumn('is_suspicious')) {
+            $conditions[] = 'is_suspicious = 0';
+        }
         $params = [];
         if ($since !== null) {
             $conditions[] = 'ts >= :since';

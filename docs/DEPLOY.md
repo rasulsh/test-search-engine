@@ -2,6 +2,8 @@
 
 Everything to put a build on the servers, update it, upgrade across milestones, roll back, and sign off before going live. To produce the build artifacts (`release.zip` for cPanel, `vps_vectors/` for the VPS) use [TRAINING-COLAB.md](TRAINING-COLAB.md); the export that feeds it is described in [PIPELINE.md](PIPELINE.md#exporting-from-opencart-db_exportpy); the VPS side is [`vps/README.md`](../vps/README.md).
 
+For the quick step-by-step version (commands only), see [runbook.md](runbook.md).
+
 ## Deploy / update runbook
 
 The runbook has four machines' worth of steps. The **OpenCart database**

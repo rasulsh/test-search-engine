@@ -414,6 +414,22 @@ final class AdminPanelTest extends TestCase
         self::assertStringNotContainsString('127.0.0.1:', $status);
     }
 
+    public function testTheStatusPageListsTheEffectiveConfigurationWithoutSecrets(): void
+    {
+        $client = self::client();
+        $this->loggedIn($client);
+
+        $body = $client->request('GET', '/admin.php?p=status')['body'];
+
+        self::assertStringContainsString('id="cfg-table"', $body);
+        self::assertStringContainsString('<bdi class="ltr">db.password</bdi>', $body);
+        self::assertStringContainsString('<bdi class="ltr">search.title_weight</bdi>', $body);
+        self::assertStringNotContainsString((string) getenv('SEARCH_TEST_DB_DSN'), $body);
+        self::assertStringNotContainsString(TempConfig::ADMIN_HASH, $body);
+        self::assertStringNotContainsString(TempConfig::ADMIN_PASSWORD, $body);
+        self::assertStringContainsString('تنظیم‌شده (پنهان)', $body);
+    }
+
     public function testTheStatusPageNeverHangsWhenTheVpsAndRedisAreDown(): void
     {
         $client = self::client('dead');

@@ -22,7 +22,7 @@ final class AdminViews
     }
 
     /** A stored timestamp, kept Gregorian and left-to-right inside the RTL text. */
-    private static function ts(mixed $value): string
+    public static function ts(mixed $value): string
     {
         return $value === null || $value === '' ? self::e(AdminStrings::fa()['ui']['unknown'])
             : '<bdi class="ltr">' . self::e($value) . '</bdi>';
@@ -131,26 +131,81 @@ final class AdminViews
         $cards .= '<section class="card"><h2>' . self::e($t['last_reload']) . '</h2><p>' . $reloaded
             . '</p></section>';
 
-        $d = $s['doctor'];
-        $cards .= '<section class="card"><h2>' . self::e($t['doctor']) . '</h2>';
+        $cards .= '<section class="card"><h2>' . self::e($t['doctor']) . '</h2>' . self::doctorBody($s['doctor'])
+            . '<p class="note">' . self::e($t['doctor_note']) . '</p></section>';
+
+        return self::helpBox($t['help']) . '<div class="cards">' . $cards . '</div>' . self::configTable($s['config']);
+    }
+
+    /**
+     * The config doctor's verdict: counts as badges, then every key path with its message.
+     *
+     * @param array{errors: list<string>, warnings: list<string>, info: list<string>} $d
+     */
+    public static function doctorBody(array $d): string
+    {
+        $t = AdminStrings::fa()['status'];
+        $badge = static fn (string $kind, string $text): string => '<span class="badge ' . $kind . '">'
+            . self::e($text) . '</span>';
         $errors = $d['errors'] === [] ? ''
             : $badge('bad', $t['doctor_errors'] . ': ' . self::num(count($d['errors']))) . ' ';
         $warnings = $d['warnings'] === [] ? ''
             : $badge('warn', $t['doctor_warnings'] . ': ' . self::num(count($d['warnings'])));
-        $cards .= $errors . $warnings === '' ? '<p>' . $badge('ok', $t['doctor_ok']) . '</p>'
-            : '<p>' . $errors . $warnings . '</p>';
+        $html = $errors . $warnings === '' ? '<p>' . $badge('ok', $t['doctor_ok']) . '</p>' : '<p>' . $errors
+            . $warnings . '</p>';
         foreach (['errors', 'warnings'] as $kind) {
             if ($d[$kind] !== []) {
-                $cards .= '<ul class="keys">';
+                $html .= '<ul class="keys">';
                 foreach ($d[$kind] as $line) {
-                    $cards .= '<li>' . self::e($line) . '</li>';
+                    $html .= '<li>' . self::e($line) . '</li>';
                 }
-                $cards .= '</ul>';
+                $html .= '</ul>';
             }
         }
-        $cards .= '<p class="note">' . self::e($t['doctor_note']) . '</p></section>';
 
-        return self::helpBox($t['help']) . '<div class="cards">' . $cards . '</div>';
+        return $html;
+    }
+
+    /**
+     * @param list<array{key: string, value: ?string, state: string, source: string, issues: list<array{level: string,
+     *        message: string}>}> $rows
+     */
+    private static function configTable(array $rows): string
+    {
+        $t = AdminStrings::fa()['config'];
+        $body = '';
+        foreach ($rows as $row) {
+            $value = match ($row['state']) {
+                'set' => '<span class="badge ok">' . self::e($t['secret_set']) . '</span>',
+                'empty' => '<span class="badge off">' . self::e($t['secret_empty']) . '</span>',
+                'hidden' => '<span class="badge off">' . self::e($t['hidden']) . '</span>',
+                default => $row['value'] === ''
+                    ? '<span class="note">' . self::e($t['empty']) . '</span>'
+                    : '<bdi class="ltr">' . self::e($row['value']) . '</bdi>',
+            };
+            $notes = '';
+            foreach ($row['issues'] as $issue) {
+                $kind = $issue['level'] === 'error' ? 'bad' : 'warn';
+                $notes .= '<div><span class="badge ' . $kind . '">' . self::e($t[$issue['level']])
+                    . '</span> <bdi class="ltr">'
+                    . self::e($issue['message']) . '</bdi></div>';
+            }
+            $fromFile = $row['source'] === 'file';
+            $body .= '<tr data-changed="' . ($fromFile || $notes !== '' ? '1' : '0') . '"><td><bdi class="ltr">'
+                . self::e($row['key']) . '</bdi></td><td>' . $value . '</td><td>'
+                . self::e($fromFile ? $t['source_file'] : $t['source_default']) . '</td><td>' . $notes . '</td></tr>';
+        }
+
+        return '<section class="card cfg"><h2>' . self::e($t['title']) . '</h2><p class="note">'
+            . self::e($t['intro']) . '</p>'
+            . '<div class="controls"><input type="search" data-filter="cfg-table" placeholder="' . self::e($t['filter'])
+            . '" aria-label="' . self::e($t['filter'])
+            . '"> <label><input type="checkbox" data-changed-only="cfg-table"> '
+            . self::e($t['only_changed'])
+            . '</label></div><div class="scroll tall"><table id="cfg-table"><thead><tr><th>'
+            . self::e($t['key']) . '</th><th>' . self::e($t['value']) . '</th><th>' . self::e($t['source'])
+            . '</th><th>'
+            . self::e($t['issues']) . '</th></tr></thead><tbody>' . $body . '</tbody></table></div></section>';
     }
 
     /**

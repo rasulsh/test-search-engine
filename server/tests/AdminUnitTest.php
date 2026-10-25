@@ -280,6 +280,7 @@ final class AdminUnitTest extends DatabaseTestCase
             'redis' => ['state' => 'off'],
             'doctor' => ['errors' => ['db.dsn: required, missing or empty'], 'warnings' => [], 'info' => []],
             'last_reload' => null,
+            'config' => [],
         ]);
 
         self::assertStringNotContainsString('<b>x</b>', $html);

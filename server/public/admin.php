@@ -10,6 +10,8 @@
 declare(strict_types=1);
 
 use App\AdminAuth;
+use App\AdminOps;
+use App\AdminOpsViews;
 use App\AdminPage;
 use App\AdminStatus;
 use App\AdminStrings;
@@ -18,8 +20,10 @@ use App\Analytics;
 use App\AnalyticsPage;
 use App\Audit;
 use App\Config;
+use App\ConfigDoctor;
 use App\Db;
 use App\LogsPage;
+use App\Reload;
 
 /** @var array<string, mixed> $config */
 if (!isset($config)) {
@@ -83,7 +87,7 @@ try {
     $auth = new AdminAuth($admin, $audit);
     $auth->start($mount);
 
-    $pages = ['status', 'analytics', 'logs', 'audit', 'help'];
+    $pages = ['status', 'ops', 'analytics', 'logs', 'audit', 'help'];
     $page = (string) ($_GET['p'] ?? 'status');
     $json = $page === 'analytics' && ($_GET['format'] ?? '') === 'json';
     $state = $auth->check(time(), $json);
@@ -153,8 +157,29 @@ try {
         $redirect('p=status');
         return;
     }
-    if ($method !== 'GET' || !in_array($page, $pages, true)) {
-        $refuse($method !== 'GET' ? 405 : 404, $fa['errors'][$method !== 'GET' ? 'method' : 'not_found']);
+    if (!in_array($page, $pages, true) || ($method !== 'GET' && $page !== 'ops')) {
+        $unknown = !in_array($page, $pages, true);
+        $refuse($unknown ? 404 : 405, $fa['errors'][$unknown ? 'not_found' : 'method']);
+        return;
+    }
+    if ($method === 'POST') {
+        // The action runs to the end whatever the browser does, and must not hold the session lock meanwhile.
+        session_write_close();
+        $ops = new AdminOps($config, $pdo, $audit, $ip);
+        $loadStaging = ($_POST['load_staging'] ?? '') === '1';
+        $result = match ((string) ($_POST['action'] ?? '')) {
+            'validate' => $ops->validate($loadStaging),
+            'apply' => $ops->apply($loadStaging),
+            'rollback' => $ops->rollback(),
+            'flush_cache' => $ops->flushCache(),
+            'vps_reload' => $ops->vpsReload(),
+            default => null,
+        };
+        if ($result === null) {
+            $refuse(400, $fa['errors']['method']);
+            return;
+        }
+        $redirect('p=ops&done=' . (int) $result['id']);
         return;
     }
 
@@ -164,6 +189,19 @@ try {
         case 'status':
             $status = new AdminStatus($config, $pdo, $audit, Config::overrides(Config::file()));
             $body = AdminViews::status($status->collect());
+            break;
+        case 'ops':
+            $probe = new AdminStatus($config, $pdo, $audit, Config::overrides(Config::file()));
+            $body = AdminOpsViews::page([
+                'reload' => (new Reload($pdo, $config))->describe(),
+                'vps' => $probe->vps(),
+                'redis' => $probe->redis(),
+                'doctor' => ConfigDoctor::check(Config::overrides(Config::file())),
+                'recent' => $audit->latest(AdminOps::ACTIONS, 8),
+                'done' => (int) ($_GET['done'] ?? 0),
+                'csrf' => $csrf,
+                'prefix' => (string) $config['redis']['prefix'],
+            ]);
             break;
         case 'audit':
             $body = AdminViews::audit($audit->recent((int) ($_GET['page'] ?? 1)));

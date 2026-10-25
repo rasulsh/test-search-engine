@@ -43,6 +43,39 @@ final class Config
     }
 
     /**
+     * Keys that existed once and are gone, so an old config.php is told what to do instead of getting
+     * a bare "unknown key". Two shapes:
+     *  - renamed: ['to' => 'new.key', 'since' => 'M40', 'until' => 'M42']: the old value is used for the
+     *    new key (unless the new key is set too) up to the `until` release, the doctor warns;
+     *  - removed: ['removed' => 'why', 'since' => 'M39']: ignored, the doctor says why it can be deleted.
+     * Add every renamed or removed key here and to docs/CHANGELOG.md (CLAUDE.md, Definition of Done).
+     *
+     * @return array<string, array{since: string, to?: string, until?: string, removed?: string}>
+     */
+    public static function deprecated(): array
+    {
+        return [
+            'logs.token' => [
+                'since' => 'M39',
+                'removed' => 'the logs and analytics pages sit behind the admin panel login (admin.username / '
+                    . 'admin.password_hash), so this token is not used',
+            ],
+            'admin.ip_header' => [
+                'since' => 'M39',
+                'removed' => 'X-Forwarded-For is no longer trusted by default; the client address is REMOTE_ADDR, '
+                    . 'and reverse proxies are listed in admin.trusted_proxies',
+            ],
+        ];
+    }
+
+    /** Dotted paths whose values are credentials: never shown, only "set" or "empty". */
+    public static function isSecret(string $path): bool
+    {
+        return in_array($path, ['db.dsn', 'db.user'], true)
+            || preg_match('/(^|\.)(password|password_hash|token|auth)$/', $path) === 1;
+    }
+
+    /**
      * @return array<string, string> 'search.title_weight' => 'float'
      */
     public static function schema(): array
@@ -86,13 +119,21 @@ final class Config
 
     /**
      * @param array<string, mixed> $overrides
+     * @param array<string, array<string, string>>|null $deprecated replaces {@see deprecated()} (tests)
      * @return array<string, mixed>
      */
-    public static function merge(array $overrides, ?string $root = null): array
+    public static function merge(array $overrides, ?string $root = null, ?array $deprecated = null): array
     {
         $config = self::defaults($root);
         $schema = self::schema();
-        foreach (self::flatten($overrides) as $path => $value) {
+        $given = self::flatten($overrides);
+        // A renamed key keeps working for its grace period: its value moves to the new name.
+        foreach ($deprecated ?? self::deprecated() as $old => $rule) {
+            if (isset($rule['to']) && array_key_exists($old, $given) && !array_key_exists($rule['to'], $given)) {
+                $given[$rule['to']] = $given[$old];
+            }
+        }
+        foreach ($given as $path => $value) {
             if (!isset($schema[$path])) {
                 // Unknown to the schema: kept as given (the doctor warns about it).
                 self::set($config, $path, $value);
@@ -250,6 +291,8 @@ final class Config
             'vps.url'        => ['string', ''],
             'vps.token'      => ['string', ''],
             'vps.timeout_ms' => ['int', 300],
+            // POST {vps.url}/reload (the admin panel's "reload vectors"): loading a catalog takes seconds.
+            'vps.reload_timeout_ms' => ['int', 60000],
 
             'redis.enabled'    => ['bool', false],
             'redis.host'       => ['string', '127.0.0.1'],
@@ -270,8 +313,6 @@ final class Config
             'events.allowed_origin' => ['string', ''],
 
             'debug.token'     => ['string', ''],
-            // Deprecated since M39: the browser pages sit behind the admin panel login now.
-            'logs.token'      => ['string', ''],
             'logs.page_size'  => ['int', 50],
             'logs.refresh_seconds' => ['int', 30],
             'reload.token'    => ['string', ''],

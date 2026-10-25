@@ -26,6 +26,9 @@ venv/
 /server/data_incoming/*
 !/server/data_incoming/.htaccess
 /server/data_old/
+/server/data_swap/
+# Held while a reload or rollback runs (M40)
+/server/reload.lock
 
 # Index bundles produced offline
 /bundle/

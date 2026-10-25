@@ -18,6 +18,11 @@ final class Audit
     public const LOGIN_THROTTLED = 'login_throttled';
     public const LOGOUT = 'logout';
     public const RELOAD_API = 'reload_api';
+    public const RELOAD_VALIDATE = 'reload_validate';
+    public const RELOAD_APPLY = 'reload_apply';
+    public const ROLLBACK = 'rollback';
+    public const CACHE_FLUSH = 'cache_flush';
+    public const VPS_RELOAD = 'vps_reload';
 
     private string $table;
 
@@ -26,8 +31,12 @@ final class Audit
         $this->table = Identifier::quote($table);
     }
 
-    /** Appends a row, then drops a small batch of rows past the retention (cheap: idx_ts, LIMIT). */
-    public function write(string $ip, string $action, string $detail = ''): void
+    /**
+     * Appends a row, then drops a small batch of rows past the retention (cheap: idx_ts, LIMIT).
+     *
+     * @return int the new row's id
+     */
+    public function write(string $ip, string $action, string $detail = ''): int
     {
         $stmt = $this->pdo->prepare(
             "INSERT INTO {$this->table} (ip, action, detail) VALUES (:ip, :action, :detail)"
@@ -37,8 +46,33 @@ final class Audit
             'action' => mb_substr($action, 0, 32),
             'detail' => mb_substr($detail, 0, 512),
         ]);
+        $id = (int) $this->pdo->lastInsertId();
         $days = max(1, $this->retentionDays);
         $this->pdo->exec("DELETE FROM {$this->table} WHERE ts < NOW() - INTERVAL {$days} DAY LIMIT 200");
+
+        return $id;
+    }
+
+    /**
+     * The newest rows of the given actions, newest first.
+     *
+     * @param list<string> $actions
+     * @return list<array<string, mixed>>
+     */
+    public function latest(array $actions, int $limit): array
+    {
+        if ($actions === []) {
+            return [];
+        }
+        $marks = implode(',', array_fill(0, count($actions), '?'));
+        $limit = max(1, $limit);
+        $stmt = $this->pdo->prepare(
+            "SELECT id, ts, ip, action, detail FROM {$this->table} WHERE action IN ({$marks})"
+            . " ORDER BY id DESC LIMIT {$limit}"
+        );
+        $stmt->execute(array_values($actions));
+
+        return $stmt->fetchAll(PDO::FETCH_ASSOC);
     }
 
     /** Failed logins inside the window; for one address, or (null) from every address. */

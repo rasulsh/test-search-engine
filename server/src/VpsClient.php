@@ -29,7 +29,8 @@ final class VpsClient
         private readonly string $url,
         private readonly string $token,
         private readonly int $timeoutMs,
-        ?callable $transport = null
+        ?callable $transport = null,
+        private readonly int $reloadTimeoutMs = 60000
     ) {
         $this->transport = $transport ?? [self::class, 'curl'];
     }
@@ -46,7 +47,48 @@ final class VpsClient
             return null;
         }
 
-        return new self($url, (string) $vps['token'], (int) $vps['timeout_ms']);
+        return new self(
+            $url,
+            (string) $vps['token'],
+            (int) $vps['timeout_ms'],
+            null,
+            (int) $vps['reload_timeout_ms']
+        );
+    }
+
+    /**
+     * Asks the VPS to load the vectors it was uploaded (its POST /reload, same bearer token). Not part
+     * of /search: used by the admin panel, with its own, longer timeout. Never throws.
+     *
+     * @return array{ok: bool, status: int, count: ?int, model: ?string, built_at: ?string, error: string}
+     *         status 0 = no answer (the reason is in `error`: timeout, unreachable ...)
+     */
+    public function reload(): array
+    {
+        $response = ($this->transport)(
+            rtrim($this->url, '/') . '/reload',
+            ['Authorization: Bearer ' . $this->token],
+            '',
+            max(1, $this->reloadTimeoutMs)
+        );
+        if (is_string($response)) {
+            return [
+                'ok' => false, 'status' => 0, 'count' => null, 'model' => null, 'built_at' => null,
+                'error' => $response,
+            ];
+        }
+        $data = json_decode($response['body'], true);
+        $data = is_array($data) ? $data : [];
+        $ok = $response['status'] === 200 && ($data['ok'] ?? false) === true;
+
+        return [
+            'ok' => $ok,
+            'status' => $response['status'],
+            'count' => isset($data['count']) ? (int) $data['count'] : null,
+            'model' => isset($data['model']) ? (string) $data['model'] : null,
+            'built_at' => isset($data['built_at']) ? (string) $data['built_at'] : null,
+            'error' => $ok ? '' : (is_string($data['error'] ?? null) ? $data['error'] : 'http_' . $response['status']),
+        ];
     }
 
     /**

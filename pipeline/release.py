@@ -10,7 +10,7 @@ Builds the bundle and packs, relative to the host's
     data_incoming/        the bundle (vectors, products.load.sql, meta.json, ...)
     bootstrap.php, config.example.php, src/, public/ (incl. public/install.php),
     tools/config-check.php (the config doctor), tools/logs-export.php (log export, M36),
-    tools/admin-password.php (admin password hash, M39)
+    tools/admin-password.php (admin password hash, M39), tools/_php-guard.php (their PHP 8.1 check)
     .htaccess, data/.htaccess, data_incoming/.htaccess (deny-all safety nets)
     db/schema.sql         read by install.php on the first deploy
     db/migrations/        one-off SQL for an existing database (apply by hand, see docs/DEPLOY.md)
@@ -59,10 +59,10 @@ from normalize import NORMALIZATION_VERSION
 REPO_ROOT = Path(__file__).resolve().parents[1]
 # config.example.php is the template for a first deploy; config.php is never packed.
 # Three tools ship (run on the host after unzipping): the config doctor, since M36 the
-# log export and, since M39, the admin password hash maker. tools/eval.php is dev-only and
-# stays out.
+# log export and, since M39, the admin password hash maker, all behind tools/_php-guard.php
+# (PHP 8.1 check). tools/eval.php is dev-only and stays out.
 SERVER_CODE = ("bootstrap.php", "config.example.php", "src", "public", "tools/config-check.php",
-               "tools/logs-export.php", "tools/admin-password.php")
+               "tools/logs-export.php", "tools/admin-password.php", "tools/_php-guard.php")
 # Deny-all files (M30): a safety net if the tree is ever misplaced under a web root.
 # The bundle's own data_incoming/.htaccess becomes data/.htaccess on reload.
 SAFETY_NET = (".htaccess", "data/.htaccess", "data_incoming/.htaccess")

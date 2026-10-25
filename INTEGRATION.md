@@ -256,6 +256,7 @@ Failures:
 | --- | --- | --- |
 | 401 | `{"error":"unauthorized"}` | Token missing or wrong. |
 | 405 | `{"error":"method_not_allowed"}` | Not a `POST`. |
+| 409 | `{"error":"reload_busy"}` (the internal reason is `busy`) | Another reload or rollback (this endpoint or the admin panel) is running; the lock `server/reload.lock` allows one at a time (M40). Nothing changed; retry when it is done. |
 | 422 | `{"error":"invalid_bundle","reason":"…","details":{…}}` | Validation failed. **Nothing was swapped.** Reasons are listed below. |
 | 500 | `{"error":"internal_error"}` | Unexpected failure (such as a database error). |
 | 503 | `{"error":"reload_disabled"}` | No `SEARCH_RELOAD_TOKEN` configured, so reload is off. |
@@ -277,6 +278,9 @@ that helps.
 | `count_mismatch` | `meta.count`, `vectors.idx` lines, and `products_new` rows disagree. Usually an incomplete SQL load: recreate `products_new` and reload the SQL. |
 | `vectors_size_mismatch`, `checksum_mismatch` | `vectors.bin` is truncated or corrupted (such as an interrupted upload or FTP ASCII mode). Re-upload it in binary mode. |
 | `directory_swap_failed` | Renaming `data_incoming` to `data` failed (permissions). The table swap was rolled back, so the service is unchanged. |
+| `busy` | Not an `invalid_bundle`: another reload or rollback holds `server/reload.lock`. `POST /reload` answers it as `409` `reload_busy` (above); the admin panel shows it as "in progress". Nothing changed. |
+| `lock_unavailable` | `server/reload.lock` cannot be created (the app folder is not writable by the web user): `POST /reload` answers `500` `internal_error`; the panel says so. Nothing ran. |
+| `nothing_to_roll_back` | Panel only (its "previous version" button): `products_old` or `data_old` is missing, so there is no previous version. Never returned by `POST /reload`. |
 
 ### Error codes
 
@@ -291,6 +295,7 @@ that helps.
 | `internal_error` | 500 | `/search`, `/reload` |
 | `app_base_not_found` | 500 | every endpoint: `bootstrap.php` is not in the app base (the parent of `public/`, or `SEARCH_APP_BASE`); a deploy-layout error, see [DEPLOY.md](docs/DEPLOY.md#layout) |
 | `reload_disabled` | 503 | `/reload` |
+| `reload_busy` | 409 | `/reload` (another reload or rollback is running; retry later) |
 
 `/health` reports failure through `status: "degraded"` with HTTP 503, not
 through an `error` code.

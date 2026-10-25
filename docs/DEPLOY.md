@@ -80,6 +80,21 @@ security headers the admin panel sends and routes the extensionless endpoints. T
 are ignored by a host that does not read `.htaccess` (an nginx front), so verify
 with the checks in the [go-live checklist](#production-go-live-checklist).
 
+### Command-line tools
+
+`server/tools/` holds `config-check.php` (the config doctor), `logs-export.php` and `admin-password.php`. Run them
+**as the account user, not as root**, with the **PHP 8.1+ binary the site uses**:
+
+```bash
+su - search -c "cd ~/search-service/server && /opt/cpanel/ea-php82/root/usr/bin/php tools/config-check.php"
+```
+
+(`search` is the cPanel account; the PHP path is the account's PHP version under `/opt/cpanel/`.) Root would create
+files the web server's user cannot read or replace (a log export, a rotated config), and the host's default `php`
+is often older than the site's. Every tool checks `PHP_VERSION_ID >= 80100` first (`tools/_php-guard.php`, shipped
+in `release.zip`) and, on an older PHP, prints a one-paragraph English message and exits with status 1 instead of a
+fatal error from inside `src/`. A PHP older than 7.0 cannot even parse the tools; use the explicit path then.
+
 ### One-time setup (cPanel host)
 
 The first deploy is: upload the zip, extract it, open `install.php`, fill in
@@ -455,6 +470,21 @@ web-exposed. No schema or config change. The alias fix ships in the code too (`S
 alias groups that share a term), so no bundle rebuild is needed for it, only the new code and a `/reload`
 (or any worker restart) so the cached alias map is rebuilt.
 
+<a id="upgrading-to-m40"></a>**Upgrading to M40 (operations page, config upgrade safety).**
+1. **Copy** the new `server/` (or `release.zip`). New files: `src/AdminOps.php`, `src/AdminOpsViews.php`, `src/ConfigReport.php`,
+   `tools/_php-guard.php`; changed: `src/Reload.php`, `src/Cache.php`, `src/VpsClient.php`, `src/Audit.php`, `src/Config.php`,
+   `src/ConfigDoctor.php`, `src/AdminPage.*`, `src/AdminStrings.php`, `src/AdminViews.php`, `src/AdminStatus.php`,
+   `public/admin.php`, `public/reload.php`, all of `tools/*.php`. No schema change and **no `.htaccess` change**.
+2. **`server/` must be writable by the web user** (it already has to be for the `data/` swap): reloads and rollbacks now take
+   an exclusive lock, `server/reload.lock`, created on first use (it is gitignored and covered by `server/.htaccess`). If it
+   cannot be created the operation stops with "lock unavailable" instead of running unprotected.
+3. `POST /reload` can now answer `409 {"error":"reload_busy"}` when another reload or rollback (from the token endpoint or the
+   panel) is running. A deploy script that retries on failure should retry on 409 after a pause, not treat it as a bad bundle.
+4. **Check the config doctor**: `su - search -c "cd ~/search-service/server && /opt/cpanel/ea-php82/root/usr/bin/php tools/config-check.php"`
+   (see [Command-line tools](#command-line-tools)) or the status page. A leftover `logs.token` or `admin.ip_header` is now
+   reported with the reason it can be deleted; the status page's "effective configuration" table shows what the app really uses.
+5. The new setting `vps.reload_timeout_ms` (60 s) only matters if the panel's VPS button is used; the VPS side is unchanged.
+
 <a id="upgrading-to-m39"></a>**Upgrading to M39 (admin panel: login, shell, status).**
 1. **Copy** the new `server/` (or `release.zip`; it carries the new files). The new files are:
    `public/admin.php`, `src/Admin*.php`, `src/Audit.php`, `src/AdminPage.js`, `src/AdminPage.css`,
@@ -573,7 +603,13 @@ If Redis stops, searches carry on uncached (each costs at most `redis.timeout_ms
 
 ### Rollback (one step)
 
-To return to the previous catalog after a bad reload:
+**From the panel (M40):** the operations page has a "return to the previous version" button, enabled only when both
+`products_old` and `data_old` exist. It swaps the tables and the directories back in one step, flushes the result cache and
+is audited; pressing it again undoes the rollback (the version you left becomes the "previous" one). It refuses, changing
+nothing, when the previous bundle no longer matches this code's model, dimension or normalization version. Roll the VPS
+vectors back separately (`vps/README.md`, "Rollback").
+
+**By hand**, to return to the previous catalog after a bad reload:
 
 ```sql
 RENAME TABLE products TO products_bad, products_old TO products;

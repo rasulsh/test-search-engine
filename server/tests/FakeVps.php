@@ -57,6 +57,32 @@ final class FakeVps
     }
 
     /**
+     * GET /health (open) and POST /reload (token): scenario keys `health` / `reload` =>
+     * ['status' => int, 'body' => array|string] replace the healthy defaults.
+     *
+     * @param array<string, mixed> $scenario
+     * @return array{status: int, body: string}
+     */
+    public static function admin(array $scenario, string $path, string $authorization): array
+    {
+        $key = $path === '/health' ? 'health' : 'reload';
+        if ($key === 'reload' && $authorization !== 'Bearer ' . ($scenario['token'] ?? self::TOKEN)) {
+            return ['status' => 401, 'body' => '{"detail":"missing or wrong token"}'];
+        }
+        $default = $key === 'health'
+            ? ['ok' => true, 'model' => 'BAAI/bge-m3', 'dim' => 1024, 'count' => 24000,
+                'built_at' => '2026-10-20T09:00:00Z']
+            : ['ok' => true, 'count' => 24000, 'model' => 'BAAI/bge-m3', 'built_at' => '2026-10-20T09:00:00Z'];
+        $set = $scenario[$key] ?? ['status' => 200, 'body' => $default];
+        $body = $set['body'] ?? $default;
+
+        return [
+            'status' => (int) ($set['status'] ?? 200),
+            'body' => is_string($body) ? $body : (string) json_encode($body),
+        ];
+    }
+
+    /**
      * A client answered in-process by respond(); each call's request body is
      * appended to $calls.
      *

@@ -74,6 +74,8 @@ abstraction layers.
 │   ├── RUNTIME-FLOW.md           # POST /search stage by stage, components, degradation (M32)
 │   ├── TRAINING-COLAB.md         # rebuild / retrain runbook on Google Colab
 │   ├── DEPLOY.md                 # deploy, updates, upgrades, rollback, go-live checklist
+│   ├── CHANGELOG.md              # config changes per milestone (M40): added / removed / renamed / re-defaulted keys
+│   ├── ADMIN.md                  # the admin panel (M39): setup, security model, pages
 │   └── SEARCH-API.md             # endpoints, logs, debug, eval harness, test page
 ├── .gitignore
 ├── .github/workflows/ci.yml
@@ -117,6 +119,9 @@ abstraction layers.
 │   │   ├── AdminStatus.php        # status page data, short-timeout VPS / Redis probes (M39)
 │   │   ├── AdminPage.php / .css / .js  # panel shell: RTL, side nav, theme toggle (M39)
 │   │   ├── AdminViews.php         # panel page bodies (M39)
+│   │   ├── AdminOps.php           # the operations page's actions: reload / rollback / cache flush / VPS reload (M40)
+│   │   ├── AdminOpsViews.php      # the operations page body (M40)
+│   │   ├── ConfigReport.php       # effective-configuration table: value, source, doctor notes, secrets masked (M40)
 │   │   ├── AdminStrings.php       # every Persian string and help text of the panel (M39)
 │   │   ├── Db.php                 # thin PDO wrapper
 │   │   ├── Config.php             # config schema + every default; load() merges config.php overrides (M29)
@@ -130,6 +135,7 @@ abstraction layers.
 │   ├── config.php                # deployer overrides only (gitignored); config.example.php committed
 │   ├── tools/config-check.php    # config doctor CLI (M29): exits non-zero on an ERROR
 │   ├── tools/admin-password.php  # prompts for a password, prints the admin.password_hash (M39)
+│   ├── tools/_php-guard.php      # every tools/*.php requires it first: clear message on PHP < 8.1 (M40)
 │   ├── tools/logs-export.php     # search_logs -> CSV / JSON CLI for the zero-result loop (M36)
 │   ├── data/                      # active bundle (gitignored)
 │   └── tests/
@@ -391,6 +397,15 @@ wait for review before starting the next.
   Operations (M40), alias manager and synonyms viewer (M41) and dropping the cPanel `vectors.bin` (M42) follow.
   See `docs/ADMIN.md`.
 
+- **M40 — Admin panel: operations + config upgrade safety:** `?p=ops` (`AdminOps`): validate-only and apply of the staged
+  bundle, one-click rollback (`Reload::rollback`, swaps `products` / `products_old` and `data` / `data_old`, refused when the
+  previous bundle mismatches the code), result-cache flush by key prefix only, VPS `POST /reload` (`vps.reload_timeout_ms`),
+  config doctor; every action CSRF + confirm + audit row, runs to the end if the browser disconnects, shows elapsed time.
+  `Reload` is the one code path (also `POST /reload`) and takes a non-blocking lock (`server/reload.lock`, `409 reload_busy`).
+  `Config::deprecated()` (renamed keys keep working two releases, removed keys explain themselves in the doctor),
+  `docs/CHANGELOG.md` (config changes per milestone), the status page's effective-configuration table (secrets masked),
+  and `tools/*.php` checking `PHP_VERSION_ID >= 80100` first (`su - ACCOUNT -c`, not root, in `docs/DEPLOY.md`).
+
 - **M22 — Offline build speed + reliable export:** `pipeline/db_export.py`
   (direct DB -> CSV, replaces the phpMyAdmin export), GPU/fp16/batch-configured
   `RealEmbedder`, and a mock cPanel `vectors.bin` in `release.py` (unread since
@@ -398,7 +413,10 @@ wait for review before starting the next.
 
 **Definition of Done (per PR):** code + tests pass in CI; docs updated;
 KISS respected (no unused abstraction); PR description complete; no secrets or
-data files committed.
+data files committed. **A PR that touches config** (adds, removes, renames or re-defaults a
+key in `App\Config`) adds a "Config changes" entry for its milestone to `docs/CHANGELOG.md`
+(added keys with their default, removed or renamed keys, changed defaults) and, for a removed
+or renamed key, an entry in `App\Config::deprecated()` so an old `config.php` is told what to do.
 
 ---
 
@@ -430,7 +448,7 @@ data files committed.
 
 ## Checklist
 - [ ] Tests added and passing in CI
-- [ ] Docs updated (README / docs/ / INTEGRATION / CLAUDE if needed)
+- [ ] Docs updated (README / docs/ / INTEGRATION / CLAUDE if needed); config changes in docs/CHANGELOG.md
 - [ ] No secrets, data files, or model binaries committed
 - [ ] KISS: no unnecessary files or abstraction
 - [ ] Targets master from a feature branch; not merged

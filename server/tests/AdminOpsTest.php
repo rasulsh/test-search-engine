@@ -148,12 +148,8 @@ final class AdminOpsTest extends DatabaseTestCase
         $dir = TempTree::path('adminops');
         mkdir($dir);
         $this->dirs[] = $dir;
-        $bin = pack('g*', ...array_fill(0, $count * 4, 0.5));
-        file_put_contents($dir . '/vectors.bin', $bin);
-        file_put_contents($dir . '/vectors.idx', implode("\n", range(3000, 2999 + $count)) . "\n");
         file_put_contents($dir . '/meta.json', json_encode($meta + [
-            'model' => Config::defaults()['model']['name'], 'dim' => 4, 'normalization_version' => 2, 'count' => $count,
-            'built_at' => '2026-10-01', 'checksum' => hash('sha256', $bin),
+            'normalization_version' => 2, 'count' => $count, 'built_at' => '2026-10-01',
         ]));
 
         return $dir;
@@ -163,7 +159,7 @@ final class AdminOpsTest extends DatabaseTestCase
     {
         return $this->ops(null, null, [
             'paths' => ['data' => $data, 'data_incoming' => $incoming],
-            'model' => ['dim' => 4, 'normalization_version' => 2],
+            'model' => ['normalization_version' => 2],
         ]);
     }
 
@@ -265,7 +261,7 @@ final class AdminOpsTest extends DatabaseTestCase
     public function testEveryReloadReasonHasAPersianMessage(): void
     {
         $reasons = AdminStrings::fa()['ops']['reasons'];
-        $known = ['busy', 'nothing_to_roll_back', 'missing_meta', 'invalid_meta', 'model_mismatch', 'dim_mismatch',
+        $known = ['busy', 'nothing_to_roll_back', 'missing_meta', 'invalid_meta',
             'normalization_version_mismatch', 'invalid_synonyms', 'invalid_intent_map',
             'count_mismatch', 'missing_index', 'missing_vectors', 'vectors_size_mismatch', 'checksum_mismatch',
             'missing_staging_table', 'missing_load_sql', 'staging_load_failed', 'unexpected_statement',

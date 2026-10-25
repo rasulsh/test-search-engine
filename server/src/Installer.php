@@ -41,8 +41,6 @@ final class Installer
      * template's markers) only when the form's value differs from that default.
      */
     private const OVERRIDE_KEYS = [
-        'model_name'            => 'model.name',
-        'model_dim'             => 'model.dim',
         'normalization_version' => 'model.normalization_version',
         'vps_timeout_ms'        => 'vps.timeout_ms',
         'semantic_min_score'    => 'search.semantic_min_score',
@@ -54,7 +52,6 @@ final class Installer
 
     /** Numeric fields: [type, min, max]. */
     private const NUMBERS = [
-        'model_dim'             => ['int', 1, 8192],
         'normalization_version' => ['int', 1, 1000],
         'vps_timeout_ms'        => ['int', 50, 10000],
         'semantic_min_score'    => ['float', -1, 1],
@@ -185,11 +182,6 @@ final class Installer
         $require(preg_match('/^[^\x00-\x1F\x7F]{0,256}$/u', $values['db_password']) === 1, 'db_password', 'invalid');
         // Sent as an HTTP header on reload: printable ASCII, no spaces.
         $require(preg_match('/^[\x21-\x7E]{32,256}$/', $values['reload_token']) === 1, 'reload_token', 'invalid');
-        $require(
-            preg_match('#^[A-Za-z0-9._\-/]{1,200}$#', $values['model_name']) === 1,
-            'model_name',
-            'invalid'
-        );
         // The VPS refuses tokens shorter than 16 characters; sent as an HTTP header.
         $require(
             preg_match('/^[\x21-\x7E]{16,256}$/', $values['vps_token']) === 1
@@ -341,7 +333,7 @@ final class Installer
 
     /**
      * Reject a staged bundle the new config would refuse on reload, before any
-     * file is written (the same model/dim/normalization check Reload makes).
+     * file is written (the same normalization version check Reload makes).
      *
      * @param array<string, string> $values validated values
      */
@@ -356,8 +348,6 @@ final class Installer
             return;
         }
         $actual = [
-            'model_name' => (string) ($meta['model'] ?? ''),
-            'model_dim' => (string) (int) ($meta['dim'] ?? 0),
             'normalization_version' => (string) (int) ($meta['normalization_version'] ?? 0),
         ];
         foreach ($actual as $field => $value) {

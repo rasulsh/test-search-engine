@@ -1,7 +1,7 @@
 """Pipeline configuration, read from the environment.
 
-Mirrors the model/normalization settings in server/config.example.php. Never
-hardcode model, dimension, or thresholds elsewhere — read them from here.
+Mirrors the normalization setting of server/config.example.php and holds the VPS
+model. Never hardcode model, dimension, or thresholds elsewhere — read them from here.
 """
 
 from __future__ import annotations
@@ -15,10 +15,9 @@ from normalize import NORMALIZATION_VERSION
 
 def load() -> dict[str, Any]:
     return {
+        # The cPanel bundle carries no vectors and no model since M42; /reload checks the
+        # normalization version only.
         "model": {
-            "name": os.getenv("SEARCH_MODEL", "intfloat/multilingual-e5-small"),
-            "revision": os.getenv("SEARCH_MODEL_REVISION", "main"),
-            "dim": int(os.getenv("SEARCH_MODEL_DIM", "384")),
             "normalization_version": int(
                 os.getenv("SEARCH_NORMALIZATION_VERSION", str(NORMALIZATION_VERSION))
             ),
@@ -47,11 +46,6 @@ def load() -> dict[str, Any]:
             "fp16": os.getenv("SEARCH_EMBED_FP16", "auto"),
             "batch_size": int(os.getenv("SEARCH_EMBED_BATCH_SIZE", "16")),
         },
-        # release.py embedder for the cPanel bundle's vectors.bin (e5). /search
-        # has not read it since M18; /reload only checks meta, size and checksum,
-        # so a deterministic mock saves a second full embedding run. "real"
-        # restores real e5 vectors. The VPS vectors are always real.
-        "bundle_embedder": os.getenv("SEARCH_BUNDLE_EMBEDDER", "mock"),
         # Offline alias generator (gen_aliases.py, docs/ALIASES.md): any
         # OpenAI-compatible chat endpoint. Never read at search time.
         "alias_llm": {
@@ -74,7 +68,7 @@ def load() -> dict[str, Any]:
             # input to bound the composed passage length.
             "desc_char_limit": int(os.getenv("SEARCH_DESC_CHAR_LIMIT", "300")),
             # Cap on the whole embedded passage (titles, specs, description) so it
-            # stays within the model's token limit (e5-small: 512 tokens); the
+            # stays within the model's token limit; the
             # description gives way first. 0 = no cap.
             "passage_char_limit": int(os.getenv("SEARCH_PASSAGE_CHAR_LIMIT", "1000")),
             # Only this many leading characters of the cleaned description are

@@ -2,12 +2,10 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
 import os
 from pathlib import Path
 
-import numpy as np
 import pytest
 
 import build
@@ -17,15 +15,10 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 INPUT_SQL = REPO_ROOT / "fixtures" / "products.input.sql"
 
 
-def _config(dim: int = 384) -> dict:
+def _config() -> dict:
     return {
         "embedder": "mock",
-        "model": {
-            "name": "intfloat/multilingual-e5-small",
-            "revision": "main",
-            "dim": dim,
-            "normalization_version": NORMALIZATION_VERSION,
-        },
+        "model": {"normalization_version": NORMALIZATION_VERSION},
         "build": {"products_table": "products", "desc_char_limit": 300,
                   "desc_index_chars": 400, "max_statement_bytes": 1_000_000},
     }
@@ -221,27 +214,18 @@ def test_build_bundle_format_and_determinism(tmp_path: Path) -> None:
 
     meta = build.build_bundle(products, tmp_path / "b1", config)
 
+    # M42: no model, no vectors; /reload checks the version and the count.
+    assert set(meta) == {"normalization_version", "count", "built_at"}
     assert meta["count"] == 6
-    assert meta["dim"] == 384
     assert meta["normalization_version"] == NORMALIZATION_VERSION
-    assert meta["embedder"] == "mock"
 
-    for name in ("vectors.bin", "vectors.idx", "products.load.sql", "synonyms.json",
-                 "spellcheck.txt", "keymap.json", "meta.json"):
+    for name in ("products.load.sql", "synonyms.json", "intent_map.json", "spellcheck.txt",
+                 "keymap.json", "meta.json"):
         assert (tmp_path / "b1" / name).exists()
+    assert not (tmp_path / "b1" / "vectors.bin").exists()
+    assert not (tmp_path / "b1" / "vectors.idx").exists()
     # Aliases live on the server since M41: the bundle never carries them.
     assert not (tmp_path / "b1" / "aliases.json").exists()
-
-    raw = (tmp_path / "b1" / "vectors.bin").read_bytes()
-    assert len(raw) == 6 * 384 * 4
-    assert meta["checksum"] == hashlib.sha256(raw).hexdigest()
-
-    vectors = np.frombuffer(raw, dtype="<f4").reshape(6, 384)
-    np.testing.assert_allclose(np.linalg.norm(vectors, axis=1), np.ones(6), atol=1e-6)
-
-    idx_lines = (tmp_path / "b1" / "vectors.idx").read_text().split()
-    assert idx_lines == ["2001", "2002", "2003", "2004", "2005", "2006"]
-    assert len(idx_lines) == meta["count"]
 
     # The suggestion dictionary comes from titles/brand/category/model only.
     spell = dict(
@@ -255,17 +239,16 @@ def test_build_bundle_format_and_determinism(tmp_path: Path) -> None:
     assert isinstance(synonyms, list)
 
     # normalized_desc in the load file honours desc_index_chars.
-    capped = build.build_bundle(products, tmp_path / "b3", {**config, "build": {
+    build.build_bundle(products, tmp_path / "b3", {**config, "build": {
         **config["build"], "desc_index_chars": 10}})
     load_sql = (tmp_path / "b3" / "products.load.sql").read_text(encoding="utf-8")
-    assert capped["checksum"] == meta["checksum"]  # embeddings unaffected by the cap
     full_sql = (tmp_path / "b1" / "products.load.sql").read_text(encoding="utf-8")
     assert full_sql.count("titanium") == 2  # description + normalized_desc
     assert load_sql.count("titanium") == 1  # only in the display description now
 
-    # Deterministic: a second build yields the same vectors.
-    meta2 = build.build_bundle(products, tmp_path / "b2", config)
-    assert meta2["checksum"] == meta["checksum"]
+    # Deterministic: a second build writes the same load file.
+    build.build_bundle(products, tmp_path / "b2", config)
+    assert (tmp_path / "b2" / "products.load.sql").read_text(encoding="utf-8") == full_sql
 
 
 def test_aliases_never_reach_the_bundle_or_the_spellcheck(tmp_path: Path) -> None:

@@ -83,8 +83,6 @@ final class AdminStatus
             'built_at' => $meta['built_at'] ?? null,
             'normalization_version' => $meta['normalization_version'] ?? null,
             'count' => $meta['count'] ?? null,
-            'model' => $meta['model'] ?? null,
-            'dim' => $meta['dim'] ?? null,
         ];
     }
 

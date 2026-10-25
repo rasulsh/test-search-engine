@@ -10,13 +10,12 @@ from pathlib import Path
 
 import pytest
 
-import config as pipeline_config
 import release
 from normalize import NORMALIZATION_VERSION
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 INPUT_SQL = REPO_ROOT / "fixtures" / "products.input.sql"
-BUNDLE_FILES = ("vectors.bin", "vectors.idx", "products.load.sql", "synonyms.json",
+BUNDLE_FILES = ("products.load.sql", "synonyms.json",
                 "intent_map.json", "spellcheck.txt", "keymap.json", "meta.json")
 
 
@@ -126,7 +125,7 @@ def test_release_bundle_is_the_built_bundle(tmp_path: Path, dev_tree: Path) -> N
     with zipfile.ZipFile(tmp_path / "out" / "release.zip") as archive:
         meta = json.loads(archive.read("data_incoming/meta.json"))
         load_sql = archive.read("data_incoming/products.load.sql").decode("utf-8")
-    assert meta["count"] == 6 and meta["embedder"] == "mock"
+    assert meta["count"] == 6 and "embedder" not in meta
     assert "CREATE TABLE `products_new`" in load_sql  # self-contained staging load
 
 
@@ -176,38 +175,23 @@ def test_release_ships_the_intent_map_and_rejects_a_bad_one(
 
 
 
-def _seen_embedders(monkeypatch: pytest.MonkeyPatch, *args: str) -> dict[str, str]:
-    seen: dict[str, str] = {}
-
-    def fake_bundle(products, out_dir, config):  # type: ignore[no-untyped-def]
-        seen["bundle"] = config["embedder"]
-        return {"count": 0, "dim": 0, "embedder": config["embedder"]}
+def test_release_vps_vectors_are_real_whatever_the_shell_says(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # EMBEDDER=mock in the shell must not leak mock vectors into the VPS (M42: the cPanel
+    # bundle is never embedded, so the VPS build is the only embedding call).
+    seen: list[str] = []
 
     def fake_vps(products, out_dir, config):  # type: ignore[no-untyped-def]
-        seen["vps"] = config["embedder"]
+        seen.append(config["embedder"])
         return {"count": 0, "model": "m", "dim": 0, "embedder": config["embedder"]}
 
-    monkeypatch.setattr(release.build, "build_bundle", fake_bundle)
+    monkeypatch.setenv("EMBEDDER", "mock")
     monkeypatch.setattr(release.build, "build_vps_vectors", fake_vps)
     monkeypatch.setattr(release, "release_entries", lambda *a: [])
     monkeypatch.setattr(release, "write_zip", lambda *a: None)
-    release.main(["--sql", str(INPUT_SQL), "--out", "unused.zip", *args])
-    return seen
-
-
-def test_release_vps_vectors_are_real_and_bundle_vectors_mock(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    # EMBEDDER=mock in the shell must not leak mock vectors into the VPS; the
-    # unused e5 bundle vectors default to the mock (M22).
-    monkeypatch.setenv("EMBEDDER", "mock")
-    monkeypatch.delenv("SEARCH_BUNDLE_EMBEDDER", raising=False)
-    assert _seen_embedders(monkeypatch) == {"bundle": "mock", "vps": "real"}
-
-
-def test_release_bundle_embedder_can_be_real(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("SEARCH_BUNDLE_EMBEDDER", "real")
-    assert _seen_embedders(monkeypatch) == {"bundle": "real", "vps": "real"}
+    release.main(["--sql", str(INPUT_SQL), "--out", "unused.zip"])
+    assert seen == ["real"]
 
 
 def test_real_repository_release_via_the_cli(tmp_path: Path) -> None:
@@ -247,10 +231,9 @@ def test_one_command_builds_the_zip_and_the_vps_vectors(tmp_path: Path, dev_tree
     vps_meta = json.loads((vps / "meta.json").read_text(encoding="utf-8"))
     with zipfile.ZipFile(tmp_path / "out" / "release.zip") as archive:
         meta = json.loads(archive.read("data_incoming/meta.json"))
-        bundle_ids = archive.read("data_incoming/vectors.idx").decode("utf-8")
         assert not any("vps" in n for n in archive.namelist())
+        assert not any(n.startswith("data_incoming/vectors.") for n in archive.namelist())
     assert vps_meta["count"] == meta["count"] == 6
-    assert (vps / "vectors.idx").read_text() == bundle_ids  # the same products, same row order
 
 
 def test_no_vps_skips_the_vectors_and_the_flags_conflict(tmp_path: Path, dev_tree: Path) -> None:
@@ -279,17 +262,15 @@ def test_release_prints_copy_paste_deploy_steps_for_both_targets(
 def test_release_bundle_stays_reload_compatible_with_the_live_server(
     tmp_path: Path, dev_tree: Path
 ) -> None:
-    # M21 adds fields, not rules: the keys /reload checks (model, dim,
-    # normalization_version) are what config.example.php and the pre-M21
-    # releases carry; only count and checksum differ between catalogs.
+    # The only key /reload checks against the code is normalization_version (contract 3);
+    # count is compared with the staging rows.
     _release(tmp_path, dev_tree)
     with zipfile.ZipFile(tmp_path / "out" / "release.zip") as archive:
         meta = json.loads(archive.read("data_incoming/meta.json"))
-    config = pipeline_config.load()["model"]
 
-    assert (meta["model"], meta["dim"], meta["revision"]) == (
-        config["name"], config["dim"], config["revision"])
     assert meta["normalization_version"] == NORMALIZATION_VERSION == 4
+    assert meta["count"] == 6
+    assert not {"model", "dim", "revision", "checksum", "embedder"} & set(meta)
 
 
 def test_release_refuses_to_pack_without_the_safety_nets(tmp_path: Path, dev_tree: Path) -> None:

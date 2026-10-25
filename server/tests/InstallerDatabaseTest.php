@@ -13,7 +13,6 @@ use App\InstallerException;
  */
 final class InstallerDatabaseTest extends DatabaseTestCase
 {
-    private const DIM = 4;
     private const LOAD_SAMPLE_IDS = [2001, 2002, 2003, 2004, 2005, 2006];
 
     private string $serverDir = '';
@@ -51,7 +50,6 @@ final class InstallerDatabaseTest extends DatabaseTestCase
             'db_name' => $parts['dbname'] ?? '',
             'db_user' => (string) getenv('SEARCH_TEST_DB_USER'),
             'db_password' => (string) getenv('SEARCH_TEST_DB_PASSWORD'),
-            'model_dim' => (string) self::DIM,
         ], $overrides));
     }
 
@@ -61,16 +59,10 @@ final class InstallerDatabaseTest extends DatabaseTestCase
         $dir = $this->serverDir . '/data_incoming';
         mkdir($dir);
         $count = count(self::LOAD_SAMPLE_IDS);
-        $bin = pack('g*', ...array_fill(0, $count * self::DIM, 0.5));
-        file_put_contents($dir . '/vectors.bin', $bin);
-        file_put_contents($dir . '/vectors.idx', implode("\n", self::LOAD_SAMPLE_IDS) . "\n");
         copy(self::repoRoot() . '/fixtures/products.load.sample.sql', $dir . '/products.load.sql');
         file_put_contents($dir . '/meta.json', (string) json_encode([
-            'model' => 'intfloat/multilingual-e5-small',
-            'dim' => self::DIM,
             'normalization_version' => 2,
             'count' => $count,
-            'checksum' => hash('sha256', $bin),
         ]));
     }
 
@@ -121,7 +113,7 @@ final class InstallerDatabaseTest extends DatabaseTestCase
                 ->fetchAll(\PDO::FETCH_COLUMN))
         );
         // Same swap as reload.php?load=1: bundle moved into data/, staging consumed.
-        self::assertFileExists($this->serverDir . '/data/vectors.bin');
+        self::assertFileExists($this->serverDir . '/data/meta.json');
         self::assertDirectoryDoesNotExist($this->serverDir . '/data_incoming');
         self::assertFalse($this->tableExists('products_new'));
         // The installer then refuses to run again.

@@ -211,8 +211,7 @@ def test_spellcheck_lines_format() -> None:
 
 def test_config_defaults_track_normalization_version() -> None:
     cfg = config.load()
-    assert cfg["model"]["name"] == "intfloat/multilingual-e5-small"
-    assert cfg["model"]["dim"] == 384
+    assert set(cfg["model"]) == {"normalization_version"}
     assert cfg["model"]["normalization_version"] == NORMALIZATION_VERSION
     assert cfg["embedder"] == "mock"
 

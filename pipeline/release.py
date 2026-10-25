@@ -7,7 +7,7 @@
 Builds the bundle and packs, relative to the host's
 `server/` directory, everything the site needs:
 
-    data_incoming/        the bundle (vectors, products.load.sql, meta.json, ...)
+    data_incoming/        the bundle (products.load.sql, meta.json, dictionaries, ...)
     bootstrap.php, config.example.php, src/, public/ (incl. public/install.php),
     tools/config-check.php (the config doctor), tools/logs-export.php (log export, M36),
     tools/admin-password.php (admin password hash, M39), tools/_php-guard.php (their PHP 8.1 check)
@@ -15,11 +15,9 @@ Builds the bundle and packs, relative to the host's
     db/schema.sql         read by install.php on the first deploy
     db/migrations/        one-off SQL for an existing database (apply by hand, see docs/DEPLOY.md)
 
-No browser model ships (M18): queries are embedded on the VPS. Since M18 /search
-does not read the bundle's vectors.bin either (/reload only checks meta, size
-and checksum), so it is built with SEARCH_BUNDLE_EMBEDDER (default "mock", no
-second model run); the VPS vectors are always embedded for real, on the GPU when
-there is one (SEARCH_EMBED_*, docs/PIPELINE.md and docs/TRAINING-COLAB.md).
+No browser model ships (M18) and, since M42, no vectors either: queries are embedded on the
+VPS and cPanel only holds the keyword data. The VPS vectors are embedded for real, on the GPU
+when there is one (SEARCH_EMBED_*, docs/PIPELINE.md and docs/TRAINING-COLAB.md).
 
 The same run also writes the bge-m3 product vectors for the VPS vector service
 (vps/README.md), from the same export (tags, brand and category included in the
@@ -165,10 +163,8 @@ def main(argv: list[str] | None = None) -> int:
 
     config = pipeline_config.load()
     config["model"]["normalization_version"] = NORMALIZATION_VERSION
-    # The VPS vectors must be real whatever EMBEDDER says in the shell; the
-    # cPanel bundle's unused e5 vectors follow SEARCH_BUNDLE_EMBEDDER.
+    # The VPS vectors must be real whatever EMBEDDER says in the shell.
     vps_config = {**config, "embedder": "mock" if args.mock else "real"}
-    config["embedder"] = "mock" if args.mock else config["bundle_embedder"]
     if args.desc_index_chars is not None:
         if args.desc_index_chars < 0:
             parser.error("--desc-index-chars must be 0 or more")
@@ -198,8 +194,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Built VPS vectors in {vps_dir}: {vps_meta['count']} products, "
               f"{vps_meta['model']}, dim {vps_meta['dim']}, embedder {vps_meta['embedder']}")
 
-    print(f"Built {out.name}: {meta['count']} products, dim {meta['dim']}, "
-          f"embedder {meta['embedder']}, {len(entries)} files")
+    print(f"Built {out.name}: {meta['count']} products, {len(entries)} files")
     print(deploy_help(out, vps_dir))
     return 0
 

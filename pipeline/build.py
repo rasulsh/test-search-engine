@@ -6,10 +6,10 @@
 
 Input is a simple, documented shape (NOT the raw OpenCart export); see docs/PIPELINE.md for
 the columns and how to derive them from OpenCart. Output is the bundle the server
-consumes (CLAUDE.md sec. 4): vectors.bin, vectors.idx, products.load.sql,
-synonyms.json, intent_map.json, spellcheck.txt, keymap.json, meta.json. The owner's aliases
-live on the server (server/storage/aliases.json, edited in the admin panel); the build neither
-reads nor ships them.
+consumes (CLAUDE.md sec. 4): products.load.sql, synonyms.json, intent_map.json, spellcheck.txt,
+keymap.json, meta.json. The owner's aliases live on the server (server/storage/aliases.json,
+edited in the admin panel); the build neither reads nor ships them. The bundle carries no
+vectors since M42: the product vectors for the semantic tier are built with --vps-out.
 """
 
 from __future__ import annotations
@@ -478,29 +478,14 @@ def build_bundle(
 ) -> dict[str, Any]:
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
-    # Read first: a malformed intent map fails the build before the slow embed.
+    # Read first: a malformed intent map fails the build before anything is written.
     intent_map = _keyword.load_intent_map(config["build"].get("intent_map_file", ""))
 
-    dim = int(config["model"]["dim"])
-    desc_limit = int(config["build"]["desc_char_limit"])
-    passage_limit = int(config["build"].get("passage_char_limit", 0))
     products_table = config["build"]["products_table"]
     staging_table = f"{products_table}_new"
 
     desc_index_chars = int(config["build"].get("desc_index_chars", 0))
     server_rows = [to_server_row(p, desc_index_chars) for p in products]
-    passages = [compose_passage(p, desc_limit, passage_limit) for p in products]
-
-    embedder = create_embedder(config)
-    vectors = embed_passages(embedder, passages).astype("<f4")
-    if vectors.shape != (len(products), dim):
-        raise ValueError(f"vectors shape {vectors.shape} != ({len(products)}, {dim})")
-
-    vector_bytes = vectors.tobytes()
-    (out / "vectors.bin").write_bytes(vector_bytes)
-    (out / "vectors.idx").write_text(
-        "".join(f"{row['product_id']}\n" for row in server_rows), encoding="utf-8"
-    )
     (out / "products.load.sql").write_text(
         build_products_sql(
             server_rows,
@@ -527,14 +512,9 @@ def build_bundle(
     )
 
     meta = {
-        "model": config["model"]["name"],
-        "revision": config["model"]["revision"],
-        "dim": dim,
         "normalization_version": int(config["model"]["normalization_version"]),
         "count": len(products),
         "built_at": datetime.now(UTC).isoformat(),
-        "checksum": hashlib.sha256(vector_bytes).hexdigest(),
-        "embedder": config["embedder"],
     }
     (out / "meta.json").write_text(
         json.dumps(meta, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
@@ -620,8 +600,7 @@ def main(argv: list[str] | None = None) -> int:
     warn_malformed_features(products)
     if args.out:
         meta = build_bundle(products, args.out, config)
-        print(f"Built bundle: {meta['count']} products, dim {meta['dim']}, "
-              f"embedder {meta['embedder']}")
+        print(f"Built bundle: {meta['count']} products")
     if args.vps_out:
         meta = build_vps_vectors(products, args.vps_out, config)
         print(f"Built VPS vectors: {meta['count']} products, {meta['model']}, "

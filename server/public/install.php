@@ -105,9 +105,8 @@ try {
         case 'bundle_mismatch':
             $bundle = $details['bundle'];
             InstallPage::form($redisplay, [], InstallPage::errorBox(
-                'بستهٔ موجود در data_incoming با تنظیمات مدل این فرم نمی‌خواند. مقدارهای مدل را مطابق بسته وارد کنید:',
-                "model: {$bundle['model_name']}\ndim: {$bundle['model_dim']}\n"
-                . "normalization_version: {$bundle['normalization_version']}"
+                'بستهٔ موجود در data_incoming با نسخهٔ نرمال‌سازی این فرم نمی‌خواند. مقدار را مطابق بسته وارد کنید:',
+                "normalization_version: {$bundle['normalization_version']}"
             ));
             break;
         case 'db_connect_failed':

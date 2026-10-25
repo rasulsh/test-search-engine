@@ -83,8 +83,8 @@ def test_release_writes_vps_vectors_outside_the_zip(tmp_path: Path) -> None:
     assert meta["model"] == "BAAI/bge-m3" and meta["embedder"] == "mock"
     with zipfile.ZipFile(tmp_path / "r.zip") as archive:
         bundle_meta = json.loads(archive.read("data_incoming/meta.json"))
-    # The cPanel bundle keeps its own (browser) model.
-    assert bundle_meta["model"] == pipeline_config.load()["model"]["name"]
+    # The cPanel bundle carries no model and no vectors (M42).
+    assert "model" not in bundle_meta and "dim" not in bundle_meta
 
 
 class _OldPooling:  # sentence-transformers < 6

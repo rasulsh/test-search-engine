@@ -54,8 +54,6 @@ final class InstallerTest extends TestCase
             'db_user' => 'cpuser_search',
             'db_password' => 'p\'a\\ss$word {${x}} ?>',
             'reload_token' => str_repeat('ab12', 16),
-            'model_name' => 'intfloat/multilingual-e5-small',
-            'model_dim' => '384',
             'normalization_version' => '2',
             'store_base' => 'https://shop.example.com/',
             'image_base' => 'https://shop.example.com/image/',
@@ -142,8 +140,8 @@ final class InstallerTest extends TestCase
         // Quotes, backslashes, dollar signs and a PHP close tag survive verbatim.
         self::assertSame($input['db_password'], $config['db']['password']);
         self::assertSame($input['reload_token'], $config['reload']['token']);
-        self::assertSame('intfloat/multilingual-e5-small', $config['model']['name']);
-        self::assertSame(384, $config['model']['dim']);
+        self::assertArrayNotHasKey('name', $config['model']);
+        self::assertArrayNotHasKey('dim', $config['model']);
         self::assertSame(2, $config['model']['normalization_version']);
         self::assertSame('https://shop.example.com/', $config['storefront']['store_base']);
         self::assertSame('https://shop.example.com/image/', $config['storefront']['image_base']);
@@ -214,8 +212,8 @@ final class InstallerTest extends TestCase
         $installer = new Installer($this->serverDir, '/unused');
         $first = $installer->defaults();
 
-        self::assertSame(Config::defaults()['model']['name'], $first['model_name']);
-        self::assertSame('384', $first['model_dim']);
+        self::assertArrayNotHasKey('model_name', $first);
+        self::assertArrayNotHasKey('model_dim', $first);
         self::assertSame((string) Normalizer::VERSION, $first['normalization_version']);
         self::assertSame('0.4', $first['semantic_min_score']);
         // Keyword-only until a VPS is entered.
@@ -245,9 +243,6 @@ final class InstallerTest extends TestCase
             'empty user' => [['db_user' => ''], 'db_user', 'required'],
             'short token' => [['reload_token' => 'short'], 'reload_token', 'invalid'],
             'token with space' => [['reload_token' => str_repeat('a', 40) . ' b'], 'reload_token', 'invalid'],
-            'bad model name' => [['model_name' => "x'y"], 'model_name', 'invalid'],
-            'zero dim' => [['model_dim' => '0'], 'model_dim', 'invalid'],
-            'fractional dim' => [['model_dim' => '3.5'], 'model_dim', 'invalid'],
             'score above 1' => [['semantic_min_score' => '1.5'], 'semantic_min_score', 'invalid'],
             'negative weight' => [['title_weight' => '-1'], 'title_weight', 'invalid'],
             'non-numeric weight' => [['phrase_bonus' => 'abc'], 'phrase_bonus', 'invalid'],
@@ -280,7 +275,6 @@ final class InstallerTest extends TestCase
     public function testFoldsPersianDigitsAndAllowsEmptyStorefrontBases(): void
     {
         $values = (new Installer($this->serverDir, '/unused'))->validate(self::validInput([
-            'model_dim' => '۳۸۴',
             'semantic_min_score' => '۰٫۸',
             'store_base' => '',
             'image_base' => '',
@@ -289,25 +283,24 @@ final class InstallerTest extends TestCase
             'vps_timeout_ms' => '۳۰۰',
         ]));
 
-        self::assertSame('384', $values['model_dim']);
         self::assertSame('0.8', $values['semantic_min_score']);
         self::assertSame('', $values['store_base']);
         self::assertSame('', $values['vps_url']); // keyword-only needs no token
         self::assertSame('300', $values['vps_timeout_ms']);
     }
 
-    public function testStagedBundleForAnotherModelIsRejectedBeforeAnythingIsWritten(): void
+    public function testStagedBundleForAnotherNormalizationVersionIsRejectedBeforeAnythingIsWritten(): void
     {
         mkdir($this->serverDir . '/data_incoming');
         file_put_contents($this->serverDir . '/data_incoming/meta.json', (string) json_encode([
-            'model' => 'intfloat/multilingual-e5-base', 'dim' => 768, 'normalization_version' => 2,
+            'normalization_version' => 3,
         ]));
         try {
             (new Installer($this->serverDir, '/unused'))->install(self::validInput());
             self::fail('an incompatible staged bundle must be rejected');
         } catch (InstallerException $e) {
             self::assertSame('bundle_mismatch', $e->reason());
-            self::assertSame('intfloat/multilingual-e5-base', $e->details()['bundle']['model_name']);
+            self::assertSame('3', $e->details()['bundle']['normalization_version']);
         }
         self::assertFileDoesNotExist($this->serverDir . '/config.php');
     }

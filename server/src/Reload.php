@@ -18,9 +18,12 @@ use Throwable;
  * run with $loadStaging (M12), after the compatibility check and before the
  * consistency check, so a failed or partial load is never swapped in. This
  * class then, BEFORE swapping, rejects the bundle unless
- * model + dim + normalization_version match server config AND
- * meta.count == vectors.idx lines == staging rows == vectors.bin size/checksum,
+ * normalization_version matches the code AND meta.count == staging rows,
  * and a present synonyms.json / intent_map.json parses (M15; aliases left the bundle in M41).
+ * cPanel holds no vectors since M42 (the VPS serves the semantic tier). During the transition a
+ * bundle that still carries vectors.bin / vectors.idx is accepted and keeps its old checks
+ * (idx lines == meta.count, vectors.bin size and checksum); one without them is checked on meta
+ * and the staging rows alone.
  * On success it swaps the tables and the directory, keeping the previous table
  * and directory for one-step rollback ({@see rollback()}).
  *
@@ -38,8 +41,7 @@ final class Reload
     private string $stagingTable;
     private string $backupTable;
     private bool $hadPreviousTable = false;
-    /** @var array{name: string, dim: int, normalization_version: int} */
-    private array $model;
+    private int $normalizationVersion;
     private ?Cache $cache;
 
     /**
@@ -55,15 +57,11 @@ final class Reload
         $this->productsTable = (string) $config['db']['products_table'];
         $this->stagingTable = $this->productsTable . '_new';
         $this->backupTable = $this->productsTable . '_old';
-        $this->model = [
-            'name' => (string) $config['model']['name'],
-            'dim' => (int) $config['model']['dim'],
-            'normalization_version' => (int) $config['model']['normalization_version'],
-        ];
+        $this->normalizationVersion = (int) $config['model']['normalization_version'];
     }
 
     /**
-     * @return array{ok: true, count: int, model: string, dim: int, cache_flushed?: bool}
+     * @return array{ok: true, count: int, cache_flushed?: bool}
      * @throws ReloadException when the bundle is incompatible or inconsistent.
      */
     public function run(bool $loadStaging = false): array
@@ -76,7 +74,7 @@ final class Reload
      * compatibility, its group files, and the counts. With $willLoadStaging the staging table is
      * not loaded yet (apply would load it), so its row count cannot be compared.
      *
-     * @return array{ok: true, count: int, model: string, dim: int, staging: string}
+     * @return array{ok: true, count: int, staging: string}
      * @throws ReloadException the reason run() would refuse the bundle for.
      */
     public function validate(bool $willLoadStaging = false): array
@@ -96,8 +94,6 @@ final class Reload
             return [
                 'ok' => true,
                 'count' => $count,
-                'model' => $this->model['name'],
-                'dim' => $this->model['dim'],
                 'staging' => $willLoadStaging ? 'will_load' : 'loaded',
             ];
         });
@@ -106,10 +102,9 @@ final class Reload
     /**
      * Swap back to the previous version: `<products>_old` and `<data>_old` trade places with the live
      * ones, so a second rollback undoes the first. Refused (nothing changes) when either half of the
-     * previous version is missing or its bundle no longer matches this code's model / dim /
-     * normalization version.
+     * previous version is missing or its bundle no longer matches this code's normalization version.
      *
-     * @return array{ok: true, count: int, model: string, dim: int, cache_flushed?: bool}
+     * @return array{ok: true, count: int, cache_flushed?: bool}
      * @throws ReloadException nothing_to_roll_back, an incompatibility reason, or directory_swap_failed
      */
     public function rollback(): array
@@ -150,20 +145,19 @@ final class Reload
         $diff = null;
         if ($incoming['present'] && $live['present']) {
             $changed = [];
-            foreach (['built_at', 'normalization_version', 'count', 'model', 'dim'] as $field) {
+            foreach (['built_at', 'normalization_version', 'count'] as $field) {
                 if ($incoming[$field] !== $live[$field]) {
                     $changed[] = $field;
                 }
             }
-            $new = $this->readIds($this->incomingDir);
-            $old = $this->readIds($this->dataDir);
+            $ids = $this->idDifference();
             $diff = [
                 'changed' => $changed,
                 'count_delta' => is_int($incoming['count']) && is_int($live['count'])
                     ? $incoming['count'] - $live['count']
                     : null,
-                'added' => $new === null || $old === null ? null : count(array_diff_key($new, $old)),
-                'removed' => $new === null || $old === null ? null : count(array_diff_key($old, $new)),
+                'added' => $ids['added'] ?? null,
+                'removed' => $ids['removed'] ?? null,
             ];
         }
         $stagingExists = $this->safely(fn (): bool => $this->tableExists($this->stagingTable)) === true;
@@ -217,7 +211,7 @@ final class Reload
      * After a committed swap (reload or rollback): drop the worker's cached maps, warm the speller
      * (best effort) and flush the result cache.
      *
-     * @return array{ok: true, count: int, model: string, dim: int, cache_flushed?: bool}
+     * @return array{ok: true, count: int, cache_flushed?: bool}
      */
     private function finish(int $count): array
     {
@@ -237,8 +231,6 @@ final class Reload
         $result = [
             'ok' => true,
             'count' => $count,
-            'model' => $this->model['name'],
-            'dim' => $this->model['dim'],
         ];
         // Cached results describe the old catalog (M26). A failed flush is
         // reported, not raised: the swap stands and entries expire with their TTL.
@@ -306,8 +298,7 @@ final class Reload
         $path = $dir . '/meta.json';
         $meta = is_file($path) ? json_decode((string) @file_get_contents($path), true) : null;
         if (!is_array($meta)) {
-            return ['present' => false, 'built_at' => null, 'normalization_version' => null, 'count' => null,
-                'model' => null, 'dim' => null];
+            return ['present' => false, 'built_at' => null, 'normalization_version' => null, 'count' => null];
         }
 
         return [
@@ -317,18 +308,31 @@ final class Reload
                 ? (int) $meta['normalization_version']
                 : null,
             'count' => isset($meta['count']) ? (int) $meta['count'] : null,
-            'model' => isset($meta['model']) ? (string) $meta['model'] : null,
-            'dim' => isset($meta['dim']) ? (int) $meta['dim'] : null,
         ];
     }
 
-    /** @return array<string, true>|null the product ids of a bundle (vectors.idx), null when it has none */
-    private function readIds(string $dir): ?array
+    /**
+     * Products the staged bundle adds to / removes from the live ones. Both sides come from the
+     * tables (staging vs live), so it needs no vectors.idx; null while the staging table is not
+     * loaded or there is no live table.
+     *
+     * @return array{added: int, removed: int}|null
+     */
+    private function idDifference(): ?array
     {
-        $path = $dir . '/vectors.idx';
-        $lines = is_file($path) ? file($path, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) : false;
+        return $this->safely(function (): ?array {
+            if (!$this->tableExists($this->stagingTable) || !$this->tableExists($this->productsTable)) {
+                return null;
+            }
+            $products = Identifier::quote($this->productsTable);
+            $staging = Identifier::quote($this->stagingTable);
+            $count = fn (string $from, string $other): int => (int) $this->pdo->query(
+                "SELECT COUNT(*) FROM {$from} f LEFT JOIN {$other} o ON o.product_id = f.product_id
+                 WHERE o.product_id IS NULL"
+            )->fetchColumn();
 
-        return $lines === false ? null : array_fill_keys($lines, true);
+            return ['added' => $count($staging, $products), 'removed' => $count($products, $staging)];
+        });
     }
 
     /** @return array<string, mixed> */
@@ -354,21 +358,9 @@ final class Reload
     /** @param array<string, mixed> $meta */
     private function assertCompatible(array $meta): void
     {
-        if (($meta['model'] ?? null) !== $this->model['name']) {
-            throw new ReloadException('model_mismatch', [
-                'expected' => $this->model['name'],
-                'actual' => $meta['model'] ?? null,
-            ]);
-        }
-        if ((int) ($meta['dim'] ?? -1) !== $this->model['dim']) {
-            throw new ReloadException('dim_mismatch', [
-                'expected' => $this->model['dim'],
-                'actual' => $meta['dim'] ?? null,
-            ]);
-        }
-        if ((int) ($meta['normalization_version'] ?? -1) !== $this->model['normalization_version']) {
+        if ((int) ($meta['normalization_version'] ?? -1) !== $this->normalizationVersion) {
             throw new ReloadException('normalization_version_mismatch', [
-                'expected' => $this->model['normalization_version'],
+                'expected' => $this->normalizationVersion,
                 'actual' => $meta['normalization_version'] ?? null,
             ]);
         }
@@ -405,22 +397,37 @@ final class Reload
     private function assertConsistent(array $meta, bool $withStaging = true): int
     {
         $metaCount = (int) ($meta['count'] ?? -1);
-        $idxCount = $this->countIdxLines();
+        $legacy = is_file($this->incomingDir . '/vectors.bin') || is_file($this->incomingDir . '/vectors.idx');
+        $idxCount = $legacy ? $this->countIdxLines() : $metaCount;
         $stagingCount = $withStaging ? $this->countStagingRows() : $metaCount;
 
         if ($metaCount < 0 || $metaCount !== $idxCount || $metaCount !== $stagingCount) {
-            throw new ReloadException('count_mismatch', [
-                'meta' => $metaCount,
-                'vectors_idx' => $idxCount,
-                'staging_rows' => $stagingCount,
-            ]);
+            $details = ['meta' => $metaCount, 'staging_rows' => $stagingCount];
+            if ($legacy) {
+                $details['vectors_idx'] = $idxCount;
+            }
+            throw new ReloadException('count_mismatch', $details);
+        }
+        if ($legacy) {
+            $this->assertLegacyVectors($meta, $metaCount);
         }
 
+        return $metaCount;
+    }
+
+    /**
+     * The pre-M42 bundle shape: vectors.bin must be count x meta.dim float32 and match its checksum.
+     * The dimension is the bundle's own (cPanel no longer configures a model).
+     *
+     * @param array<string, mixed> $meta
+     */
+    private function assertLegacyVectors(array $meta, int $count): void
+    {
         $binPath = $this->incomingDir . '/vectors.bin';
         if (!is_file($binPath)) {
             throw new ReloadException('missing_vectors');
         }
-        $expectedBytes = $metaCount * $this->model['dim'] * 4;
+        $expectedBytes = $count * (int) ($meta['dim'] ?? 0) * 4;
         if (filesize($binPath) !== $expectedBytes) {
             throw new ReloadException('vectors_size_mismatch', [
                 'expected' => $expectedBytes,
@@ -430,8 +437,6 @@ final class Reload
         if (isset($meta['checksum']) && hash_file('sha256', $binPath) !== $meta['checksum']) {
             throw new ReloadException('checksum_mismatch');
         }
-
-        return $metaCount;
     }
 
     private function countIdxLines(): int

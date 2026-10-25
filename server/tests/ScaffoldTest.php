@@ -48,13 +48,11 @@ final class ScaffoldTest extends TestCase
     {
         $model = $this->loadExampleConfig()['model'];
 
-        foreach (['name', 'revision', 'dim', 'normalization_version'] as $key) {
-            $this->assertArrayHasKey($key, $model, "Missing model.{$key}");
-        }
-
-        $this->assertIsInt($model['dim']);
-        $this->assertGreaterThan(0, $model['dim']);
+        // M42: cPanel holds no model; the normalization version is the only compatibility key left.
         $this->assertSame(Normalizer::VERSION, $model['normalization_version']);
+        foreach (['name', 'revision', 'dim'] as $key) {
+            $this->assertArrayNotHasKey($key, $model, "model.{$key} left the config in M42");
+        }
     }
 
     public function testExampleConfigContainsNoSecrets(): void

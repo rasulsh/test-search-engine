@@ -86,8 +86,7 @@ final class AdminViews
         if ($b['present']) {
             $cards .= '<dl class="kv">' . $row($t['built_at'], self::ts($b['built_at']))
                 . $row($t['norm_version'], self::e(self::num($b['normalization_version'])))
-                . $row($t['bundle_count'], self::e(self::num($b['count'])))
-                . $row($t['model'], $ltr($b['model'])) . '</dl>';
+                . $row($t['bundle_count'], self::e(self::num($b['count']))) . '</dl>';
         } else {
             $cards .= '<p>' . $badge('warn', $t['bundle_missing']) . '</p>';
         }

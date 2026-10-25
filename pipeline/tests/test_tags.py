@@ -98,7 +98,7 @@ def test_sql_export_with_tags_column_flows_to_the_load_file(tmp_path: Path) -> N
     path.write_text(sql, encoding="utf-8")
     products = build.read_products(path)
     config = {"embedder": "mock", "keyword": {},
-              "model": {"name": "m", "revision": "r", "dim": 8, "normalization_version": 3},
+              "model": {"normalization_version": 3},
               "build": {"products_table": "products", "desc_char_limit": 300,
                         "passage_char_limit": 1000, "max_statement_bytes": 1_000_000}}
     meta = build.build_bundle(products, tmp_path / "out", config)
@@ -111,15 +111,18 @@ def test_sql_export_with_tags_column_flows_to_the_load_file(tmp_path: Path) -> N
     assert meta["count"] == 2
 
 
-def test_changing_tags_changes_the_embedding_checksum_but_not_the_model(tmp_path: Path) -> None:
+def test_changing_tags_changes_the_vps_embedding_checksum_but_not_the_model(
+    tmp_path: Path,
+) -> None:
     config = {"embedder": "mock", "keyword": {},
-              "model": {"name": "m", "revision": "r", "dim": 8, "normalization_version": 3},
+              "vps_model": {"name": "m", "revision": "r", "dim": 8, "pooling": "cls",
+                            "query_prefix": "", "passage_prefix": ""},
               "build": {"products_table": "products", "desc_char_limit": 300,
                         "passage_char_limit": 1000, "max_statement_bytes": 1_000_000}}
     base = {"id": "1", "title_en": "Game"}
-    plain = build.build_bundle([base], tmp_path / "a", config)
-    tagged = build.build_bundle([{**base, "tags": "Franchise"}], tmp_path / "b", config)
+    plain = build.build_vps_vectors([base], tmp_path / "a", config)
+    tagged = build.build_vps_vectors([{**base, "tags": "Franchise"}], tmp_path / "b", config)
 
     assert plain["checksum"] != tagged["checksum"]
-    for key in ("model", "dim", "normalization_version"):  # /reload compatibility keys
+    for key in ("model", "dim", "revision", "pooling"):  # what the VPS /reload compares
         assert plain[key] == tagged[key]

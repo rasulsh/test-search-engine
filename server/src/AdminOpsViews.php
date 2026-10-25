@@ -55,7 +55,6 @@ final class AdminOpsViews
         $live = $r['live'];
         $fields = [
             'built_at' => $t['built_at'], 'normalization_version' => $t['norm_version'], 'count' => $t['count'],
-            'model' => $t['model'], 'dim' => $t['dim'],
         ];
         $cell = static function (array $bundle, string $field): string {
             if (!$bundle['present'] || $bundle[$field] === null) {
@@ -66,9 +65,7 @@ final class AdminOpsViews
                 return AdminViews::ts($bundle[$field]);
             }
 
-            return in_array($field, ['count', 'dim', 'normalization_version'], true)
-                ? self::e(AdminViews::num($bundle[$field]))
-                : '<bdi class="ltr">' . self::e($bundle[$field]) . '</bdi>';
+            return self::e(AdminViews::num($bundle[$field]));
         };
         $table = '<table class="cmp"><thead><tr><th></th><th>' . self::e($t['incoming']) . '</th><th>'
             . self::e($t['live'])

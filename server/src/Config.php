@@ -60,6 +60,19 @@ final class Config
                 'removed' => 'the logs and analytics pages sit behind the admin panel login (admin.username / '
                     . 'admin.password_hash), so this token is not used',
             ],
+            'model.name' => [
+                'since' => 'M42',
+                'removed' => 'cPanel holds no vectors any more (the VPS serves the semantic tier), so the bundle '
+                    . 'carries no model and /reload checks only the normalization version',
+            ],
+            'model.revision' => [
+                'since' => 'M42',
+                'removed' => 'cPanel holds no vectors any more, so there is no model revision to check',
+            ],
+            'model.dim' => [
+                'since' => 'M42',
+                'removed' => 'cPanel holds no vectors any more, so there is no vector dimension to check',
+            ],
             'admin.ip_header' => [
                 'since' => 'M39',
                 'removed' => 'X-Forwarded-For is no longer trusted by default; the client address is REMOTE_ADDR, '
@@ -231,12 +244,8 @@ final class Config
             'db.search_events_table' => ['string', 'search_events'],
             'db.admin_audit_table' => ['string', 'admin_audit'],
 
-            // The model the bundle's meta.json is stamped with, checked on /reload.
-            // /search does not read the bundle's vectors (M18): the semantic model
-            // runs on the VPS. normalization_version follows the deployed code.
-            'model.name'                  => ['string', 'intfloat/multilingual-e5-small'],
-            'model.revision'              => ['string', 'main'],
-            'model.dim'                   => ['int', 384],
+            // The normalization version the bundle's meta.json is stamped with, checked on /reload;
+            // it follows the deployed code. cPanel has no model since M42: the semantic model runs on the VPS.
             'model.normalization_version' => ['int', Normalizer::VERSION],
 
             'search.default_limit'            => ['int', 20],

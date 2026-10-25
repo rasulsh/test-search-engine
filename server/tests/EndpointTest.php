@@ -74,12 +74,9 @@ final class EndpointTest extends TestCase
         self::$incomingDir = TempTree::path('endpoint_incoming');
         mkdir(self::$incomingDir, 0777, true);
         file_put_contents(self::$incomingDir . '/meta.json', (string) json_encode([
-            'model' => Config::defaults()['model']['name'],
-            'dim' => Config::defaults()['model']['dim'],
             'normalization_version' => Normalizer::VERSION,
             'count' => 0,
         ]));
-        file_put_contents(self::$incomingDir . '/vectors.idx', '');
         $overrides['paths']['data_incoming'] = self::$incomingDir;
         $env['SEARCH_CONFIG_FILE'] = TempConfig::write($overrides);
 

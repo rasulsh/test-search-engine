@@ -45,14 +45,39 @@ final class AdminDate
         return sprintf('%04d/%02d/%02d', $y, $mo, $d);
     }
 
-    /** HTML for a stored timestamp: Gregorian as stored, then the Jalali date. "Unknown" for an empty value. */
+    /**
+     * The short form every page shows: "YYYY-MM-DD HH:MM" (a date-only value stays a date). The "T",
+     * fractional seconds and the UTC offset of an ISO timestamp are dropped; a non-zero offset is first
+     * converted to UTC so the wall clock stays honest. Anything else comes back as typed.
+     */
+    public static function short(string $stored): string
+    {
+        $pattern = '/^(\d{4}-\d{2}-\d{2})(?:[T ](\d{2}:\d{2})(?::\d{2}(?:\.\d+)?)?\s*(Z|[+-]\d{2}:?\d{2})?)?$/';
+        if (preg_match($pattern, $stored, $m) !== 1 || self::jalaliText($m[1]) === null) {
+            return $stored;
+        }
+        $offset = $m[3] ?? '';
+        if ($offset !== '' && $offset !== 'Z' && !preg_match('/^[+-]00:?00$/', $offset)) {
+            try {
+                $utc = (new \DateTimeImmutable($stored))->setTimezone(new \DateTimeZone('UTC'));
+
+                return $utc->format('Y-m-d H:i');
+            } catch (\Exception) {
+                return $stored;
+            }
+        }
+
+        return isset($m[2]) ? $m[1] . ' ' . $m[2] : $m[1];
+    }
+
+    /** HTML for a stored timestamp: the short form, then the Jalali date. "Unknown" for an empty value. */
     public static function html(mixed $value): string
     {
         $text = is_scalar($value) ? trim((string) $value) : '';
         if ($text === '') {
             return AdminPage::esc(AdminStrings::fa()['ui']['unknown']);
         }
-        $out = '<bdi class="ltr">' . AdminPage::esc($text) . '</bdi>';
+        $out = '<bdi class="ltr">' . AdminPage::esc(self::short($text)) . '</bdi>';
         $jalali = self::jalaliText($text);
 
         return $jalali === null ? $out : $out . ' <small class="jal"><bdi class="ltr">' . $jalali . '</bdi></small>';

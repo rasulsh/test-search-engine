@@ -51,9 +51,38 @@ final class AdminDateTest extends TestCase
     public function testHtmlKeepsTheStoredTextAndAddsTheJalaliDateBesideIt(): void
     {
         $html = AdminDate::html('2026-10-25 14:03:07');
-        self::assertStringContainsString('<bdi class="ltr">2026-10-25 14:03:07</bdi>', $html);
+        self::assertStringContainsString('<bdi class="ltr">2026-10-25 14:03</bdi>', $html);
+        self::assertStringNotContainsString('14:03:07', $html);
         self::assertStringContainsString('<bdi class="ltr">1405/08/03</bdi>', $html);
         self::assertSame($html, AdminViews::ts('2026-10-25 14:03:07'), 'every page goes through this helper');
+    }
+
+    /** @return iterable<string, array{string, string}> */
+    public static function shortForms(): iterable
+    {
+        yield 'the ISO value of the status page' => ['2026-10-24T17:39:53.561934+00:00', '2026-10-24 17:39'];
+        yield 'Z' => ['2026-10-01T10:00:00Z', '2026-10-01 10:00'];
+        yield 'no zone, T' => ['2026-10-01T10:00:00', '2026-10-01 10:00'];
+        yield 'database format' => ['2026-10-25 14:03:07', '2026-10-25 14:03'];
+        yield 'already short' => ['2026-10-25 14:03', '2026-10-25 14:03'];
+        yield 'microseconds only' => ['2026-10-25 14:03:07.123456', '2026-10-25 14:03'];
+        yield 'compact zero offset' => ['2026-10-25T14:03:07+0000', '2026-10-25 14:03'];
+        yield 'offset converted to UTC' => ['2026-10-25T14:03:07+03:30', '2026-10-25 10:33'];
+        yield 'date only' => ['2026-10-25', '2026-10-25'];
+        yield 'not a date' => ['soon', 'soon'];
+        yield 'impossible date' => ['2026-02-30 10:00:00', '2026-02-30 10:00:00'];
+    }
+
+    #[DataProvider('shortForms')]
+    public function testShortFormHasNoTNoSecondsNoMicrosecondsNoOffset(string $stored, string $expected): void
+    {
+        self::assertSame($expected, AdminDate::short($stored));
+        $html = AdminDate::html($stored);
+        if ($stored !== $expected) {
+            self::assertStringNotContainsString('T1', $html);
+            self::assertStringNotContainsString('.561934', $html);
+            self::assertStringNotContainsString('+00:00', $html);
+        }
     }
 
     public function testHtmlEscapesTheValueAndSurvivesNonDates(): void

@@ -346,8 +346,36 @@ final class AdminAliasPanelTest extends TestCase
         );
         $page = $this->get('p=audit')['body'];
 
-        self::assertStringContainsString('2026-10-25 14:03:07', $page);
+        self::assertStringContainsString('2026-10-25 14:03', $page);
+        self::assertStringNotContainsString('14:03:07', $page);
         self::assertStringContainsString('1405/08/03', $page);
+    }
+
+    public function testStatusAndOpsShowTheShortDateOfAnIsoBuildTime(): void
+    {
+        file_put_contents(self::$root . '/data/meta.json', (string) json_encode([
+            'model' => 'm', 'dim' => 4, 'normalization_version' => 4, 'count' => 3,
+            'built_at' => '2026-10-24T17:39:53.561934+00:00',
+        ]));
+        try {
+            self::$pdo->exec(
+                "INSERT INTO search_logs (ts, raw_q, normalized_q, had_vector, result_count, top_ids, latency_ms, tier)"
+                . " VALUES ('2026-10-25 14:03:07', 'x', 'x', 0, 1, '[]', 5, 'keyword_only')"
+            );
+            $logs = $this->get('p=logs')['body'];
+            self::assertStringContainsString('<bdi class="ltr">2026-10-25 14:03</bdi>', $logs);
+            self::assertStringNotContainsString('14:03:07', $logs);
+            foreach (['status', 'ops'] as $page) {
+                $html = $this->get('p=' . $page)['body'];
+                self::assertStringContainsString('<bdi class="ltr">2026-10-24 17:39</bdi>', $html, $page);
+                self::assertStringContainsString('1405/08/02', $html, $page);
+                foreach (['T17:39', '.561934', '+00:00'] as $leftover) {
+                    self::assertStringNotContainsString($leftover, $html, "{$page}: {$leftover}");
+                }
+            }
+        } finally {
+            unlink(self::$root . '/data/meta.json');
+        }
     }
 
     public function testAnalyticsLivesInsideTheShellWithoutCartOrOrderCards(): void

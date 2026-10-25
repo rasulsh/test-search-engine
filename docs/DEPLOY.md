@@ -216,8 +216,22 @@ keyword-indexed (default `SEARCH_DESC_INDEX_CHARS`, else 800; 0 = the whole
 description). It only affects the build; to change it, build and deploy a new
 release. Aliases are not part of the release since M41: they live in `server/storage/aliases.json` and are edited in
 the admin panel (see [ADMIN.md](ADMIN.md#alias-manager-m41)). `storage/` must be writable by the PHP user; only its
-deny-all `.htaccess` ships. Upgrading from M40: nothing to do, the first visit to the aliases page seeds the file from
-the live bundle.
+deny-all `.htaccess` ships. Upgrading from M40, in full:
+
+1. Copy `src/`, `tools/` and `public/` over the live ones (and, when unzipping a whole `release.zip`, `storage/.htaccess`).
+2. `server/storage/` must exist and be writable by the PHP user (cPanel: the account itself), mode 755; the panel
+   creates it, its `backups/` and a deny-all `storage/.htaccess` on the first save when `server/` is writable, and shows
+   "storage not writable" otherwise. Never put it under `public/`.
+3. Nothing else: no database migration, no `config.php` edit (the four new keys have defaults), no
+   `public/.htaccess` change, no bundle rebuild or reload (normalization version, model and dim are unchanged; a bundle
+   built before M41 still carries `aliases.json`, which is used only until storage is seeded and then ignored).
+4. Open the panel's aliases page once: it seeds `storage/aliases.json` from the live bundle's `aliases.json`, so the
+   search keeps serving exactly the aliases it served before. From then on edit aliases in the panel only; editing
+   `pipeline/aliases.json` no longer changes the live search.
+
+Directory deletes (`<data>_old` / `<data>_swap` on reload and rollback, backup pruning) go through `App\SafePath`, which
+needs absolute paths of at least 3 segments below the configured base: `/home/ACCOUNT/app/server/data_old` is fine,
+a `paths.data` such as `/srv/data` (giving `/srv/data_old`) is refused with `directory_swap_failed`.
 `--intent-map FILE` likewise ships another [intent map](SEARCH-BEHAVIOR.md#intent-map) instead of
 `pipeline/intent_map.json`.
 

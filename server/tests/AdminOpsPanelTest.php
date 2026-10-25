@@ -169,7 +169,7 @@ final class AdminOpsPanelTest extends TestCase
 
         self::assertSame(200, $page['status']);
         $html = $page['body'];
-        $needles = ['2026-10-01T00:00:00Z', '2026-09-01T00:00:00Z', 'تغییر تعداد: +1',
+        $needles = ['2026-10-01 00:00', '2026-09-01 00:00', 'تغییر تعداد: +1',
             'محصول افزوده‌شده: 1، حذف‌شده: 0', 'مشخصات متفاوت: built_at, count', 'products_new', '3 ردیف',
             'name="action" value="validate"', 'name="action" value="apply"',
             'name="action" value="rollback" disabled', 'راهنمای این صفحه'];

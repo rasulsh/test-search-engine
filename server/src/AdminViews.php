@@ -312,7 +312,9 @@ final class AdminViews
                 if ($column === 'had_vector' || $column === 'cache_hit') {
                     $value = ($row[$column] ?? 0) ? AdminStrings::fa()['ui']['yes'] : AdminStrings::fa()['ui']['no'];
                 }
-                $body .= '<td dir="auto">' . self::e($value) . '</td>';
+                $body .= $column === 'ts'
+                    ? '<td>' . self::ts($value) . '</td>'
+                    : '<td dir="auto">' . self::e($value) . '</td>';
             }
             $body .= '</tr>';
         }

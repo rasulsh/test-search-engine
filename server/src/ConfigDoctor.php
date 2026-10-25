@@ -13,13 +13,15 @@ final class ConfigDoctor
 {
     /**
      * @param array<string, mixed> $overrides the raw array config.php returns
+     * @param array<string, array<string, string>>|null $deprecated replaces {@see Config::deprecated()} (tests)
      * @return array{errors: list<string>, warnings: list<string>, info: list<string>}
      */
-    public static function check(array $overrides): array
+    public static function check(array $overrides, ?array $deprecated = null): array
     {
         $schema = Config::schema();
-        $config = Config::merge($overrides);
+        $config = Config::merge($overrides, null, $deprecated);
         $given = Config::flatten($overrides);
+        $deprecated ??= Config::deprecated();
         $errors = [];
         $warnings = [];
         $info = [];
@@ -30,6 +32,10 @@ final class ConfigDoctor
             }
         }
         foreach ($given as $path => $value) {
+            if (isset($deprecated[$path])) {
+                $warnings[] = self::deprecation($path, $deprecated[$path], $given);
+                continue;
+            }
             if (!isset($schema[$path])) {
                 $warnings[] = "{$path}: unknown key (typo or removed option)";
                 continue;
@@ -56,9 +62,6 @@ final class ConfigDoctor
         if (!AdminAuth::configured($config['admin']) && AdminAuth::configProblems($config['admin']) === []) {
             $warnings[] = 'admin.username / admin.password_hash: not set, admin.php answers 503';
         }
-        if ($config['logs']['token'] !== '') {
-            $warnings[] = 'logs.token: no longer used (M39), the pages sit behind the admin login; remove it';
-        }
 
         foreach (array_keys($schema) as $path) {
             if (!array_key_exists($path, $given)) {
@@ -67,6 +70,25 @@ final class ConfigDoctor
         }
 
         return ['errors' => $errors, 'warnings' => $warnings, 'info' => $info];
+    }
+
+    /**
+     * @param array<string, string> $rule a {@see Config::deprecated()} entry
+     * @param array<string, mixed> $given the flattened overrides
+     */
+    private static function deprecation(string $path, array $rule, array $given): string
+    {
+        if (!isset($rule['to'])) {
+            return "{$path}: removed in {$rule['since']} ({$rule['removed']}); it has no effect and can be deleted";
+        }
+        $until = $rule['until'] ?? '';
+        if (array_key_exists($rule['to'], $given)) {
+            return "{$path}: renamed to {$rule['to']} in {$rule['since']}; ignored because {$rule['to']} is set, "
+                . 'delete it';
+        }
+
+        return "{$path}: renamed to {$rule['to']} in {$rule['since']}; the old value is still used until {$until}, "
+            . 'rename it in config.php';
     }
 
     /**

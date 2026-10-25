@@ -159,14 +159,23 @@ class Cache
     /** Drops every cached result; false when Redis could not be reached. */
     public function flush(): bool
     {
-        try {
-            $this->redis->deleteByPrefix($this->prefix);
+        return $this->purge() !== null;
+    }
 
-            return true;
+    /**
+     * Deletes the keys under this cache's prefix and only those (SCAN + DEL, never FLUSHDB / FLUSHALL, so
+     * a Redis shared with other data is safe).
+     *
+     * @return int|null how many keys went, null when Redis could not be reached
+     */
+    public function purge(): ?int
+    {
+        try {
+            return $this->redis->deleteByPrefix($this->prefix);
         } catch (Throwable $e) {
             error_log('search: cache flush failed: ' . $e->getMessage());
 
-            return false;
+            return null;
         }
     }
 }

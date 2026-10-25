@@ -64,6 +64,17 @@ try {
     $db = new Db($config['db']);
     $result = (new Reload($db->pdo(), $config))->run($loadStaging);
 } catch (ReloadException $e) {
+    if ($e->reason() === 'busy') { // another reload or rollback holds the lock
+        http_response_code(409);
+        echo json_encode(['error' => 'reload_busy'], JSON_UNESCAPED_UNICODE);
+        return;
+    }
+    if ($e->reason() === 'lock_unavailable') { // an environment problem, not a bad bundle
+        error_log('reload: cannot create the lock file ' . (string) ($e->details()['path'] ?? ''));
+        http_response_code(500);
+        echo json_encode(['error' => 'internal_error'], JSON_UNESCAPED_UNICODE);
+        return;
+    }
     http_response_code(422);
     echo json_encode(
         ['error' => 'invalid_bundle', 'reason' => $e->reason(), 'details' => $e->details()],

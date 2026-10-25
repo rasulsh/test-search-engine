@@ -42,6 +42,12 @@ main{min-width:0}
 table{border-collapse:collapse;width:100%}th,td{border-bottom:1px solid var(--line);padding:4px 8px;text-align:start;vertical-align:top}
 th{background:var(--card)}td.c,th.c{text-align:center;font-variant-numeric:tabular-nums}
 .ltr{direction:ltr;unicode-bidi:isolate;display:inline-block}
+.cfg{margin-top:12px}.cfg .controls{display:flex;flex-wrap:wrap;gap:12px;align-items:center;margin:8px 0}
+.cfg input[type=search]{font:inherit;padding:4px 8px;border:1px solid var(--line);border-radius:6px;background:var(--surface);color:var(--ink);min-width:220px}
+.scroll.tall{max-height:520px;overflow:auto}.cfg th{position:sticky;top:0}.cfg tr[hidden]{display:none}.cfg td:nth-child(3){white-space:nowrap}
+.difflist{margin:4px 0 8px;padding-inline-start:20px}.ops .wide{grid-column:1/-1}.cmp{width:auto;min-width:min(100%,460px);margin:8px 0}.cmp th,.cmp td{text-align:start}.cmp tr.diff td{background:var(--help)}
+.actions{display:flex;flex-wrap:wrap;gap:12px;align-items:center;margin-top:12px}.actions .opt{flex:1 1 100%}
+.card form{margin:8px 0 0}.recent{margin-top:12px}.msg[hidden]{display:none}
 .pager{display:flex;flex-wrap:wrap;gap:12px;align-items:center;margin:8px 0}
 form.login{max-width:360px;margin:12vh auto 0;background:var(--card);border:1px solid var(--line);border-radius:8px;padding:24px}
 form.login label{display:block;margin:12px 0 4px}form.login input{width:100%;padding:6px 8px;border:1px solid var(--line);border-radius:6px;background:var(--surface);color:var(--ink);font:inherit}

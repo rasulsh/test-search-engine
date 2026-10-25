@@ -12,7 +12,7 @@ The full request path behind `POST /search`: [RUNTIME-FLOW.md](RUNTIME-FLOW.md).
 | `POST /events` | Log v2 result tracking: `{search_uuid, product_id, position, action}` with `action` `click` / `cart` / `order` / `dym_click`; `204` on success. Feeds the engagement figures of the analytics page. See [INTEGRATION.md](../INTEGRATION.md#post-events). |
 | `GET /health` | Database reachability + live product count, for monitoring. |
 | `GET /logs.php` | Moved into the admin panel in M39: redirects to `admin.php?p=logs` (login required). See [ADMIN.md](ADMIN.md) and [Search logs and ranking debug](#search-logs-and-ranking-debug). |
-| `POST /reload` | Token-protected (`X-Reload-Token`). Validates the staged bundle and swaps it in atomically (then flushes the result cache when one is configured, reporting `cache_flushed`). With `?load=1` it first loads `data_incoming/products.load.sql` into the staging table itself. |
+| `POST /reload` | Token-protected (`X-Reload-Token`). Validates the staged bundle and swaps it in atomically (then flushes the result cache when one is configured, reporting `cache_flushed`). With `?load=1` it first loads `data_incoming/products.load.sql` into the staging table itself. Only one reload or rollback runs at a time (`409 reload_busy` for a second, M40); the admin panel's operations page uses the same code and lock ([ADMIN.md](ADMIN.md)). |
 
 The exact request/response JSON, headers, status codes, and every error and
 `invalid_bundle` reason are in [`INTEGRATION.md`](../INTEGRATION.md#http-contract).

@@ -16,6 +16,8 @@ declare(strict_types=1);
 use App\Config;
 use App\ConfigDoctor;
 
+require __DIR__ . '/_php-guard.php'; // PHP 8.1+ check, before anything else runs
+
 if (PHP_SAPI !== 'cli') {
     http_response_code(404);
     return;

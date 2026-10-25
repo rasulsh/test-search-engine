@@ -51,6 +51,7 @@ final class AdminStatus
             'vps' => $this->vps(),
             'redis' => $this->redis(),
             'doctor' => ConfigDoctor::check($this->overrides),
+            'config' => ConfigReport::rows($this->overrides),
             'last_reload' => $this->lastReload(),
         ];
     }
@@ -96,7 +97,7 @@ final class AdminStatus
     }
 
     /** @return array<string, mixed> state: off | ok | unreachable | error */
-    private function vps(): array
+    public function vps(): array
     {
         $url = trim((string) $this->config['vps']['url']);
         if ($url === '') {
@@ -121,7 +122,7 @@ final class AdminStatus
     }
 
     /** @return array<string, mixed> state: off | ok | unreachable */
-    private function redis(): array
+    public function redis(): array
     {
         $cfg = $this->config['redis'];
         if (!$cfg['enabled']) {

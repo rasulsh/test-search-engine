@@ -49,24 +49,88 @@ final class ConfigDoctorTest extends TestCase
         );
     }
 
-    public function testTheOldLogsTokenIsFlaggedAsUnused(): void
+    public function testRemovedKeysGetTheirReasonNotABareUnknownKey(): void
     {
         $overrides = self::clean();
         $overrides['logs'] = ['token' => 'old-token-value'];
+        $overrides['admin']['ip_header'] = 'HTTP_X_FORWARDED_FOR';
         $report = ConfigDoctor::check($overrides);
 
+        self::assertSame([], $report['errors']);
+        self::assertCount(2, $report['warnings']);
+        $byKey = [];
+        foreach ($report['warnings'] as $warning) {
+            $byKey[strstr($warning, ':', true)] = $warning;
+        }
+        self::assertStringStartsWith('logs.token: removed in M39 (the logs and analytics pages', $byKey['logs.token']);
+        self::assertStringEndsWith('has no effect and can be deleted', $byKey['logs.token']);
+        self::assertStringStartsWith('admin.ip_header: removed in M39 (X-Forwarded-For', $byKey['admin.ip_header']);
+        self::assertStringNotContainsString('unknown key', implode("\n", $report['warnings']));
+        self::assertStringNotContainsString('old-token-value', (string) json_encode($report));
+    }
+
+    public function testEveryDeprecatedKeyIsGoneFromTheSchemaAndWellFormed(): void
+    {
+        $schema = Config::schema();
+        foreach (Config::deprecated() as $old => $rule) {
+            self::assertArrayNotHasKey($old, $schema, "{$old} must not live on in the schema");
+            self::assertMatchesRegularExpression('/^M\d+$/', $rule['since'], $old);
+            if (isset($rule['to'])) {
+                self::assertArrayHasKey($rule['to'], $schema, "{$old} renamed to a real key");
+                self::assertArrayHasKey('until', $rule, $old);
+            } else {
+                self::assertNotSame('', trim($rule['removed'] ?? ''), "{$old} says why");
+            }
+        }
+    }
+
+    public function testARenamedKeyKeepsWorkingAndTheDoctorNamesTheNewKey(): void
+    {
+        $map = ['search.old_weight' => ['since' => 'M40', 'until' => 'M42', 'to' => 'search.title_weight']];
+        $overrides = self::clean();
+        $overrides['search'] = ['old_weight' => 15];
+
+        $config = Config::merge($overrides, null, $map);
+        $report = ConfigDoctor::check($overrides, $map);
+
+        self::assertSame(15.0, $config['search']['title_weight'], 'the old value feeds the new key');
+        self::assertSame([], $report['errors']);
         self::assertSame(
-            ['logs.token: no longer used (M39), the pages sit behind the admin login; remove it'],
+            ['search.old_weight: renamed to search.title_weight in M40; the old value is still used until M42, '
+                . 'rename it in config.php'],
             $report['warnings']
         );
     }
 
-    public function testACleanConfigHasNoErrorsOrWarnings(): void
+    public function testWhenBothNamesAreSetTheNewOneWinsAndTheOldIsFlaggedAsIgnored(): void
     {
-        $report = ConfigDoctor::check(self::clean());
+        $map = ['search.old_weight' => ['since' => 'M40', 'until' => 'M42', 'to' => 'search.title_weight']];
+        $overrides = self::clean();
+        $overrides['search'] = ['old_weight' => 15, 'title_weight' => 20];
 
-        self::assertSame([], $report['errors']);
-        self::assertSame([], $report['warnings']);
+        $config = Config::merge($overrides, null, $map);
+        $report = ConfigDoctor::check($overrides, $map);
+
+        self::assertSame(20.0, $config['search']['title_weight']);
+        self::assertStringContainsString('ignored because search.title_weight is set', $report['warnings'][0]);
+    }
+
+    public function testASecretIsRecognizedByItsKeyName(): void
+    {
+        $secrets = ['db.password', 'db.dsn', 'db.user', 'vps.token', 'reload.token', 'debug.token', 'redis.auth',
+            'admin.password_hash'];
+        foreach ($secrets as $path) {
+            self::assertTrue(Config::isSecret($path), $path);
+        }
+        $plain = ['search.title_weight', 'admin.username', 'admin.session_hours', 'redis.host', 'paths.data'];
+        foreach ($plain as $path) {
+            self::assertFalse(Config::isSecret($path), $path);
+        }
+        foreach (array_keys(Config::schema()) as $path) {
+            if (preg_match('/\\.(token|password|password_hash|auth|secret)$/', $path) === 1) {
+                self::assertTrue(Config::isSecret($path), "{$path} looks like a secret");
+            }
+        }
     }
 
     public function testAMissingRequiredKeyIsAnError(): void

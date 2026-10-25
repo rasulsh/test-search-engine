@@ -22,6 +22,8 @@ use App\Analytics;
 use App\Db;
 use App\LogsExport;
 
+require __DIR__ . '/_php-guard.php'; // PHP 8.1+ check, before anything else runs
+
 if (PHP_SAPI !== 'cli') {
     http_response_code(404);
     return;
@@ -36,7 +38,9 @@ $fail = static function (string $message, int $status = 2): never {
 };
 
 $options = getopt('', ['out:', 'window:', 'since:', 'until:', 'zero-only', 'grouped', 'limit:', 'format:']);
-$opt = static fn (string $name): ?string => is_string($options[$name] ?? null) ? $options[$name] : null;
+$opt = static function ($name) use ($options) {
+    return is_string($options[$name] ?? null) ? $options[$name] : null;
+};
 
 $out = $opt('out');
 if ($out === null || $out === '') {

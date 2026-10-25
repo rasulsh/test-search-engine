@@ -22,10 +22,17 @@ file_put_contents($scenarioPath . '.last', (string) json_encode([
     'body' => json_decode($body, true),
 ]));
 
-$response = parse_url((string) $_SERVER['REQUEST_URI'], PHP_URL_PATH) === '/search-vectors'
-    && $_SERVER['REQUEST_METHOD'] === 'POST'
-    ? FakeVps::respond($scenario, $authorization, $body)
-    : ['status' => 404, 'body' => '{"detail":"Not Found"}'];
+$path = parse_url((string) $_SERVER['REQUEST_URI'], PHP_URL_PATH);
+if ($path === '/search-vectors' && $_SERVER['REQUEST_METHOD'] === 'POST') {
+    $response = FakeVps::respond($scenario, $authorization, $body);
+} elseif (
+    ($path === '/health' && $_SERVER['REQUEST_METHOD'] === 'GET')
+    || ($path === '/reload' && $_SERVER['REQUEST_METHOD'] === 'POST')
+) {
+    $response = FakeVps::admin($scenario, (string) $path, $authorization);
+} else {
+    $response = ['status' => 404, 'body' => '{"detail":"Not Found"}'];
+}
 
 http_response_code($response['status']);
 header('Content-Type: application/json');

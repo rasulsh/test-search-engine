@@ -4,9 +4,9 @@ One Persian, right-to-left panel on the cPanel service, `https://<site>/<service
 token-protected browser pages. It is plain PHP in `server/public/admin.php` plus a few small classes in
 `server/src/`; no framework, no Composer runtime package, no request to any other host.
 
-Built in milestones (M39 to M42). **M39 (this document so far)**: login, shell, status page, audit log, and the
-analytics and logs pages behind the login. Operations (reload, rollback, cache flush, VPS reload), the alias
-manager and the synonyms viewer follow in M40 and M41.
+Built in milestones (M39 to M42). **M39**: login, shell, status page, audit log, and the analytics and logs pages behind
+the login. **M40**: the operations page (reload, rollback, cache flush, VPS reload), the effective-configuration table
+and the config upgrade safety net. The alias manager and the synonyms viewer follow in M41.
 
 ## Setup
 
@@ -62,6 +62,7 @@ plain cPanel hosting (no proxy in front), leave it empty.
 | `?p=` | What it is |
 | --- | --- |
 | `status` | Read-only: database and product count, the live bundle's `meta.json` (built at, normalization version, counts), alias and synonym group counts, VPS `/health`, Redis ping and the number of keys under `redis.prefix`, the config doctor result, last reload time. The VPS and Redis probes time out at `admin.probe_timeout_ms` (1 s) and show "unreachable". |
+| `ops` | The operations page (M40), below. |
 | `analytics` | The M35/M38 dashboard. `?p=analytics&format=json` is the same JSON as before (byte-identical, covered by `AnalyticsJsonCompatTest`), now needing a session: 401 `{"error":"unauthorized"}` without one. |
 | `logs` | Recent / zero-result / slowest `search_logs` rows, paginated. |
 | `audit` | The audit trail. |
@@ -84,9 +85,54 @@ request outside the origin (see the PR report).
 | --- | --- | --- |
 | ![analytics light](img/admin/analytics-desktop-light.png) ![analytics dark](img/admin/analytics-desktop-dark.png) | ![analytics 1366](img/admin/analytics-1366-light.png) | ![analytics mobile](img/admin/analytics-mobile-dark.png) |
 
+| Operations (light) | After "load and activate" (dark) | Operations, mobile |
+| --- | --- | --- |
+| ![operations](img/admin/ops-initial-light.png) | ![applied](img/admin/ops-applied-dark.png) | ![ops mobile](img/admin/ops-mobile-light.png) |
+
+| Effective configuration (light) | Effective configuration (dark) |
+| --- | --- |
+| ![config light](img/admin/status-config-light.png) | ![config dark](img/admin/status-config-dark.png) |
+
 | Logs | Audit trail |
 | --- | --- |
 | ![logs](img/admin/logs-dark.png) | ![audit](img/admin/audit-light.png) |
+
+## Operations page (M40)
+
+`?p=ops` does what used to take a terminal and the reload token. Every action is a POST with the CSRF token, asks for
+confirmation first (the dangerous ones), writes one `admin_audit` row and shows a result message in Persian. There is
+no upload of `release.zip` or any code, and no `FLUSHALL`.
+
+| Card | What it does | Takes effect |
+| --- | --- | --- |
+| **Reload the staged bundle** | Shows `data_incoming/` next to the live `data/`: build time, normalization version, count, model, dimension, the count change, how many product ids were added / removed (from `vectors.idx`), the staging table and `products.load.sql`. **Validate only** runs every check of a reload and changes nothing; **load and activate** is the reload itself (optionally loading `products.load.sql` into `products_new` first, the equivalent of `reload.php?load=1`). | at once; the previous version stays as `products_old` + `data_old` |
+| **Return to the previous version** | Swaps `products` / `products_old` and `data` / `data_old`. Disabled when either is missing. Refused when the previous bundle's model, dim or normalization version does not match the running code. A second press goes back. | at once |
+| **Result cache** | Shows the Redis state and how many keys sit under `redis.prefix`; **clear** deletes those keys only (`SCAN` + `DEL`, 5 s timeout), never `FLUSHDB` / `FLUSHALL`, so other data on the same Redis is safe. | at once |
+| **VPS** | Shows `/health` (count, model, built at) and **load the uploaded vectors** calls the VPS `POST /reload` with `vps.token` and `vps.reload_timeout_ms` (60 s). The `rsync` of the vector files stays outside the panel. | when the VPS finishes its own check |
+| **Config doctor** | Runs the doctor on `config.php` and lists the key paths (never values). | - |
+| **Latest operations** | The last 8 operations with their result; this is also where the outcome is when the browser was closed. | - |
+
+The reload and the rollback are `App\Reload`, the same class `POST /reload` (the `X-Reload-Token` path for scripts) uses:
+the panel copies none of its logic. They share one non-blocking file lock, `server/reload.lock`: a second reload, rollback
+or validation while one runs is refused with "busy" (`409 {"error":"reload_busy"}` on the token endpoint), so a double
+click or two tabs can never overlap. The server side of an action calls `ignore_user_abort(true)` and `set_time_limit(0)`
+and releases the session lock before it starts; it runs to the end if the browser disconnects, and the page counts the
+elapsed seconds while it waits. The result is stored in the audit row (`{"ok":true,"count":24000,"s":12.3}`) and shown
+after the redirect, so a closed tab loses nothing. `server/` must be writable by the web user (the lock file, the
+directory swaps).
+
+## Effective configuration and upgrades (M40)
+
+The status page ends with a table of **every config key**: the value the app uses, the **source** (`config.php` or the
+code default) and the doctor's notes next to the keys they concern (a filter box and an "only what config.php sets or
+the doctor flagged" switch). Credentials (`db.dsn`, `db.user`, `db.password`, every `*.token`, `redis.auth`,
+`admin.password_hash`) show only "set" or "empty", and so do keys the schema does not know (a secret typed under a wrong
+name must not leak). Nothing here is cached: it is what the next request will use.
+
+`App\Config::deprecated()` maps old keys to what replaced them. A **renamed** key keeps working for two releases (its
+value feeds the new key unless that is set too) and the doctor / status page warn with the new name; a **removed** key
+is ignored and the warning says why and that the line can be deleted. Every config change of a milestone is listed in
+[CHANGELOG.md](CHANGELOG.md).
 
 ## Numbers and dates
 

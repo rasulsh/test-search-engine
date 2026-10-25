@@ -66,7 +66,8 @@ final class ScaffoldTest extends TestCase
         $this->assertSame('', $config['vps']['token'], 'config.example must not ship a VPS token');
         // M21 tooling is off until an operator sets a token.
         $this->assertSame('', $config['debug']['token'], 'config.example must not ship a debug token');
-        $this->assertSame('', $config['logs']['token'], 'config.example must not ship a logs token');
+        $this->assertSame('', $config['admin']['password_hash'], 'config.example must not ship an admin password hash');
+        $this->assertSame('', $config['admin']['username'], 'config.example must not ship an admin user');
         $this->assertSame('', $config['redis']['auth'], 'config.example must not ship a Redis password');
     }
 
@@ -87,10 +88,13 @@ final class ScaffoldTest extends TestCase
     {
         $env = (string) file_get_contents(dirname(__DIR__, 2) . '/.env.example');
 
-        $names = ['SEARCH_DB_DSN', 'SEARCH_VPS_URL', 'SEARCH_RELOAD_TOKEN', 'SEARCH_DEBUG_TOKEN', 'SEARCH_LOGS_TOKEN'];
+        $names = ['SEARCH_DB_DSN', 'SEARCH_VPS_URL', 'SEARCH_RELOAD_TOKEN', 'SEARCH_DEBUG_TOKEN',
+            'SEARCH_ADMIN_USERNAME', 'SEARCH_ADMIN_PASSWORD_HASH'];
         foreach ($names as $name) {
             $this->assertStringContainsString($name . '=', $env, "{$name} is not in .env.example");
         }
+        // A removed key's variable must not linger (Config::deprecated()): nothing reads it any more.
+        $this->assertStringNotContainsString('SEARCH_LOGS_TOKEN', $env);
         // Tunables are no longer read from the environment: listing them would mislead.
         $this->assertStringNotContainsString('SEARCH_TITLE_WEIGHT', $env);
     }
@@ -111,7 +115,10 @@ final class ScaffoldTest extends TestCase
 
     public function testVpsIsConfigDrivenAndOffByDefault(): void
     {
-        $this->assertSame(['url' => '', 'token' => '', 'timeout_ms' => 300], $this->loadExampleConfig()['vps']);
+        $this->assertSame(
+            ['url' => '', 'token' => '', 'timeout_ms' => 300, 'reload_timeout_ms' => 60000],
+            $this->loadExampleConfig()['vps']
+        );
 
         putenv('SEARCH_VPS_URL=https://vps.example.com:8600');
         putenv('SEARCH_VPS_TOKEN=secret-from-env-0123');
@@ -123,7 +130,8 @@ final class ScaffoldTest extends TestCase
         }
 
         $this->assertSame(
-            ['url' => 'https://vps.example.com:8600', 'token' => 'secret-from-env-0123', 'timeout_ms' => 300],
+            ['url' => 'https://vps.example.com:8600', 'token' => 'secret-from-env-0123', 'timeout_ms' => 300,
+                'reload_timeout_ms' => 60000],
             $vps
         );
     }

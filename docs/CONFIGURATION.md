@@ -39,8 +39,17 @@ Defaults are defined once. `App\Config` (`server/src/Config.php`) holds the whol
 | level | what |
 | --- | --- |
 | ERROR | a required key missing or empty; a value that does not cast to its type |
-| WARN | an unknown key path (a typo or a removed option); a half-configured feature: `redis.enabled` on with an empty `redis.host`, `vps.url` set with an empty `vps.token`, `reload.token` empty (`/reload` is disabled) |
+| WARN | an unknown key path (a typo); a **renamed or removed key** (below), with its replacement or the reason; a half-configured feature: `redis.enabled` on with an empty `redis.host`, `vps.url` set with an empty `vps.token`, `reload.token` empty (`/reload` is disabled) |
 | INFO (`--verbose`) | every tunable still at its code default, so all available knobs are visible |
+
+**Renamed and removed keys (M40).** `App\Config::deprecated()` lists every key that was renamed or removed since M29, so an
+old `config.php` gets an instruction instead of a bare "unknown key": for a *renamed* key the old value still feeds the new
+key for two releases (unless the new key is set) and the warning names the new key and the last release that honours the old
+one; for a *removed* key the warning says why it has no effect and that the line can be deleted. Today: `logs.token`
+(replaced by the admin login) and `admin.ip_header` (replaced by `admin.trusted_proxies`), both removed in M39. The full list
+of what each milestone added, removed, renamed or re-defaulted is [CHANGELOG.md](CHANGELOG.md). The status page's
+"effective configuration" table shows every key's value (credentials masked), its source (`config.php` or code default) and
+the doctor's notes beside it ([ADMIN.md](ADMIN.md#effective-configuration-and-upgrades-m40)).
 
 It prints key paths only, never values, and exits non-zero on any ERROR, so a deploy script or CI can gate on it. `--file=<path>` checks another overrides file. `GET /health` carries the same verdict as `config: {ok, errors[], warnings[]}` (key paths and statuses only; `/health` is unauthenticated, so never values).
 
@@ -118,6 +127,7 @@ It prints key paths only, never values, and exits non-zero on any ERROR, so a de
 | --- | --- | --- |
 | `vps.url` | empty | base URL (the client appends `/search-vectors`); empty = keyword-only |
 | `vps.token` | empty | the VPS's `VPS_TOKEN` (secret) |
+| `vps.reload_timeout_ms` | 60000 | timeout of the admin panel's "load the uploaded vectors" call (`POST {vps.url}/reload`), which loads and checks a whole catalog |
 | `vps.timeout_ms` | 300 | whole-call budget, connect included. A slow or unreachable VPS means keyword-only results for that request, never an error. The default is sized for an external VPS; on the final LAN VM it is a safety net, keep it sane |
 
 ### Result cache (`redis` section, M26)

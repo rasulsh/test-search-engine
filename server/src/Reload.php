@@ -22,7 +22,12 @@ use Throwable;
  * meta.count == vectors.idx lines == staging rows == vectors.bin size/checksum,
  * and a present synonyms.json / aliases.json parses (M15).
  * On success it swaps the tables and the directory, keeping the previous table
- * and directory for one-step rollback.
+ * and directory for one-step rollback ({@see rollback()}).
+ *
+ * Every operation that changes the live tables or directory (run, rollback) and the read-only
+ * {@see validate()} take the same non-blocking file lock (`reload.lock` next to the data
+ * directory), so two reloads can never overlap, whether they come from POST /reload or the admin
+ * panel (double click, two tabs): the second one fails with the reason `busy`.
  */
 final class Reload
 {
@@ -63,6 +68,127 @@ final class Reload
      */
     public function run(bool $loadStaging = false): array
     {
+        return $this->locked(fn (): array => $this->swapIn($loadStaging));
+    }
+
+    /**
+     * Everything run() checks before it would swap, and nothing it changes: the staged bundle's
+     * compatibility, its group files, and the counts. With $willLoadStaging the staging table is
+     * not loaded yet (apply would load it), so its row count cannot be compared.
+     *
+     * @return array{ok: true, count: int, model: string, dim: int, staging: string}
+     * @throws ReloadException the reason run() would refuse the bundle for.
+     */
+    public function validate(bool $willLoadStaging = false): array
+    {
+        return $this->locked(function () use ($willLoadStaging): array {
+            $meta = $this->readMeta();
+            $this->assertCompatible($meta);
+            $this->assertGroupFiles();
+            if ($willLoadStaging) {
+                $path = $this->incomingDir . '/' . StagingLoader::LOAD_FILE;
+                if (!is_file($path)) {
+                    throw new ReloadException('missing_load_sql', ['path' => $path]);
+                }
+            }
+            $count = $this->assertConsistent($meta, !$willLoadStaging);
+
+            return [
+                'ok' => true,
+                'count' => $count,
+                'model' => $this->model['name'],
+                'dim' => $this->model['dim'],
+                'staging' => $willLoadStaging ? 'will_load' : 'loaded',
+            ];
+        });
+    }
+
+    /**
+     * Swap back to the previous version: `<products>_old` and `<data>_old` trade places with the live
+     * ones, so a second rollback undoes the first. Refused (nothing changes) when either half of the
+     * previous version is missing or its bundle no longer matches this code's model / dim /
+     * normalization version.
+     *
+     * @return array{ok: true, count: int, model: string, dim: int, cache_flushed?: bool}
+     * @throws ReloadException nothing_to_roll_back, an incompatibility reason, or directory_swap_failed
+     */
+    public function rollback(): array
+    {
+        return $this->locked(function (): array {
+            $why = $this->rollbackBlocker();
+            if ($why !== null) {
+                throw new ReloadException('nothing_to_roll_back', ['missing' => $why]);
+            }
+            $this->assertCompatible($this->readMetaFile($this->dataDir . '_old/meta.json'));
+
+            $products = Identifier::quote($this->productsTable);
+            $backup = Identifier::quote($this->backupTable);
+            $spare = Identifier::quote($this->productsTable . '_swap');
+            $swap = "RENAME TABLE {$products} TO {$spare}, {$backup} TO {$products}, {$spare} TO {$backup}";
+            $this->pdo->exec($swap);
+            try {
+                $this->exchangeDirectories();
+            } catch (Throwable $e) {
+                $this->pdo->exec($swap);
+                throw new ReloadException('directory_swap_failed', ['error' => $e->getMessage()]);
+            }
+
+            return $this->finish((int) (($this->readMetaFile($this->dataDir . '/meta.json'))['count'] ?? 0));
+        });
+    }
+
+    /**
+     * What the operations page shows: the staged bundle next to the live one, how they differ, the
+     * staging table and whether a rollback is possible. Read-only, takes no lock.
+     *
+     * @return array<string, mixed>
+     */
+    public function describe(): array
+    {
+        $incoming = $this->summarize($this->incomingDir);
+        $live = $this->summarize($this->dataDir);
+        $diff = null;
+        if ($incoming['present'] && $live['present']) {
+            $changed = [];
+            foreach (['built_at', 'normalization_version', 'count', 'model', 'dim'] as $field) {
+                if ($incoming[$field] !== $live[$field]) {
+                    $changed[] = $field;
+                }
+            }
+            $new = $this->readIds($this->incomingDir);
+            $old = $this->readIds($this->dataDir);
+            $diff = [
+                'changed' => $changed,
+                'count_delta' => is_int($incoming['count']) && is_int($live['count'])
+                    ? $incoming['count'] - $live['count']
+                    : null,
+                'added' => $new === null || $old === null ? null : count(array_diff_key($new, $old)),
+                'removed' => $new === null || $old === null ? null : count(array_diff_key($old, $new)),
+            ];
+        }
+        $stagingExists = $this->safely(fn (): bool => $this->tableExists($this->stagingTable)) === true;
+        $blocker = $this->safely(fn (): ?string => $this->rollbackBlocker());
+
+        return [
+            'incoming' => $incoming,
+            'live' => $live,
+            'diff' => $diff,
+            'load_sql' => is_file($this->incomingDir . '/' . StagingLoader::LOAD_FILE),
+            'staging' => [
+                'exists' => $stagingExists,
+                'rows' => $stagingExists ? $this->safely(fn (): int => $this->countStagingRows()) : null,
+            ],
+            'rollback' => [
+                'possible' => $blocker === null,
+                'missing' => $blocker,
+                'previous' => $this->summarize($this->dataDir . '_old'),
+            ],
+        ];
+    }
+
+    /** @return array<string, mixed> */
+    private function swapIn(bool $loadStaging): array
+    {
         $meta = $this->readMeta();
         $this->assertCompatible($meta);
         $this->assertGroupFiles();
@@ -84,6 +210,17 @@ final class Reload
             throw new ReloadException('directory_swap_failed', ['error' => $e->getMessage()]);
         }
 
+        return $this->finish($count);
+    }
+
+    /**
+     * After a committed swap (reload or rollback): drop the worker's cached maps, warm the speller
+     * (best effort) and flush the result cache.
+     *
+     * @return array{ok: true, count: int, model: string, dim: int, cache_flushed?: bool}
+     */
+    private function finish(int $count): array
+    {
         // Searches in this worker re-read synonyms.json / aliases.json at once.
         Synonyms::clearCache();
         IntentMap::clearCache();
@@ -112,10 +249,97 @@ final class Reload
         return $result;
     }
 
+    /**
+     * @template T
+     * @param callable(): T $work
+     * @return T
+     * @throws ReloadException busy when another reload or rollback holds the lock
+     */
+    private function locked(callable $work): array
+    {
+        $path = dirname($this->dataDir) . '/reload.lock';
+        $handle = @fopen($path, 'c');
+        if ($handle === false) {
+            throw new ReloadException('lock_unavailable', ['path' => $path]);
+        }
+        try {
+            if (!flock($handle, LOCK_EX | LOCK_NB)) {
+                throw new ReloadException('busy');
+            }
+
+            return $work();
+        } finally {
+            flock($handle, LOCK_UN);
+            fclose($handle);
+        }
+    }
+
+    /** Which half of the previous version is missing, or null when a rollback is possible. */
+    private function rollbackBlocker(): ?string
+    {
+        if (!$this->tableExists($this->productsTable)) {
+            return 'products_table';
+        }
+        if (!$this->tableExists($this->backupTable)) {
+            return 'old_table';
+        }
+
+        return is_file($this->dataDir . '_old/meta.json') ? null : 'old_directory';
+    }
+
+    /**
+     * @param callable(): mixed $read
+     * @return mixed null when the read fails (the page still renders)
+     */
+    private function safely(callable $read): mixed
+    {
+        try {
+            return $read();
+        } catch (Throwable) {
+            return null;
+        }
+    }
+
+    /** @return array<string, mixed> */
+    private function summarize(string $dir): array
+    {
+        $path = $dir . '/meta.json';
+        $meta = is_file($path) ? json_decode((string) @file_get_contents($path), true) : null;
+        if (!is_array($meta)) {
+            return ['present' => false, 'built_at' => null, 'normalization_version' => null, 'count' => null,
+                'model' => null, 'dim' => null];
+        }
+
+        return [
+            'present' => true,
+            'built_at' => isset($meta['built_at']) ? (string) $meta['built_at'] : null,
+            'normalization_version' => isset($meta['normalization_version'])
+                ? (int) $meta['normalization_version']
+                : null,
+            'count' => isset($meta['count']) ? (int) $meta['count'] : null,
+            'model' => isset($meta['model']) ? (string) $meta['model'] : null,
+            'dim' => isset($meta['dim']) ? (int) $meta['dim'] : null,
+        ];
+    }
+
+    /** @return array<string, true>|null the product ids of a bundle (vectors.idx), null when it has none */
+    private function readIds(string $dir): ?array
+    {
+        $path = $dir . '/vectors.idx';
+        $lines = is_file($path) ? file($path, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) : false;
+
+        return $lines === false ? null : array_fill_keys($lines, true);
+    }
+
     /** @return array<string, mixed> */
     private function readMeta(): array
     {
-        $path = $this->incomingDir . '/meta.json';
+        return $this->readMetaFile($this->incomingDir . '/meta.json');
+    }
+
+    /** @return array<string, mixed> */
+    private function readMetaFile(string $path): array
+    {
         if (!is_file($path)) {
             throw new ReloadException('missing_meta', ['path' => $path]);
         }
@@ -181,11 +405,11 @@ final class Reload
      * @param array<string, mixed> $meta
      * @return int the validated product count
      */
-    private function assertConsistent(array $meta): int
+    private function assertConsistent(array $meta, bool $withStaging = true): int
     {
         $metaCount = (int) ($meta['count'] ?? -1);
         $idxCount = $this->countIdxLines();
-        $stagingCount = $this->countStagingRows();
+        $stagingCount = $withStaging ? $this->countStagingRows() : $metaCount;
 
         if ($metaCount < 0 || $metaCount !== $idxCount || $metaCount !== $stagingCount) {
             throw new ReloadException('count_mismatch', [
@@ -302,6 +526,26 @@ final class Reload
                 @rename($backupDir, $this->dataDir); // restore previous bundle
             }
             throw new RuntimeException("failed to move {$this->incomingDir} into place");
+        }
+    }
+
+    /** `<data>` and `<data>_old` trade places (the rollback); restores itself when a step fails. */
+    private function exchangeDirectories(): void
+    {
+        $backupDir = $this->dataDir . '_old';
+        $spare = $this->dataDir . '_swap';
+        $this->removeDir($spare);
+        if (!@rename($this->dataDir, $spare)) {
+            throw new RuntimeException("failed to move {$this->dataDir} aside");
+        }
+        if (!@rename($backupDir, $this->dataDir)) {
+            @rename($spare, $this->dataDir);
+            throw new RuntimeException("failed to move {$backupDir} into place");
+        }
+        if (!@rename($spare, $backupDir)) {
+            @rename($this->dataDir, $backupDir);
+            @rename($spare, $this->dataDir);
+            throw new RuntimeException("failed to keep {$this->dataDir} as {$backupDir}");
         }
     }
 

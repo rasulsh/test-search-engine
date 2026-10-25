@@ -30,7 +30,7 @@ def dev_tree(tmp_path: Path) -> Path:
                 "public/client/model/stale.onnx", "data/vectors.bin",
                 "data_incoming/old.txt", "tests/KeywordTest.php", "tools/eval.php",
                 "tools/config-check.php", "tools/logs-export.php", "tools/admin-password.php",
-                "public/.htaccess",
+                "tools/_php-guard.php", "public/.htaccess",
                 "public/app_base.php",
                 ".htaccess", "data/.htaccess", "data_incoming/.htaccess"):
         (server / rel).parent.mkdir(parents=True, exist_ok=True)
@@ -69,7 +69,8 @@ def test_release_packs_bundle_under_data_incoming_and_the_server_code(
     # The tools shipped (run on the host after unzipping): the config doctor, the log
     # export (M36) and the admin password hash maker (M39); never the dev-only tools/eval.php.
     assert [n for n in names if n.startswith("tools/")] == [
-        "tools/admin-password.php", "tools/config-check.php", "tools/logs-export.php"]
+        "tools/_php-guard.php", "tools/admin-password.php", "tools/config-check.php",
+        "tools/logs-export.php"]
     assert "data_incoming/old.txt" not in names
     # M30 layout: unzipped into server/, public/ stays a child of it, with the deny-all nets.
     assert {".htaccess", "data/.htaccess", "data_incoming/.htaccess", "public/.htaccess",

@@ -158,7 +158,8 @@ final class InstallerTest extends TestCase
         self::assertSame('https://shop.example.com/image/', $config['storefront']['image_base']);
         self::assertEqualsWithDelta(0.75, $config['search']['semantic_min_score'], 1e-9);
         self::assertSame(
-            ['url' => 'https://vps.example.com:8600', 'token' => $input['vps_token'], 'timeout_ms' => 250],
+            ['url' => 'https://vps.example.com:8600', 'token' => $input['vps_token'], 'timeout_ms' => 250,
+                'reload_timeout_ms' => 60000],
             $config['vps']
         );
         self::assertEqualsWithDelta(12.0, $config['search']['title_weight'], 1e-9);

@@ -331,15 +331,15 @@ final class ReloadTest extends DatabaseTestCase
     public function testDirectorySwapFailureRollsBackTables(): void
     {
         // Validated bundle: the table swap succeeds, then the directory swap
-        // fails (its target's parent does not exist). The tables must roll back
-        // so they never disagree with the untouched directory.
+        // fails (a file sits where the data directory must go). The tables must
+        // roll back so they never disagree with the untouched directory.
         $this->insertProduct('products', 1);
         $this->insertProduct('products', 2);
         $this->createStaging(3);
 
-        // A data dir whose parent is missing makes rename() into place fail.
-        $missingParent = sys_get_temp_dir() . '/reload_missing_' . uniqid('', true);
-        $dataDir = $missingParent . '/data';
+        // rename() of a directory onto an existing file fails.
+        $dataDir = sys_get_temp_dir() . '/reload_datafile_' . uniqid('', true);
+        file_put_contents($dataDir, 'not a directory');
         $incomingDir = $this->makeIncoming(3);
 
         try {
@@ -347,6 +347,8 @@ final class ReloadTest extends DatabaseTestCase
             self::fail('expected ReloadException');
         } catch (ReloadException $e) {
             self::assertSame('directory_swap_failed', $e->reason());
+        } finally {
+            @unlink($dataDir);
         }
 
         // All-old: the previous rows are live again, staging is restored, and no
@@ -594,5 +596,268 @@ final class ReloadTest extends DatabaseTestCase
             self::assertSame($reason, $e->reason());
         }
         self::assertDirectoryExists($incomingDir);  // no swap happened
+    }
+
+    // --- validate / rollback / lock / describe (M40) ---------------------------
+
+    private function lockHolder(string $dataDir): mixed
+    {
+        $handle = fopen(dirname($dataDir) . '/reload.lock', 'c');
+        self::assertIsResource($handle);
+        self::assertTrue(flock($handle, LOCK_EX | LOCK_NB));
+
+        return $handle;
+    }
+
+    public function testValidateChecksEverythingAndChangesNothing(): void
+    {
+        $this->insertProduct('products', 1);
+        $this->createStaging(3);
+        $dataDir = $this->newTempDir('_data');
+        $incomingDir = $this->makeIncoming(3);
+
+        $result = (new Reload($this->pdo, $this->config($dataDir, $incomingDir)))->validate();
+
+        self::assertSame(['ok' => true, 'count' => 3, 'model' => 'intfloat/multilingual-e5-small', 'dim' => self::DIM,
+            'staging' => 'loaded'], $result);
+        self::assertSame(1, $this->rowCount('products'), 'the live table is untouched');
+        self::assertSame(3, $this->rowCount('products_new'));
+        self::assertDirectoryExists($incomingDir);
+        self::assertFalse($this->tableExists('products_old'));
+    }
+
+    public function testValidateRefusesWhatRunWouldRefuse(): void
+    {
+        $this->createStaging(2); // meta says 3
+        $dataDir = $this->newTempDir('_data');
+
+        $cases = [
+            ['incoming' => $this->makeIncoming(3, self::DIM, ['model' => 'other/model']), 'reason' => 'model_mismatch'],
+            [
+                'incoming' => $this->makeIncoming(3, self::DIM, ['normalization_version' => 9]),
+                'reason' => 'normalization_version_mismatch',
+            ],
+            ['incoming' => $this->makeIncoming(3), 'reason' => 'count_mismatch'],
+        ];
+        foreach ($cases as $case) {
+            try {
+                (new Reload($this->pdo, $this->config($dataDir, $case['incoming'])))->validate();
+                self::fail('expected ' . $case['reason']);
+            } catch (ReloadException $e) {
+                self::assertSame($case['reason'], $e->reason());
+            }
+        }
+    }
+
+    public function testValidateBeforeTheStagingLoadSkipsTheStagingCountButNeedsTheLoadFile(): void
+    {
+        $dataDir = $this->newTempDir('_data');
+        $incomingDir = $this->makeIncoming(3); // no products_new table, no products.load.sql
+        $reload = new Reload($this->pdo, $this->config($dataDir, $incomingDir));
+
+        try {
+            $reload->validate(true);
+            self::fail('expected missing_load_sql');
+        } catch (ReloadException $e) {
+            self::assertSame('missing_load_sql', $e->reason());
+        }
+        file_put_contents($incomingDir . '/products.load.sql', '-- staged');
+
+        self::assertSame('will_load', $reload->validate(true)['staging']);
+        $this->expectException(ReloadException::class);
+        $this->expectExceptionMessage('missing_staging_table');
+        $reload->validate(false);
+    }
+
+    private function tableExists(string $table): bool
+    {
+        return (int) $this->pdo->query(
+            "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name = '{$table}'"
+        )->fetchColumn() === 1;
+    }
+
+    /** @return array{string, string} data and incoming dirs after one successful reload (old = 2 rows, new = 3 rows) */
+    private function reloadedOnce(): array
+    {
+        $this->insertProduct('products', 1);
+        $this->insertProduct('products', 2);
+        $this->createStaging(3);
+        $dataDir = $this->newTempDir('_data');
+        file_put_contents($dataDir . '/meta.json', json_encode([
+            'model' => 'intfloat/multilingual-e5-small', 'dim' => self::DIM, 'normalization_version' => 2,
+            'count' => 2, 'built_at' => 'old-build',
+        ]));
+        $incomingDir = $this->makeIncoming(3);
+        (new Reload($this->pdo, $this->config($dataDir, $incomingDir)))->run();
+        $this->tempDirs[] = $dataDir . '_old';
+
+        return [$dataDir, $incomingDir];
+    }
+
+    public function testRollbackSwapsTablesAndDirectoriesBackAndCanBeUndone(): void
+    {
+        [$dataDir, $incomingDir] = $this->reloadedOnce();
+        $reload = new Reload($this->pdo, $this->config($dataDir, $incomingDir));
+        self::assertSame(3, $this->rowCount('products'));
+
+        $result = $reload->rollback();
+
+        self::assertSame(2, $result['count']);
+        self::assertSame(2, $this->rowCount('products'), 'the previous table is live again');
+        self::assertSame(3, $this->rowCount('products_old'), 'the replaced one is kept');
+        $live = json_decode((string) file_get_contents($dataDir . '/meta.json'), true);
+        self::assertSame('old-build', $live['built_at']);
+        self::assertSame(3, json_decode((string) file_get_contents($dataDir . '_old/meta.json'), true)['count']);
+        self::assertFalse($this->tableExists('products_swap'));
+        self::assertDirectoryDoesNotExist($dataDir . '_swap');
+
+        self::assertSame(3, $reload->rollback()['count'], 'a second rollback undoes the first');
+        self::assertSame(3, $this->rowCount('products'));
+    }
+
+    public function testRollbackWithNothingToRollBackToChangesNothing(): void
+    {
+        $this->insertProduct('products', 1);
+        $dataDir = $this->newTempDir('_data');
+        file_put_contents($dataDir . '/meta.json', '{}');
+        $reload = new Reload($this->pdo, $this->config($dataDir, $this->newTempDir('_in')));
+
+        try {
+            $reload->rollback();
+            self::fail('expected nothing_to_roll_back');
+        } catch (ReloadException $e) {
+            self::assertSame('nothing_to_roll_back', $e->reason());
+            self::assertSame(['missing' => 'old_table'], $e->details());
+        }
+        self::assertSame(1, $this->rowCount('products'));
+        self::assertFileExists($dataDir . '/meta.json');
+    }
+
+    public function testRollbackRefusesAPreviousVersionThatNoLongerMatchesTheCode(): void
+    {
+        [$dataDir, $incomingDir] = $this->reloadedOnce();
+        $meta = json_decode((string) file_get_contents($dataDir . '_old/meta.json'), true);
+        $meta['normalization_version'] = 1; // the old bundle predates the current normalization
+        file_put_contents($dataDir . '_old/meta.json', json_encode($meta));
+
+        try {
+            (new Reload($this->pdo, $this->config($dataDir, $incomingDir)))->rollback();
+            self::fail('expected a mismatch');
+        } catch (ReloadException $e) {
+            self::assertSame('normalization_version_mismatch', $e->reason());
+        }
+        self::assertSame(3, $this->rowCount('products'), 'nothing swapped');
+    }
+
+    public function testRollbackRestoresTheTablesWhenTheDirectoriesCannotBeSwapped(): void
+    {
+        [$dataDir, $incomingDir] = $this->reloadedOnce();
+        // A plain file where the spare directory must go makes the first rename fail.
+        file_put_contents($dataDir . '_swap', 'in the way');
+        $this->tempDirs[] = $dataDir . '_swapfile';
+        $reload = new Reload($this->pdo, $this->config($dataDir, $incomingDir));
+
+        try {
+            $reload->rollback();
+            self::fail('expected directory_swap_failed');
+        } catch (ReloadException $e) {
+            self::assertSame('directory_swap_failed', $e->reason());
+        } finally {
+            @unlink($dataDir . '_swap');
+        }
+        self::assertSame(3, $this->rowCount('products'), 'tables are back as they were');
+        self::assertSame(2, $this->rowCount('products_old'));
+        self::assertSame(3, json_decode((string) file_get_contents($dataDir . '/meta.json'), true)['count']);
+    }
+
+    public function testRollbackFlushesTheResultCache(): void
+    {
+        [$dataDir, $incomingDir] = $this->reloadedOnce();
+        $redis = new FakeRedis();
+        $cache = new \App\Cache($redis, 'search:cache:', 60);
+        $cache->set('search:cache:a', ['a' => 1]);
+
+        $result = (new Reload($this->pdo, $this->config($dataDir, $incomingDir), $cache))->rollback();
+
+        self::assertTrue($result['cache_flushed']);
+        self::assertSame([], $redis->data);
+    }
+
+    public function testASecondReloadOrRollbackWhileOneRunsIsRefusedAsBusy(): void
+    {
+        [$dataDir, $incomingDir] = $this->reloadedOnce();
+        $reload = new Reload($this->pdo, $this->config($dataDir, $incomingDir));
+        $held = $this->lockHolder($dataDir);
+
+        $calls = [
+            'run' => fn () => $reload->run(),
+            'rollback' => fn () => $reload->rollback(),
+            'validate' => fn () => $reload->validate(),
+        ];
+        foreach ($calls as $name => $call) {
+            try {
+                $call();
+                self::fail("{$name} must be refused while the lock is held");
+            } catch (ReloadException $e) {
+                self::assertSame('busy', $e->reason(), $name);
+            }
+        }
+        self::assertSame(3, $this->rowCount('products'), 'refused calls changed nothing');
+
+        flock($held, LOCK_UN);
+        fclose($held);
+        self::assertSame(2, $reload->rollback()['count'], 'the lock was released, work goes through');
+    }
+
+    public function testTheLockIsReleasedWhenTheWorkFails(): void
+    {
+        $dataDir = $this->newTempDir('_data');
+        $reload = new Reload($this->pdo, $this->config($dataDir, $this->newTempDir('_in')));
+
+        foreach ([1, 2] as $_) { // a leaked lock would turn the second reason into "busy"
+            try {
+                $reload->run();
+                self::fail('expected missing_meta');
+            } catch (ReloadException $e) {
+                self::assertSame('missing_meta', $e->reason());
+            }
+        }
+    }
+
+    public function testDescribeShowsTheStagedBundleNextToTheLiveOneAndTheDiff(): void
+    {
+        $this->insertProduct('products', 1);
+        $this->createStaging(3);
+        $dataDir = $this->newTempDir('_data');
+        file_put_contents($dataDir . '/meta.json', json_encode([
+            'model' => 'intfloat/multilingual-e5-small', 'dim' => self::DIM, 'normalization_version' => 2,
+            'count' => 2, 'built_at' => 'old-build',
+        ]));
+        file_put_contents($dataDir . '/vectors.idx', "3000\n9999\n");
+        $incomingDir = $this->makeIncoming(3); // ids 3000, 3001, 3002
+        file_put_contents($incomingDir . '/products.load.sql', '-- staged');
+
+        $d = (new Reload($this->pdo, $this->config($dataDir, $incomingDir)))->describe();
+
+        self::assertSame(3, $d['incoming']['count']);
+        self::assertSame('2026-01-01T00:00:00+00:00', $d['incoming']['built_at']);
+        self::assertSame(2, $d['live']['count']);
+        self::assertSame(['built_at', 'count'], $d['diff']['changed']);
+        self::assertSame(1, $d['diff']['count_delta']);
+        self::assertSame([2, 1], [$d['diff']['added'], $d['diff']['removed']]);
+        self::assertSame(['exists' => true, 'rows' => 3], $d['staging']);
+        self::assertTrue($d['load_sql']);
+        self::assertFalse($d['rollback']['possible']);
+        self::assertSame('old_table', $d['rollback']['missing']);
+    }
+
+    public function testDescribeToleratesMissingBundlesAndTables(): void
+    {
+        $d = (new Reload($this->pdo, $this->config($this->newTempDir('_data'), $this->newTempDir('_in'))))->describe();
+
+        self::assertFalse($d['incoming']['present']);
+        self::assertFalse($d['live']['present']);
+        self::assertNull($d['diff']);
+        self::assertSame(['exists' => false, 'rows' => null], $d['staging']);
     }
 }

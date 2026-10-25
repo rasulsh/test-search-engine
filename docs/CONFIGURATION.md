@@ -181,7 +181,7 @@ reports an unset admin config as a warning and a half-set or non-hash one as an 
 | `admin.login_max_failures_global` | 50 | failed logins from all addresses in the window before everyone is refused |
 | `admin.login_window_minutes` | 15 | the throttling window |
 | `admin.audit_retention_days` | 180 | `admin_audit` rows older than this are deleted on write |
-| `admin.ip_header` | empty | server variable holding the client address behind a proxy (e.g. `HTTP_X_FORWARDED_FOR`, last entry used); empty = `REMOTE_ADDR` |
+| `admin.trusted_proxies` | empty | comma separated IPs / CIDR of reverse proxies whose `X-Forwarded-For` is believed (read from the right); empty = the client is `REMOTE_ADDR` and the header is ignored |
 | `admin.trust_forwarded_proto` | false | accept `X-Forwarded-Proto: https` as HTTPS (TLS ended at a proxy) |
 | `admin.probe_timeout_ms` | 1000 | timeout of the status page's VPS `/health` and Redis probes |
 | `db.admin_audit_table` | `admin_audit` | the audit table ([migration](../db/migrations/2026-10-25_admin_audit.sql)) |

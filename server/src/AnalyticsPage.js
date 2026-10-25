@@ -20,28 +20,43 @@
   var timer = null;
   var tip = null;
 
-  /* ---- formatting (display only: the report values are never changed) ---- */
-  var nf = new Intl.NumberFormat('fa-IR');
-  var nf1 = new Intl.NumberFormat('fa-IR', { minimumFractionDigits: 1, maximumFractionDigits: 1 });
-  var nf2 = new Intl.NumberFormat('fa-IR', { maximumFractionDigits: 2 });
-  var jalali = null;
-  try {
-    jalali = new Intl.DateTimeFormat('fa-IR-u-ca-persian', {
-      year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit',
-      hourCycle: 'h23', timeZone: 'UTC' });
-  } catch (e) { jalali = null; }
-  var jalaliDay = null;
-  try {
-    jalaliDay = new Intl.DateTimeFormat('fa-IR-u-ca-persian', {
-      year: 'numeric', month: '2-digit', day: '2-digit', timeZone: 'UTC' });
-  } catch (e) { jalaliDay = null; }
+  /* ---- formatting (display only: the report values are never changed) ----
+   * The one place that turns values into text: Latin digits, "," thousands, "." decimals, "%" for
+   * percentages, Jalali dates in the Latin numbering system. Nothing below formats a number itself. */
+  var fmt = (function () {
+    var plain = function (min, max) { return new Intl.NumberFormat('en-US', { minimumFractionDigits: min, maximumFractionDigits: max }); };
+    var int = plain(0, 0), one = plain(1, 1), two = plain(0, 2);
+    var clock = null, jalali = null;
+    try { clock = new Intl.DateTimeFormat('en-GB', { hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23' }); } catch (e) { clock = null; }
+    try {
+      jalali = new Intl.DateTimeFormat('fa-IR-u-ca-persian-nu-latn', {
+        year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit',
+        hourCycle: 'h23', timeZone: 'UTC' });
+    } catch (e) { jalali = null; }
+    var part = function (parts, type) {
+      for (var i = 0; i < parts.length; i++) { if (parts[i].type === type) { return parts[i].value; } }
+      return '';
+    };
+    return {
+      n: function (v) { return int.format(Number(v)); },
+      d1: function (v) { return one.format(Number(v)); },
+      d2: function (v) { return two.format(Number(v)); },
+      pct: function (v) { return one.format(Number(v)) + '%'; },
+      ms: function (v) { return t(T.ui.ms, [int.format(Math.round(Number(v)))]); },
+      /* "1405/08/03 09:56" (or the date alone), or '' when the browser lacks the Persian calendar. */
+      jalali: function (date, withTime) {
+        if (!jalali) { return ''; }
+        var p = jalali.formatToParts(date);
+        var day = part(p, 'year') + '/' + part(p, 'month') + '/' + part(p, 'day');
+        return withTime ? day + ' ' + part(p, 'hour') + ':' + part(p, 'minute') : day;
+      },
+      now: function () { return clock ? clock.format(new Date()) : ''; }
+    };
+  })();
 
   function t(text, args) {
     return String(text).replace(/\{(\d+)\}/g, function (m, i) { return args && args[i] !== undefined ? args[i] : m; });
   }
-  function num(n) { return nf.format(Number(n)); }
-  function pct(v) { return nf1.format(Number(v)) + '٪'; }
-  function ms(v) { return t(T.ui.ms, [num(Math.round(v))]); }
   function max(values) { return Math.max.apply(null, values.concat([0])); }
 
   /* The stored DATETIME is a wall-clock string in the database's zone; its calendar fields are
@@ -49,9 +64,8 @@
   var STAMP = /^(\d{4})-(\d\d)-(\d\d)(?:[ T](\d\d):(\d\d)(?::(\d\d))?)?/;
   function jalaliOf(stamp) {
     var m = STAMP.exec(String(stamp));
-    if (!m || !jalali) { return ''; }
-    var when = new Date(Date.UTC(+m[1], +m[2] - 1, +m[3], +(m[4] || 0), +(m[5] || 0), +(m[6] || 0)));
-    return (m[4] === undefined ? jalaliDay : jalali).format(when);
+    if (!m) { return ''; }
+    return fmt.jalali(new Date(Date.UTC(+m[1], +m[2] - 1, +m[3], +(m[4] || 0), +(m[5] || 0), +(m[6] || 0))), m[4] !== undefined);
   }
   function shortStamp(stamp) { return String(stamp).replace(/^(\S+ \d\d:\d\d):\d\d$/, '$1'); }
   function dualText(stamp) {
@@ -222,6 +236,10 @@
       [el('div', { 'class': 'cardhead' }, head)].concat(panel ? [panel] : [], body, noteText ? [note(noteText)] : []));
   }
 
+  /* Tile values as [number, unit]; the text forms (tables, tooltips) stay in fmt. */
+  function P(v) { return [fmt.d1(v), '%']; }
+  function M(v) { return [fmt.n(Math.round(Number(v))), T.ui.unit_ms]; }
+
   function tile(label, value, helpKey) {
     var q = helpButton(helpKey, function () {
       tileHelp = tileHelp === helpKey ? null : helpKey;
@@ -231,7 +249,10 @@
         b.setAttribute('aria-expanded', b.getAttribute('aria-controls') === 'help-' + tileHelp ? 'true' : 'false');
       });
     }, tileHelp === helpKey);
-    return el('div', { 'class': 'tile' }, [q, el('b', { text: value }), el('span', { text: label })]);
+    // value is text, or [number, unit]: the unit is drawn smaller and muted after the number.
+    var big = el('b', { 'class': 'val', text: Array.isArray(value) ? value[0] : value },
+      Array.isArray(value) ? [el('small', { text: value[1] })] : []);
+    return el('div', { 'class': 'tile' }, [q, big, el('span', { text: label })]);
   }
 
   /* Heatmap: weekday x hour, one hue, opacity = share of the busiest cell. Hours run left to right. */
@@ -243,7 +264,7 @@
       s.appendChild(svg('text', { x: 50, y: 18 + r * C + 15, 'class': 'axis end', text: T.weekdays[d] }));
     });
     for (var h = 0; h < 24; h += 3) {
-      s.appendChild(svg('text', { x: 56 + h * C + C / 2, y: 12, 'class': 'axis mid', text: num(h) }));
+      s.appendChild(svg('text', { x: 56 + h * C + C / 2, y: 12, 'class': 'axis mid', text: fmt.n(h) }));
     }
     var byKey = {};
     cells.forEach(function (c) { byKey[c.weekday + ':' + c.hour] = c.searches; });
@@ -252,7 +273,7 @@
         var v = byKey[d + ':' + hh] || 0;
         var rect = svg('rect', { x: 56 + hh * C + 1, y: 18 + r * C + 1, width: C - 2, height: C - 2, rx: 3,
           'class': 'cell', 'fill-opacity': v ? (0.15 + 0.85 * v / top).toFixed(2) : 0.05 });
-        hover(rect, [t(T.ui.hour_at, [T.weekdays[d], num(hh)]), t(T.ui.searches_n, [num(v)])]);
+        hover(rect, [t(T.ui.hour_at, [T.weekdays[d], fmt.n(hh)]), t(T.ui.searches_n, [fmt.n(v)])]);
         s.appendChild(rect);
       }
     });
@@ -267,10 +288,10 @@
     rows.forEach(function (r, i) {
       var bh = (H - B - T0) * r.searches / top;
       var rect = svg('rect', { x: 10 + i * w + 4, y: H - B - bh, width: w - 8, height: Math.max(0, bh), rx: 4, 'class': 's1' });
-      hover(rect, [r.tokens === 5 ? T.ui.word_5plus : t(T.ui.word_one, [num(r.tokens)]), t(T.ui.searches_n, [num(r.searches)])]);
+      hover(rect, [r.tokens === 5 ? T.ui.word_5plus : t(T.ui.word_one, [fmt.n(r.tokens)]), t(T.ui.searches_n, [fmt.n(r.searches)])]);
       s.appendChild(rect);
-      s.appendChild(svg('text', { x: 10 + i * w + w / 2, y: H - 8, 'class': 'axis mid', text: num(r.tokens) + (r.tokens === 5 ? '+' : '') }));
-      s.appendChild(svg('text', { x: 10 + i * w + w / 2, y: H - B - bh - 5, 'class': 'axis mid', text: num(r.searches) }));
+      s.appendChild(svg('text', { x: 10 + i * w + w / 2, y: H - 8, 'class': 'axis mid', text: fmt.n(r.tokens) + (r.tokens === 5 ? '+' : '') }));
+      s.appendChild(svg('text', { x: 10 + i * w + w / 2, y: H - B - bh - 5, 'class': 'axis mid', text: fmt.n(r.searches) }));
     });
     return s;
   }
@@ -283,11 +304,11 @@
       if (!s.value) { return; }
       var seg = el('div', { 'class': 'seg ' + s.cls });
       seg.style.flexGrow = String(s.value);
-      hover(seg, [s.label, num(s.value) + ' (' + pct(100 * s.value / total) + ')']);
+      hover(seg, [s.label, fmt.n(s.value) + ' (' + fmt.pct(100 * s.value / total) + ')']);
       bar.appendChild(seg);
     });
     return el('div', {}, [el('div', { 'class': 'splitTitle', text: title }), total ? bar : empty(),
-      legend(segments.map(function (s) { return [s.label + ': ' + num(s.value), s.cls]; }))]);
+      legend(segments.map(function (s) { return [s.label + ': ' + fmt.n(s.value), s.cls]; }))]);
   }
 
   /* Column kinds: t = free text (start-aligned, own direction), n = count, p = percent, m = milliseconds,
@@ -297,7 +318,7 @@
     if (kind === 't') { td = el('td', {}, [el('span', { dir: 'auto', 'class': 'qt', text: String(v) })]); }
     else if (kind === 'd') { td = el('td', { 'class': 'c' }, [dateCell(v)]); }
     else {
-      var text = kind === 'n' ? num(v) : kind === 'p' ? pct(v) : kind === 'm' ? ms(v) : String(v);
+      var text = kind === 'n' ? fmt.n(v) : kind === 'p' ? fmt.pct(v) : kind === 'm' ? fmt.ms(v) : String(v);
       td = el('td', { 'class': 'c', text: text });
     }
     return td;
@@ -369,13 +390,13 @@
       title: T.ui.theme_label, text: dark ? T.ui.theme_to_light : T.ui.theme_to_dark });
     themeBtn.addEventListener('click', function () { setTheme(dark ? 'light' : 'dark'); });
     controls.append(select, box, json, guideLink,
-      el('span', { 'class': 'note', id: 'status', text: r.refresh_seconds > 0 ? t(T.ui.refresh_on, [num(r.refresh_seconds)]) : T.ui.refresh_off }));
+      el('span', { 'class': 'note', id: 'status', text: r.refresh_seconds > 0 ? t(T.ui.refresh_on, [fmt.n(r.refresh_seconds)]) : T.ui.refresh_off }));
 
     var tiles = el('div', { 'class': 'tiles' }, [
-      tile(T.tiles.total, num(s.total), 'tile_total'), tile(T.tiles.zero_rate, pct(s.zero_rate), 'tile_zero_rate'),
-      tile(T.tiles.cache, pct(r.cache.hit_rate), 'tile_cache'), tile(T.tiles.hybrid, pct(r.tier.hybrid_share), 'tile_hybrid'),
-      tile(T.tiles.avg, ms(L.avg), 'tile_avg'), tile(T.tiles.p95, ms(L.p95), 'tile_p95'),
-      tile(T.tiles.repeat, pct(r.repeat_queries.rate), 'tile_repeat'),
+      tile(T.tiles.total, fmt.n(s.total), 'tile_total'), tile(T.tiles.zero_rate, P(s.zero_rate), 'tile_zero_rate'),
+      tile(T.tiles.cache, P(r.cache.hit_rate), 'tile_cache'), tile(T.tiles.hybrid, P(r.tier.hybrid_share), 'tile_hybrid'),
+      tile(T.tiles.avg, M(L.avg), 'tile_avg'), tile(T.tiles.p95, M(L.p95), 'tile_p95'),
+      tile(T.tiles.repeat, P(r.repeat_queries.rate), 'tile_repeat'),
     ]);
     var tileHelpHolder = el('div', { id: 'tilehelp' }, tileHelp ? [helpPanel(tileHelp)] : []);
 
@@ -384,19 +405,19 @@
     var zeroTrend = r.zero_rate_trend, lat = r.latency_trend;
     var grid = el('div', { 'class': 'grid2' }, empty0 ? [card(C.searches, [empty()])] : [
       card(C.volume, [timeChart(T.chart.volume, buckets,
-        [{ name: S.searches, cls: 's1', values: r.volume.map(function (v) { return v.searches; }) }], 'bar', num)], null, 'volume'),
+        [{ name: S.searches, cls: 's1', values: r.volume.map(function (v) { return v.searches; }) }], 'bar', fmt.n)], null, 'volume'),
       card(C.zero_rate, [timeChart(T.chart.zero_rate, zeroTrend.map(function (v) { return v.bucket; }),
-        [{ name: S.zero_rate, cls: 's2', values: zeroTrend.map(function (v) { return v.zero_rate; }) }], 'line', pct)], null, 'zero_rate'),
+        [{ name: S.zero_rate, cls: 's2', values: zeroTrend.map(function (v) { return v.zero_rate; }) }], 'line', fmt.pct)], null, 'zero_rate'),
       card(C.latency, [timeChart(T.chart.latency, lat.map(function (v) { return v.bucket; }), [
         { name: S.avg, cls: 's1', values: lat.map(function (v) { return v.avg; }) },
-        { name: S.p95, cls: 's2', values: lat.map(function (v) { return v.p95; }) }], 'line', ms, function (v) { return num(Math.round(v)); }),
+        { name: S.p95, cls: 's2', values: lat.map(function (v) { return v.p95; }) }], 'line', fmt.ms, function (v) { return fmt.n(Math.round(v)); }),
       legend([[S.avg, 's1'], [S.p95, 's2']])], null, 'latency'),
       card(C.heatmap, [heatmap(r.hourly_heatmap)], T.notes.heatmap, 'heatmap'),
       card(C.length, [histogram(r.query_length)], T.notes.length, 'length'),
       card(C.tier_cache, [
         split(S.tier, [{ label: S.keyword_only, value: r.tier.keyword_only, cls: 's1' }, { label: S.hybrid, value: r.tier.hybrid, cls: 's2' }]),
         split(S.cache, [{ label: S.cached, value: r.cache.hits, cls: 's1' }, { label: S.computed, value: r.cache.misses, cls: 's2' }]),
-      ], t(T.notes.tier_cache, [pct(r.did_you_mean.share), nf2.format(r.summary.avg_results)]), 'tier_cache'),
+      ], t(T.notes.tier_cache, [fmt.pct(r.did_you_mean.share), fmt.d2(r.summary.avg_results)]), 'tier_cache'),
     ]);
 
     var tables = el('div', { 'class': 'grid2' }, [
@@ -412,22 +433,22 @@
     var quality = [];
     if (r.log_v2 && r.log_v2.available) {
       var e = r.engagement, c = r.latency_cold, delta = r.compare ? r.compare.metrics : null;
-      var extra = [tile(T.tiles.unique, num(r.unique.searches), 'tile_unique'),
-        tile(T.tiles.per_session, nf2.format(r.unique.searches_per_session), 'tile_per_session'),
-        tile(T.tiles.zero_unique, pct(r.zero_result.rate), 'tile_zero_unique'), tile(T.tiles.cold_p95, ms(c.p95), 'tile_cold_p95'),
-        tile(T.tiles.capped, pct(r.capped_share.share), 'tile_capped')];
+      var extra = [tile(T.tiles.unique, fmt.n(r.unique.searches), 'tile_unique'),
+        tile(T.tiles.per_session, fmt.d2(r.unique.searches_per_session), 'tile_per_session'),
+        tile(T.tiles.zero_unique, P(r.zero_result.rate), 'tile_zero_unique'), tile(T.tiles.cold_p95, M(c.p95), 'tile_cold_p95'),
+        tile(T.tiles.capped, P(r.capped_share.share), 'tile_capped')];
       if (e.tracking) {
-        extra.push(tile(T.tiles.ctr, pct(e.ctr), 'tile_ctr'), tile(T.tiles.mrr, nf2.format(e.mrr), 'tile_mrr'),
-          tile(T.tiles.cart, pct(e.cart_rate), 'tile_cart'));
+        extra.push(tile(T.tiles.ctr, P(e.ctr), 'tile_ctr'), tile(T.tiles.mrr, fmt.d2(e.mrr), 'tile_mrr'),
+          tile(T.tiles.cart, P(e.cart_rate), 'tile_cart'));
       }
       tiles.append.apply(tiles, extra);
       if (delta) {
-        var fmtMetric = function (k, v) { return /_ms$/.test(k) ? ms(v) : /rate|share|ctr/.test(k) ? pct(v) : num(v); };
+        var fmtMetric = function (k, v) { return /_ms$/.test(k) ? fmt.ms(v) : /rate|share|ctr/.test(k) ? fmt.pct(v) : fmt.n(v); };
         quality.push(card(C.compare, [table('compare', [H.metric, H.now, H.before, H.change], ['t', 'x', 'x', 'x'],
           Object.keys(delta).map(function (k) {
             var d = delta[k];
             return [T.metrics[k] || k, fmtMetric(k, d.current), fmtMetric(k, d.previous),
-              d.change_pct === null ? T.ui.new : '\u200E' + (d.change_pct > 0 ? '+' : '') + nf1.format(d.change_pct) + '٪'];
+              d.change_pct === null ? T.ui.new : '\u200E' + (d.change_pct > 0 ? '+' : '') + fmt.d1(d.change_pct) + '%'];
           }), false)], null, 'compare'));
       }
       if (r.tier_timeline.outages.length) {
@@ -444,11 +465,11 @@
           return [q.query, q.searches, q.previous, q.growth]; }), true)], null, 'trending'),
         card(C.dym, [table('dym', [H.query, H.suggested, H.shown, H.clicked], ['t', 't', 'n', 'n'], r.did_you_mean.top.map(function (d) {
           return [d.query, d.suggestion, d.shown, d.clicked]; }), true)],
-          t(T.notes.dym, [pct(r.did_you_mean.shown_rate), pct(r.did_you_mean.ctr), num(r.did_you_mean.zero_result_suggestions)]), 'dym'),
+          t(T.notes.dym, [fmt.pct(r.did_you_mean.shown_rate), fmt.pct(r.did_you_mean.ctr), fmt.n(r.did_you_mean.zero_result_suggestions)]), 'dym'),
         card(C.slow, [table('slow', [H.query, H.max_ms, H.searches], ['t', 'n', 'n'], c.slowest.map(function (q) {
           return [q.query, q.max_ms, q.searches]; }), true)], null, 'slow'),
         card(C.probes, [table('probes', [H.time, H.query], ['d', 't'], r.suspicious.samples.map(function (p) { return [p.ts, p.query]; }), false)],
-          t(T.notes.probes, [num(r.suspicious.count)]), 'probes'));
+          t(T.notes.probes, [fmt.n(r.suspicious.count)]), 'probes'));
     } else {
       quality.push(el('section', { 'class': 'card wide' }, [note(T.empty.v1)]));
     }
@@ -479,8 +500,8 @@
         render();
         var st = document.getElementById('status');
         if (st) {
-          st.textContent = (report.refresh_seconds > 0 ? t(T.ui.refresh_on, [num(report.refresh_seconds)]) : T.ui.refresh_off)
-            + '. ' + t(T.ui.updated, [new Date().toLocaleTimeString('fa-IR')]);
+          st.textContent = (report.refresh_seconds > 0 ? t(T.ui.refresh_on, [fmt.n(report.refresh_seconds)]) : T.ui.refresh_off)
+            + '. ' + t(T.ui.updated, [fmt.now()]);
         }
       })
       .catch(function (err) { if (status) { status.textContent = t(T.ui.refresh_failed, [err.message]); } });

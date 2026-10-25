@@ -15,15 +15,10 @@ final class AdminViews
         return AdminPage::esc((string) $value);
     }
 
-    /** Persian digits for counts shown in prose. */
+    /** Every number the panel prints: Latin digits, "," thousands (1,118). */
     public static function num(int|string|null $n): string
     {
-        $digits = [];
-        foreach (str_split('0123456789') as $i => $latin) {
-            $digits[$latin] = mb_chr(0x06F0 + $i);
-        }
-
-        return strtr((string) $n, $digits);
+        return is_numeric($n) ? number_format((float) $n, 0, '.', ',') : (string) $n;
     }
 
     /** A stored timestamp, kept Gregorian and left-to-right inside the RTL text. */

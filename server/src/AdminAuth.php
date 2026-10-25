@@ -70,27 +70,42 @@ final class AdminAuth
             && strtolower((string) ($server['HTTP_X_FORWARDED_PROTO'] ?? '')) === 'https';
     }
 
-    /** @param array<string, mixed> $server */
+    /**
+     * REMOTE_ADDR, always, unless it is one of `admin.trusted_proxies`: only then is X-Forwarded-For
+     * read, from the right, skipping further trusted proxies; the first other address is the client.
+     * A header from anyone else is a forgery, so it never decides who is throttled or allowed.
+     *
+     * @param array<string, mixed> $server
+     */
     public function clientIp(array $server): string
     {
-        $header = trim((string) $this->admin['ip_header']);
-        if ($header !== '' && isset($server[$header])) {
-            $parts = array_map('trim', explode(',', (string) $server[$header]));
-            $candidate = (string) end($parts); // the entry the nearest proxy appended
-            if (filter_var($candidate, FILTER_VALIDATE_IP) !== false) {
+        $remote = (string) ($server['REMOTE_ADDR'] ?? '');
+        $forwarded = (string) ($server['HTTP_X_FORWARDED_FOR'] ?? '');
+        if ($forwarded === '' || !self::inList($remote, (string) $this->admin['trusted_proxies'])) {
+            return $remote;
+        }
+        foreach (array_reverse(array_map('trim', explode(',', $forwarded))) as $candidate) {
+            if (filter_var($candidate, FILTER_VALIDATE_IP) === false) {
+                return $remote; // a malformed chain is not believed at all
+            }
+            if (!self::inList($candidate, (string) $this->admin['trusted_proxies'])) {
                 return $candidate;
             }
         }
 
-        return (string) ($server['REMOTE_ADDR'] ?? '');
+        return $remote;
     }
 
     public function ipAllowed(string $ip): bool
     {
         $list = trim((string) $this->admin['allowed_ips']);
-        if ($list === '') {
-            return true;
-        }
+
+        return $list === '' || self::inList($ip, $list);
+    }
+
+    /** Whether $ip matches any entry of a comma separated list of addresses and CIDR ranges. */
+    private static function inList(string $ip, string $list): bool
+    {
         foreach (explode(',', $list) as $entry) {
             if (self::ipMatches($ip, trim($entry))) {
                 return true;

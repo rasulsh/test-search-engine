@@ -148,18 +148,26 @@ final class AdminUnitTest extends DatabaseTestCase
         self::assertFalse($closed->ipAllowed('8.8.8.8'));
     }
 
-    public function testClientIpUsesTheConfiguredHeaderOnlyWhenItHoldsAnAddress(): void
+    public function testClientIpIsRemoteAddrUnlessTheProxyIsTrusted(): void
     {
         $admin = Config::defaults()['admin'];
         $plain = new AdminAuth($admin);
-        $proxied = new AdminAuth(['ip_header' => 'HTTP_X_FORWARDED_FOR'] + $admin);
-        $server = ['REMOTE_ADDR' => '10.0.0.1', 'HTTP_X_FORWARDED_FOR' => '6.6.6.6, 203.0.113.9'];
+        $proxied = new AdminAuth(['trusted_proxies' => '10.0.0.1, 192.168.0.0/16'] + $admin);
+        $forged = ['REMOTE_ADDR' => '198.51.100.9', 'HTTP_X_FORWARDED_FOR' => '6.6.6.6'];
 
-        self::assertSame('10.0.0.1', $plain->clientIp($server), 'a header is ignored unless configured');
-        self::assertSame('203.0.113.9', $proxied->clientIp($server), 'the entry the nearest proxy appended');
+        self::assertSame('198.51.100.9', $plain->clientIp($forged), 'no trusted proxy: the header is ignored');
+        self::assertSame('198.51.100.9', $proxied->clientIp($forged), 'a stranger cannot vouch for an address');
+        $viaProxy = ['REMOTE_ADDR' => '10.0.0.1', 'HTTP_X_FORWARDED_FOR' => '6.6.6.6, 203.0.113.9'];
+        self::assertSame('203.0.113.9', $proxied->clientIp($viaProxy), 'right to left: the proxy appended it');
+        $chain = ['REMOTE_ADDR' => '10.0.0.1', 'HTTP_X_FORWARDED_FOR' => '203.0.113.9, 192.168.4.4'];
+        self::assertSame('203.0.113.9', $proxied->clientIp($chain), 'inner trusted proxies are skipped');
         $junk = ['REMOTE_ADDR' => '10.0.0.1', 'HTTP_X_FORWARDED_FOR' => 'junk'];
         self::assertSame('10.0.0.1', $proxied->clientIp($junk));
+        $partlyJunk = ['REMOTE_ADDR' => '10.0.0.1', 'HTTP_X_FORWARDED_FOR' => 'junk, 203.0.113.9'];
+        self::assertSame('203.0.113.9', $proxied->clientIp($partlyJunk), 'only the entries to its right count');
         self::assertSame('10.0.0.1', $proxied->clientIp(['REMOTE_ADDR' => '10.0.0.1']));
+        $allTrusted = ['REMOTE_ADDR' => '10.0.0.1', 'HTTP_X_FORWARDED_FOR' => '192.168.1.1'];
+        self::assertSame('10.0.0.1', $proxied->clientIp($allTrusted));
     }
 
     public function testHttpsDetection(): void
@@ -276,7 +284,8 @@ final class AdminUnitTest extends DatabaseTestCase
 
         self::assertStringNotContainsString('<b>x</b>', $html);
         self::assertStringContainsString(AdminStrings::fa()['errors']['unreachable'], $html);
-        self::assertStringContainsString('۱۲۳۴', $html, 'Persian digits for counts');
+        self::assertStringContainsString('1,234', $html, 'Latin digits, comma thousands');
+        self::assertDoesNotMatchRegularExpression('/[\x{06F0}-\x{06F9}]/u', $html);
         self::assertStringContainsString('db.dsn: required, missing or empty', $html);
         self::assertStringContainsString(AdminStrings::fa()['status']['redis_off'], $html);
     }

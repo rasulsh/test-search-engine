@@ -32,7 +32,7 @@ All keys (`allowed_ips`, timeouts, throttling, retention, proxy settings) are in
 | Rule | How |
 | --- | --- |
 | HTTPS only | A plain-HTTP request is refused with 403 before any form or cookie. TLS ended at a proxy: set `admin.trust_forwarded_proto` so `X-Forwarded-Proto: https` counts. |
-| Address list | `admin.allowed_ips` (IPs, IPv4 / IPv6 CIDR). Others get 403 and never see the form. Behind a proxy set `admin.ip_header`, or every visitor looks like the proxy. |
+| Address list | `admin.allowed_ips` (IPs, IPv4 / IPv6 CIDR). Others get 403 and never see the form. The address is the one described under [Client address](#client-address). |
 | Own session | Name `search_admin`; cookie `Secure`, `HttpOnly`, `SameSite=Strict`, scoped to the folder the panel is served from; strict mode; the id is regenerated on login. |
 | Lifetimes | Idle timeout (30 min) and absolute lifetime (8 h). The analytics page's background `?format=json` polls do **not** refresh the idle clock, so an unattended dashboard still logs out. |
 | Login check | `hash_equals` for the username and `password_verify` for the password, both always evaluated, one generic error message. |
@@ -43,6 +43,19 @@ All keys (`allowed_ips`, timeouts, throttling, retention, proxy settings) are in
 
 If `admin_audit` does not exist the panel answers 503 with the migration hint, rather than letting anyone in
 unthrottled.
+
+### Client address
+
+Everything that depends on who is calling (the login throttle, `allowed_ips`, the audit log) uses **`REMOTE_ADDR`
+only**. `X-Forwarded-For` is a request header any visitor can set, so it is **not** trusted by default: rotating it
+cannot reset a throttle counter or satisfy `allowed_ips` (both covered by tests).
+
+If the panel is served through a reverse proxy or CDN, `REMOTE_ADDR` is the proxy's address and all visitors would share
+one throttle counter. Then list the proxy in the optional **`admin.trusted_proxies`** (comma separated IPs and
+IPv4 / IPv6 CIDR ranges). Only when `REMOTE_ADDR` is in that list is `X-Forwarded-For` read, **from the right**,
+skipping entries that are themselves trusted proxies; the first other address is the client. A malformed entry or an
+empty header falls back to `REMOTE_ADDR`. Do not list a proxy that does not overwrite or append to the header. On
+plain cPanel hosting (no proxy in front), leave it empty.
 
 ## Pages (M39)
 
@@ -63,9 +76,31 @@ deprecated). The "last reload" figure is the newest `reload_api` audit row, writ
 Checked in Chromium in both themes (system colour scheme and the stored toggle), RTL, no console error and no
 request outside the origin (see the PR report).
 
-| Login (light / dark) | Status (light / dark) | Status, mobile width | Logs, Audit, Analytics |
-| --- | --- | --- | --- |
-| ![login light](img/admin/login-light.png) ![login dark](img/admin/login-dark.png) | ![status light](img/admin/status-light.png) ![status dark](img/admin/status-dark.png) | ![mobile](img/admin/status-mobile-dark.png) | ![logs](img/admin/logs-dark.png) ![audit](img/admin/audit-light.png) ![analytics](img/admin/analytics-light.png) |
+| Login (light / dark) | Status (light / dark) |
+| --- | --- |
+| ![login light](img/admin/login-light.png) ![login dark](img/admin/login-dark.png) | ![status light](img/admin/status-light.png) ![status dark](img/admin/status-dark.png) |
+
+| Analytics, desktop (light / dark) | Analytics at 1366 px | Analytics, mobile |
+| --- | --- | --- |
+| ![analytics light](img/admin/analytics-desktop-light.png) ![analytics dark](img/admin/analytics-desktop-dark.png) | ![analytics 1366](img/admin/analytics-1366-light.png) | ![analytics mobile](img/admin/analytics-mobile-dark.png) |
+
+| Logs | Audit trail |
+| --- | --- |
+| ![logs](img/admin/logs-dark.png) | ![audit](img/admin/audit-light.png) |
+
+## Numbers and dates
+
+Every number the panel prints uses Latin digits, a comma for thousands and a dot for decimals: `1,118`, `11.7%`,
+`316 ms`. Jalali dates use the Latin numbering system too (`1405/08/03 09:56`, via
+`fa-IR-u-ca-persian-nu-latn`). Persian words and labels stay Persian, and so do the shoppers' own query texts, which
+are shown exactly as typed. The server side formats through `AdminViews::num()`, the dashboard script through the one
+`fmt` helper in `AnalyticsPage.js` (a test fails if a number or date is formatted anywhere else). The JSON output
+carries raw numbers and is unchanged.
+
+In the dashboard's headline cards the "?" button owns a fixed corner (the card's start side is padded for it), the
+value never wraps and its unit (`میلی‌ثانیه`, `%`) is drawn smaller and muted after the number. The cards are a CSS grid
+(`repeat(auto-fill, minmax(...))`): all cards of a row have the same width and height, and the last row stays at the
+start with the same card size.
 
 ## Where things live
 

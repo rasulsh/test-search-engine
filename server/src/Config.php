@@ -288,9 +288,9 @@ final class Config
             'admin.login_max_failures_global' => ['int', 50],
             'admin.login_window_minutes' => ['int', 15],
             'admin.audit_retention_days' => ['int', 180],
-            // Server variable holding the client address behind a reverse proxy (e.g.
-            // HTTP_X_FORWARDED_FOR); empty = REMOTE_ADDR. Set only if the proxy overwrites it.
-            'admin.ip_header'           => ['string', ''],
+            // Reverse proxies (comma separated IPs / CIDR) whose X-Forwarded-For is believed. Empty
+            // (the default) = the client address is REMOTE_ADDR and the header is ignored.
+            'admin.trusted_proxies'     => ['string', ''],
             // Accept X-Forwarded-Proto: https as HTTPS (TLS ended at a proxy).
             'admin.trust_forwarded_proto' => ['bool', false],
             // Budget of each outbound probe (VPS /health, Redis) on the status page.

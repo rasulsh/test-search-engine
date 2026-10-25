@@ -468,7 +468,7 @@ alias groups that share a term), so no bundle rebuild is needed for it, only the
    typing and prints a `password_hash()` value; at least 12 characters), and put it in `config.php`:
    `'admin' => ['username' => 'owner', 'password_hash' => '$2y$...']`. Single-quote it: it contains `$`.
    Without both keys the panel answers 503. Optional keys: `allowed_ips` (comma separated IPs / CIDR),
-   `idle_timeout_minutes` (30), `session_hours` (8), `ip_header` (see below), all in
+   `idle_timeout_minutes` (30), `session_hours` (8), `trusted_proxies` (see below), all in
    [CONFIGURATION.md](CONFIGURATION.md#admin-panel-section-m39).
 4. **Merge the `.htaccess` rewrite by hand** if your production `public/.htaccess` is customized: the web-root
    routing rule must name the new endpoint (`admin`), i.e. change
@@ -477,9 +477,11 @@ alias groups that share a term), so no bundle rebuild is needed for it, only the
    `admin.php?p=...` need nothing. The panel sets its own security headers from PHP, so no header block is needed.
 5. **Check** `https://<site>/admin.php`: the login page opens, a wrong password shows the generic error, a right one
    lands on the status page. `curl -I http://<site>/admin.php` (plain HTTP) must answer 403.
-6. **Behind a proxy or CDN** the client address is the proxy's unless you set `admin.ip_header` (for example
-   `HTTP_X_FORWARDED_FOR`; the last entry is used, so set it only when your proxy appends the real address).
-   If TLS ends at a proxy, set `admin.trust_forwarded_proto` so `X-Forwarded-Proto: https` counts as HTTPS.
+6. **Client address.** Throttling, the address list and the audit log use `REMOTE_ADDR` only; `X-Forwarded-For` is
+   ignored, because anyone can send it. If the panel really sits behind a reverse proxy or CDN (then `REMOTE_ADDR` is
+   the proxy's, so every visitor shares one throttle counter), list that proxy in `admin.trusted_proxies` (IPs / CIDR):
+   only a request that arrives from a listed proxy has its `X-Forwarded-For` read, from the right, skipping other listed
+   proxies (see [ADMIN.md](ADMIN.md#client-address)). If TLS ends at a proxy, set `admin.trust_forwarded_proto` so `X-Forwarded-Proto: https` counts as HTTPS.
 7. `logs.token` / `SEARCH_LOGS_TOKEN` is no longer used (the doctor warns while it is set): remove it. Bookmarks to
    `analytics.php` / `logs.php` redirect to the panel. Scripts that read `analytics.php?format=json` with the token
    must stop: the JSON now needs a panel session.

@@ -6,10 +6,13 @@ select,input,.btn{font:inherit;padding:4px 8px;border:1px solid var(--line);bord
 .btn{cursor:pointer}.btn:hover{border-color:var(--ink2)}
 input{min-width:220px}a{color:var(--s1)}
 :focus-visible{outline:2px solid var(--s1);outline-offset:2px}
-.tiles{display:flex;flex-wrap:wrap;gap:12px;margin:12px 0}
-.tile{position:relative;background:var(--card);border:1px solid var(--line);border-radius:8px;padding:8px 16px;min-width:130px}
-.tile b{display:block;font-size:22px;font-variant-numeric:tabular-nums}.tile span{color:var(--ink2)}
-.tile .q{position:absolute;inset-block-start:6px;inset-inline-end:6px}
+.tiles{display:grid;grid-template-columns:repeat(auto-fill,minmax(176px,1fr));gap:12px;margin:12px 0;justify-content:start}
+.tile{position:relative;background:var(--card);border:1px solid var(--line);border-radius:8px;padding:8px 12px;padding-inline-start:40px;min-width:0}
+.tile b{display:block;font-size:22px;line-height:1.4;white-space:nowrap;font-variant-numeric:tabular-nums}
+.tile b small{font-size:12px;font-weight:400;color:var(--ink2);margin-inline-start:4px}
+.tile span{display:block;color:var(--ink2)}
+.tile .q{position:absolute;inset-block-start:8px;inset-inline-start:10px}
+@media (max-width:600px){.tiles{grid-template-columns:repeat(2,minmax(0,1fr))}}
 .grid2{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,420px),1fr));gap:12px;margin:12px 0}
 .card{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:12px;min-width:0}
 .card.wide{grid-column:1/-1}

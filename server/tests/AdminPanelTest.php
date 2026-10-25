@@ -53,11 +53,14 @@ final class AdminPanelTest extends TestCase
             'db' => ['dsn' => $dsn, 'user' => $user, 'password' => $password],
             'paths' => ['data' => sys_get_temp_dir() . '/admin_panel_no_bundle'],
             'logs' => ['page_size' => 3, 'refresh_seconds' => 30],
-            'admin' => ['ip_header' => 'HTTP_X_TEST_IP'],
+            'admin' => ['trusted_proxies' => '127.0.0.1'],
         ];
         self::$servers['main'] = new AdminServer($base);
         self::$servers['global'] = new AdminServer(array_replace_recursive($base, [
             'admin' => ['login_max_failures' => 50, 'login_max_failures_global' => 2],
+        ]));
+        self::$servers['direct'] = new AdminServer(array_replace_recursive($base, [
+            'admin' => ['trusted_proxies' => ''],
         ]));
         self::$servers['off'] = new AdminServer(array_replace_recursive($base, [
             'admin' => ['username' => '', 'password_hash' => ''],
@@ -207,7 +210,7 @@ final class AdminPanelTest extends TestCase
 
     public function testFailuresAreAuditedWithoutThePasswordAndThrottledPerAddress(): void
     {
-        $attacker = ['X-Test-Ip' => '198.51.100.1'];
+        $attacker = ['X-Forwarded-For' => '198.51.100.1'];
         $client = self::client();
         $form = $client->request('GET', '/admin.php?p=login', [], $attacker);
         $csrf = AdminClient::csrfIn($form['body']);
@@ -236,13 +239,36 @@ final class AdminPanelTest extends TestCase
 
         // Another address is not affected by this one's failures.
         $other = self::client();
-        $form = $other->request('GET', '/admin.php?p=login', [], ['X-Test-Ip' => '198.51.100.2']);
+        $form = $other->request('GET', '/admin.php?p=login', [], ['X-Forwarded-For' => '198.51.100.2']);
         $ok = $other->request('POST', '/admin.php?p=login', [
             'csrf' => AdminClient::csrfIn($form['body']),
             'username' => 'admin',
             'password' => TempConfig::ADMIN_PASSWORD,
-        ], ['X-Test-Ip' => '198.51.100.2']);
+        ], ['X-Forwarded-For' => '198.51.100.2']);
         self::assertSame(303, $ok['status']);
+    }
+
+    public function testAForgedForwardedForNeverChoosesWhoIsThrottled(): void
+    {
+        // No trusted proxy configured: every request is the socket's address, whatever the header says.
+        for ($i = 1; $i <= 5; $i++) {
+            $client = self::client('direct');
+            $form = $client->request('GET', '/admin.php?p=login', [], ['X-Forwarded-For' => "198.51.100.{$i}"]);
+            $client->request('POST', '/admin.php?p=login', [
+                'csrf' => AdminClient::csrfIn($form['body']), 'username' => 'admin', 'password' => self::WRONG,
+            ], ['X-Forwarded-For' => "198.51.100.{$i}"]);
+        }
+
+        $client = self::client('direct');
+        $form = $client->request('GET', '/admin.php?p=login', [], ['X-Forwarded-For' => '203.0.113.77']);
+        $response = $client->request('POST', '/admin.php?p=login', [
+            'csrf' => AdminClient::csrfIn($form['body']),
+            'username' => 'admin',
+            'password' => TempConfig::ADMIN_PASSWORD,
+        ], ['X-Forwarded-For' => '203.0.113.77']);
+
+        self::assertSame(429, $response['status'], 'rotating the header does not reset the counter');
+        self::assertSame(['127.0.0.1'], array_values(array_unique(array_column(self::audit(), 'ip'))));
     }
 
     public function testTheGlobalLimitThrottlesEveryAddress(): void
@@ -250,19 +276,19 @@ final class AdminPanelTest extends TestCase
         $server = 'global';
         foreach (['203.0.113.1', '203.0.113.2'] as $ip) {
             $c = self::client($server);
-            $form = $c->request('GET', '/admin.php?p=login', [], ['X-Test-Ip' => $ip]);
+            $form = $c->request('GET', '/admin.php?p=login', [], ['X-Forwarded-For' => $ip]);
             $c->request('POST', '/admin.php?p=login', [
                 'csrf' => AdminClient::csrfIn($form['body']), 'username' => 'admin', 'password' => self::WRONG,
-            ], ['X-Test-Ip' => $ip]);
+            ], ['X-Forwarded-For' => $ip]);
         }
 
         $third = self::client($server);
-        $form = $third->request('GET', '/admin.php?p=login', [], ['X-Test-Ip' => '203.0.113.3']);
+        $form = $third->request('GET', '/admin.php?p=login', [], ['X-Forwarded-For' => '203.0.113.3']);
         $response = $third->request('POST', '/admin.php?p=login', [
             'csrf' => AdminClient::csrfIn($form['body']),
             'username' => 'admin',
             'password' => TempConfig::ADMIN_PASSWORD,
-        ], ['X-Test-Ip' => '203.0.113.3']);
+        ], ['X-Forwarded-For' => '203.0.113.3']);
 
         self::assertSame(429, $response['status']);
         self::assertContains('login_throttled', array_column(self::audit(), 'action'));

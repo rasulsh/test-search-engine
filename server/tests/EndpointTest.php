@@ -63,7 +63,7 @@ final class EndpointTest extends TestCase
         // A bundle holding only the spellcheck dictionary. Its frequencies are
         // deliberately the reverse of the catalog's, so a suggestion can only
         // come out this way if /search reads the dictionary (not the table).
-        self::$dataDir = sys_get_temp_dir() . '/endpoint_data_' . uniqid('', true);
+        self::$dataDir = TempTree::path('endpoint_data');
         mkdir(self::$dataDir, 0777, true);
         // Both clear the default suggest_min_frequency (2).
         file_put_contents(self::$dataDir . '/spellcheck.txt', "body\t9\nsony\t2\n");
@@ -71,7 +71,7 @@ final class EndpointTest extends TestCase
 
         // A staged bundle whose meta is compatible but which has no
         // products.load.sql, so /reload stops before any swap either way.
-        self::$incomingDir = sys_get_temp_dir() . '/endpoint_incoming_' . uniqid('', true);
+        self::$incomingDir = TempTree::path('endpoint_incoming');
         mkdir(self::$incomingDir, 0777, true);
         file_put_contents(self::$incomingDir . '/meta.json', (string) json_encode([
             'model' => Config::defaults()['model']['name'],

@@ -256,7 +256,7 @@ final class AliasStore
         }
         $names = array_column($this->backups(), 'name');
         foreach (array_slice($names, max(1, $this->keepBackups)) as $old) {
-            @unlink($this->storageDir . '/' . self::BACKUPS . '/' . $old);
+            SafePath::removeFile($this->storageDir . '/' . self::BACKUPS . '/' . $old, $this->storageDir);
         }
     }
 }

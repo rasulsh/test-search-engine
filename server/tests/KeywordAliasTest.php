@@ -26,7 +26,7 @@ final class KeywordAliasTest extends DatabaseTestCase
     private const CAR_CHARGER = 6;
     private const LAPTOP_FA = 7;
 
-    private string $dataDir;
+    private string $dataDir = '';
 
     protected function setUp(): void
     {
@@ -42,7 +42,7 @@ final class KeywordAliasTest extends DatabaseTestCase
         ]);
 
         // The shipped, owner-editable alias file plus a generated synonym.
-        $this->dataDir = sys_get_temp_dir() . '/alias_' . uniqid('', true);
+        $this->dataDir = TempTree::path('alias');
         mkdir($this->dataDir);
         copy(self::repoRoot() . '/pipeline/aliases.json', $this->dataDir . '/' . Synonyms::ALIASES_FILE);
         file_put_contents($this->dataDir . '/' . Synonyms::SYNONYMS_FILE, '[["laptop", "لپ تاپ"]]');
@@ -50,8 +50,7 @@ final class KeywordAliasTest extends DatabaseTestCase
 
     protected function tearDown(): void
     {
-        array_map('unlink', glob($this->dataDir . '/*') ?: []);
-        rmdir($this->dataDir);
+        TempTree::removeIfAssigned($this->dataDir);
         Synonyms::clearCache();
     }
 

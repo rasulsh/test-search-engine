@@ -42,7 +42,7 @@ final class LegacyStorefrontTest extends TestCase
         $this->pdo->exec('DROP TABLE IF EXISTS products, search_logs, search_events');
         $this->pdo->exec((string) file_get_contents($root . '/db/schema.sql'));
         $this->pdo->exec((string) file_get_contents($root . '/fixtures/products.sample.sql'));
-        $this->dataDir = sys_get_temp_dir() . '/legacy_' . uniqid('', true);
+        $this->dataDir = TempTree::path('legacy');
         mkdir($this->dataDir, 0777, true);
     }
 

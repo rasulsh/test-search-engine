@@ -549,18 +549,9 @@ final class Reload
         }
     }
 
+    /** Only `<data>_old` / `<data>_swap` next to the data directory are ever removed; see SafePath. */
     private function removeDir(string $dir): void
     {
-        if (!is_dir($dir)) {
-            return;
-        }
-        foreach (scandir($dir) ?: [] as $item) {
-            if ($item === '.' || $item === '..') {
-                continue;
-            }
-            $path = $dir . '/' . $item;
-            is_dir($path) ? $this->removeDir($path) : unlink($path);
-        }
-        rmdir($dir);
+        SafePath::removeTree($dir, dirname($this->dataDir));
     }
 }

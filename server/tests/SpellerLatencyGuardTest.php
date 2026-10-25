@@ -190,7 +190,7 @@ final class SpellerLatencyGuardTest extends DatabaseTestCase
             $lines .= $token . "\t" . $count . "\n";
         }
 
-        $this->dir = sys_get_temp_dir() . '/spellguard_' . uniqid('', true);
+        $this->dir = TempTree::path('spellguard');
         mkdir($this->dir, 0777, true);
         $path = $this->dir . '/' . Speller::DICTIONARY_FILE;
         file_put_contents($path, $lines);

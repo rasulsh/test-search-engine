@@ -15,15 +15,14 @@ final class SynonymsTest extends TestCase
     protected function tearDown(): void
     {
         foreach ($this->tempDirs as $dir) {
-            array_map('unlink', glob($dir . '/*') ?: []);
-            rmdir($dir);
+            TempTree::remove($dir);
         }
         Synonyms::clearCache();
     }
 
     private function dataDir(?string $synonyms, ?string $aliases): string
     {
-        $dir = sys_get_temp_dir() . '/synonyms_' . uniqid('', true);
+        $dir = TempTree::path('synonyms');
         mkdir($dir);
         $this->tempDirs[] = $dir;
         if ($synonyms !== null) {

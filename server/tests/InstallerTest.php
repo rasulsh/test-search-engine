@@ -32,7 +32,7 @@ final class InstallerTest extends TestCase
     /** A server directory as extracted from a release: the template, no config.php. */
     public static function makeServerDir(): string
     {
-        $dir = sys_get_temp_dir() . '/installer_' . uniqid('', true);
+        $dir = TempTree::path('installer');
         mkdir($dir, 0777, true);
         copy(dirname(__DIR__) . '/config.example.php', $dir . '/config.example.php');
 
@@ -41,16 +41,7 @@ final class InstallerTest extends TestCase
 
     public static function removeDir(string $dir): void
     {
-        if (!is_dir($dir)) {
-            return;
-        }
-        foreach (scandir($dir) ?: [] as $item) {
-            if ($item !== '.' && $item !== '..') {
-                $path = $dir . '/' . $item;
-                is_dir($path) && !is_link($path) ? self::removeDir($path) : unlink($path);
-            }
-        }
-        rmdir($dir);
+        TempTree::remove($dir);
     }
 
     /** @return array<string, string> */

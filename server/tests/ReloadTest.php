@@ -49,7 +49,7 @@ final class ReloadTest extends DatabaseTestCase
 
     private function newTempDir(string $suffix): string
     {
-        $dir = sys_get_temp_dir() . '/reload_' . uniqid('', true) . $suffix;
+        $dir = TempTree::path('reload') . $suffix;
         mkdir($dir, 0777, true);
         $this->tempDirs[] = $dir;
 
@@ -109,17 +109,7 @@ final class ReloadTest extends DatabaseTestCase
 
     private function removeDir(string $dir): void
     {
-        if (!is_dir($dir)) {
-            return;
-        }
-        foreach (scandir($dir) ?: [] as $item) {
-            if ($item === '.' || $item === '..') {
-                continue;
-            }
-            $path = $dir . '/' . $item;
-            is_dir($path) ? $this->removeDir($path) : unlink($path);
-        }
-        rmdir($dir);
+        TempTree::remove($dir);
     }
 
     // --- tests -------------------------------------------------------------
@@ -328,6 +318,34 @@ final class ReloadTest extends DatabaseTestCase
         self::assertSame(2, $this->rowCount('products'));
     }
 
+    public function testASymlinkedBackupDirectoryIsRefusedAndItsTargetSurvives(): void
+    {
+        // `<data>_old` is the only directory a reload deletes. A symlink there must neither be
+        // followed (it would empty the link's target) nor deleted through: the swap fails, tables roll back.
+        $this->insertProduct('products', 1);
+        $this->insertProduct('products', 2);
+        $this->createStaging(3);
+        $dataDir = $this->newTempDir('_data');
+        $incomingDir = $this->makeIncoming(3);
+        $outside = $this->newTempDir('_outside');
+        file_put_contents($outside . '/keep.txt', 'precious');
+        symlink($outside, $dataDir . '_old');
+
+        try {
+            (new Reload($this->pdo, $this->config($dataDir, $incomingDir)))->run();
+            self::fail('expected ReloadException');
+        } catch (ReloadException $e) {
+            self::assertSame('directory_swap_failed', $e->reason());
+            self::assertStringContainsString('symlink', (string) json_encode($e->details()));
+        } finally {
+            unlink($dataDir . '_old'); // the link only; the guard is what protects the target
+        }
+
+        self::assertFileExists($outside . '/keep.txt');
+        self::assertSame(2, $this->rowCount('products'), 'tables rolled back with the refused swap');
+        self::assertDirectoryExists($incomingDir);
+    }
+
     public function testDirectorySwapFailureRollsBackTables(): void
     {
         // Validated bundle: the table swap succeeds, then the directory swap
@@ -338,7 +356,7 @@ final class ReloadTest extends DatabaseTestCase
         $this->createStaging(3);
 
         // rename() of a directory onto an existing file fails.
-        $dataDir = sys_get_temp_dir() . '/reload_datafile_' . uniqid('', true);
+        $dataDir = TempTree::path('reload_datafile');
         file_put_contents($dataDir, 'not a directory');
         $incomingDir = $this->makeIncoming(3);
 

@@ -17,10 +17,7 @@ final class SpellerTest extends TestCase
     protected function tearDown(): void
     {
         foreach ($this->tempDirs as $dir) {
-            foreach (glob($dir . '/*') ?: [] as $file) {
-                unlink($file);
-            }
-            rmdir($dir);
+            TempTree::remove($dir);
         }
         $this->tempDirs = [];
         self::resetProcessCache();
@@ -233,7 +230,7 @@ final class SpellerTest extends TestCase
 
     private function tempDir(): string
     {
-        $dir = sys_get_temp_dir() . '/speller_' . uniqid('', true);
+        $dir = TempTree::path('speller');
         mkdir($dir, 0777, true);
         $this->tempDirs[] = $dir;
 

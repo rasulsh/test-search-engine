@@ -36,7 +36,7 @@ final class EventsEndpointTest extends TestCase
         $this->pdo->exec((string) file_get_contents($root . '/db/schema.sql'));
         $this->pdo->exec((string) file_get_contents($root . '/fixtures/products.sample.sql'));
 
-        $this->dataDir = sys_get_temp_dir() . '/eventsendpoint_' . uniqid('', true);
+        $this->dataDir = TempTree::path('eventsendpoint');
         mkdir($this->dataDir, 0777, true);
         $probe = stream_socket_server('tcp://127.0.0.1:0');
         $port = (int) substr((string) strrchr((string) stream_socket_get_name($probe, false), ':'), 1);

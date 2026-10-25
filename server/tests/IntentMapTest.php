@@ -13,15 +13,14 @@ final class IntentMapTest extends TestCase
 
     protected function setUp(): void
     {
-        $this->dir = sys_get_temp_dir() . '/intent_' . uniqid('', true);
+        $this->dir = TempTree::path('intent');
         mkdir($this->dir, 0777, true);
         IntentMap::clearCache();
     }
 
     protected function tearDown(): void
     {
-        @unlink($this->dir . '/' . IntentMap::FILE);
-        @rmdir($this->dir);
+        TempTree::removeIfAssigned($this->dir);
         IntentMap::clearCache();
     }
 

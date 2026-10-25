@@ -25,7 +25,7 @@ final class SearchControllerAliasTest extends DatabaseTestCase
     protected function setUp(): void
     {
         parent::setUp();
-        $this->dataDir = sys_get_temp_dir() . '/m38_data_' . uniqid('', true);
+        $this->dataDir = TempTree::path('m38_data');
         mkdir($this->dataDir, 0777, true);
         copy(self::repoRoot() . '/pipeline/aliases.json', $this->dataDir . '/' . Synonyms::ALIASES_FILE);
         Synonyms::clearCache();
@@ -38,8 +38,7 @@ final class SearchControllerAliasTest extends DatabaseTestCase
 
     protected function tearDown(): void
     {
-        array_map('unlink', glob($this->dataDir . '/*') ?: []);
-        rmdir($this->dataDir);
+        TempTree::removeIfAssigned($this->dataDir);
         Synonyms::clearCache();
     }
 

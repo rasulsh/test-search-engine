@@ -9,7 +9,8 @@ use PHPUnit\Framework\TestCase;
 use Throwable;
 
 /**
- * M38: the Persian dashboard is presentation only. `analytics.php?format=json` over a fixed log
+ * M38: the Persian dashboard is presentation only. The analytics JSON (since M39 behind the panel login:
+ * `admin.php?p=analytics&format=json`) over a fixed log
  * fixture (fixtures/analytics_logs.sample.sql, dated 2099 so no clock moves it) must stay
  * byte-identical to fixtures/analytics_report.golden.json: same keys, values and number formats.
  * Regenerate the golden file only for a deliberate change of the report itself
@@ -17,11 +18,8 @@ use Throwable;
  */
 final class AnalyticsJsonCompatTest extends TestCase
 {
-    private const TOKEN = 'compat-token-0123456789';
-
-    /** @var resource|null */
-    private static $process = null;
-    private static string $url = '';
+    private static ?AdminServer $server = null;
+    private static AdminClient $client;
 
     public static function setUpBeforeClass(): void
     {
@@ -38,7 +36,7 @@ final class AnalyticsJsonCompatTest extends TestCase
 
         try {
             $pdo = new PDO($dsn, $user, $password, [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION]);
-            $pdo->exec('DROP TABLE IF EXISTS products, search_logs, search_events');
+            $pdo->exec('DROP TABLE IF EXISTS products, search_logs, search_events, admin_audit');
             foreach (['db/schema.sql', 'fixtures/products.sample.sql', 'fixtures/analytics_logs.sample.sql'] as $file) {
                 $pdo->exec((string) file_get_contents($root . '/' . $file));
             }
@@ -49,36 +47,13 @@ final class AnalyticsJsonCompatTest extends TestCase
             self::markTestSkipped('Cannot reach test database: ' . $e->getMessage());
         }
 
-        $socket = stream_socket_server('tcp://127.0.0.1:0', $errno, $errstr);
-        self::assertIsResource($socket, "Cannot allocate a port: {$errstr}");
-        $address = (string) stream_socket_get_name($socket, false);
-        fclose($socket);
-        $port = (int) substr($address, (int) strrpos($address, ':') + 1);
-
-        $config = TempConfig::write([
+        self::$server = new AdminServer([
             'db' => ['dsn' => $dsn, 'user' => $user, 'password' => $password],
             'paths' => ['data' => sys_get_temp_dir() . '/analytics_compat_no_bundle'],
-            'logs' => ['token' => self::TOKEN, 'refresh_seconds' => 30],
+            'logs' => ['refresh_seconds' => 30],
         ]);
-        $process = proc_open(
-            [PHP_BINARY, '-S', "127.0.0.1:{$port}", '-t', $root . '/server/public', $root . '/server/public/index.php'],
-            [0 => ['pipe', 'r'], 1 => ['file', '/dev/null', 'w'], 2 => ['file', '/dev/null', 'w']],
-            $pipes,
-            $root,
-            ['SEARCH_CONFIG_FILE' => $config] + getenv()
-        );
-        self::assertIsResource($process, 'Failed to start built-in PHP server');
-        self::$process = $process;
-        self::$url = "http://127.0.0.1:{$port}";
-
-        $context = stream_context_create(['http' => ['timeout' => 1, 'ignore_errors' => true]]);
-        for ($i = 0; $i < 50; $i++) {
-            if (@file_get_contents(self::$url . '/health', false, $context) !== false) {
-                return;
-            }
-            usleep(100_000);
-        }
-        self::fail('Built-in PHP server did not start in time');
+        self::$client = self::$server->client();
+        self::assertSame(303, self::$client->login()['status']);
     }
 
     public static function tearDownAfterClass(): void
@@ -87,23 +62,16 @@ final class AnalyticsJsonCompatTest extends TestCase
         if ($dsn !== false && $dsn !== '') {
             // Leave the empty schema, as the other endpoint tests expect to find it.
             $pdo = new PDO($dsn, getenv('SEARCH_TEST_DB_USER') ?: '', getenv('SEARCH_TEST_DB_PASSWORD') ?: '');
-            $pdo->exec('DROP TABLE IF EXISTS products, search_logs, search_events');
+            $pdo->exec('DROP TABLE IF EXISTS products, search_logs, search_events, admin_audit');
             $pdo->exec((string) file_get_contents(dirname(__DIR__, 2) . '/db/schema.sql'));
         }
-        if (self::$process !== null) {
-            proc_terminate(self::$process);
-            proc_close(self::$process);
-            self::$process = null;
-        }
+        self::$server?->stop();
+        self::$server = null;
     }
 
     private function json(string $query): string
     {
-        $context = stream_context_create(['http' => [
-            'ignore_errors' => true, 'timeout' => 10, 'header' => 'X-Logs-Token: ' . self::TOKEN,
-        ]]);
-
-        return (string) file_get_contents(self::$url . '/analytics.php?format=json&' . $query, false, $context);
+        return self::$client->request('GET', '/admin.php?p=analytics&format=json&' . $query)['body'];
     }
 
     public function testTheJsonOutputIsByteIdenticalToTheGoldenFile(): void

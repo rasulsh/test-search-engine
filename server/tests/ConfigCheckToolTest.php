@@ -39,6 +39,7 @@ final class ConfigCheckToolTest extends TestCase
         [$status, $out] = $this->runTool([
             'db' => ['dsn' => 'mysql:host=h;dbname=d', 'user' => 'u'],
             'reload' => ['token' => 't'],
+            'admin' => TempConfig::admin(),
         ]);
 
         self::assertSame(0, $status, $out);

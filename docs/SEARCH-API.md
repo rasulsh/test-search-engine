@@ -11,7 +11,7 @@ The full request path behind `POST /search`: [RUNTIME-FLOW.md](RUNTIME-FLOW.md).
 | `POST /search` | `{q, customer_id?, session_id?, source?, page?, limit?, with_details?, debug?}`, returns a `search_uuid`, ordered `product_ids` + `did_you_mean` / `did_you_mean_applied` (plus `cosine_scores` on hybrid responses, and `products` display fields only with `"with_details": true`). Keyword tier always; hybrid when the configured VPS answers in time. |
 | `POST /events` | Log v2 result tracking: `{search_uuid, product_id, position, action}` with `action` `click` / `cart` / `order` / `dym_click`; `204` on success. Feeds the engagement figures of the analytics page. See [INTEGRATION.md](../INTEGRATION.md#post-events). |
 | `GET /health` | Database reachability + live product count, for monitoring. |
-| `GET /logs.php` | M21, read-only, off until `SEARCH_LOGS_TOKEN` is set. Recent searches (newest first, paginated), the zero-result ones, or the slowest; see [Search logs and ranking debug](#search-logs-and-ranking-debug). |
+| `GET /logs.php` | Moved into the admin panel in M39: redirects to `admin.php?p=logs` (login required). See [ADMIN.md](ADMIN.md) and [Search logs and ranking debug](#search-logs-and-ranking-debug). |
 | `POST /reload` | Token-protected (`X-Reload-Token`). Validates the staged bundle and swaps it in atomically (then flushes the result cache when one is configured, reporting `cache_flushed`). With `?load=1` it first loads `data_incoming/products.load.sql` into the staging table itself. |
 
 The exact request/response JSON, headers, status codes, and every error and
@@ -31,14 +31,11 @@ optional [result cache](DEPLOY.md#result-cache-optional-redis-m26) (M26), `cache
 queries are truncated to 512 characters, and a failed write (missing table, a
 rejected value) is logged with `error_log` and **never** fails the search.
 
-`public/logs.php` (`GET /logs.php`, English UI) shows the table read-only:
+The admin panel's **logs** page (`admin.php?p=logs`, Persian; since M39 behind the panel login, the old
+`logs.php` and its token only redirect there, see [ADMIN.md](ADMIN.md)) shows the table read-only:
 **Recent** (newest first), **Zero results** (the gaps worth fixing: add aliases,
 tags or synonyms for them) and **Slowest**, paginated
-(`logs.page_size`, 50). It is off until `SEARCH_LOGS_TOKEN` is set. Send
-the token in the `X-Logs-Token` header or open `/logs.php?token=…` (a form asks
-for it otherwise); a URL token ends up in the browser history and the host's
-access log, so prefer the header and rotate the token if a link leaks. The page
-sends `no-store`, `noindex` and a restrictive CSP, escapes every value, and runs
+(`logs.page_size`, 50). The page sends `no-store`, `noindex` and a restrictive CSP, escapes every value, and runs
 only `SELECT`s.
 
 `POST /search` with `"debug": 1` and the header `X-Debug-Token:
@@ -54,14 +51,15 @@ when opened as `test.html?debug` and given the token.
 
 ## Search analytics
 
-<a id="analytics"></a>`public/analytics.php` (`GET /analytics` or `/analytics.php`, M31) turns the
+<a id="analytics"></a>The **analytics** page (M31, `admin.php?p=analytics` since M39; `analytics.php` and `/analytics`
+only redirect there) turns the
 same `search_logs` table into read-only aggregates, with no schema change beyond
-one index (`idx_ts_result`, see [DEPLOY.md](DEPLOY.md#upgrading-to-m31)). It is the
-logs page's sibling: it **reuses `logs.token`** (header `X-Logs-Token`, or
-`?token=…` with the same caveats; `503` while no token is set, `401` without a
-valid one, `405` for anything but `GET`), sends the same `no-store`, `noindex`,
-`X-Frame-Options` and CSP headers, escapes every value and runs only `SELECT`s.
-`customer_id` and `raw_q` stay admin-only behind that token; the dashboard adds
+one index (`idx_ts_result`, see [DEPLOY.md](DEPLOY.md#upgrading-to-m31)). It sits behind the
+**admin panel login** (no token any more; `logs.token` is unused, see [ADMIN.md](ADMIN.md)):
+`?format=json` answers `401 {"error":"unauthorized"}` without a session, and the JSON itself is
+byte-identical to what `analytics.php?format=json` returned. It sends `no-store`, `noindex`,
+`X-Frame-Options` and a CSP, escapes every value and runs only `SELECT`s.
+`customer_id` and `raw_q` stay admin-only behind the login; the dashboard adds
 no new PII surface (it shows queries, never customer ids).
 
 | parameter | values | meaning |
@@ -129,8 +127,7 @@ re-fetches `?format=json` from the same origin and re-renders, with no server pu
 It makes **no third-party request**: the charts are hand-rolled inline SVG, the page
 runs one script under a per-response CSP nonce (`script-src 'nonce-…'`,
 `connect-src 'self'`), and the token is never written into the page (the script reuses
-the page's own query string, so open it as `analytics.php?token=…` or let the form do
-that). Since M38 it is `lang="fa" dir="rtl"`: every UI string lives in one PHP array
+the page's own query string, so the session cookie is the only credential). Since M38 it is `lang="fa" dir="rtl"`: every UI string lives in one PHP array
 (`server/src/AnalyticsStrings.php`, edit the wording there, no logic), every card and tile has a "؟"
 help panel (what it measures, how it is calculated, how to read it, what to do, and the data the
 storefront must send) and a "راهنما" section explains the main metrics and the log v1 / v2 difference.

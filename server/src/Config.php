@@ -188,6 +188,7 @@ final class Config
             'db.products_table'    => ['string', 'products'],
             'db.search_logs_table' => ['string', 'search_logs'],
             'db.search_events_table' => ['string', 'search_events'],
+            'db.admin_audit_table' => ['string', 'admin_audit'],
 
             // The model the bundle's meta.json is stamped with, checked on /reload.
             // /search does not read the bundle's vectors (M18): the semantic model
@@ -269,10 +270,31 @@ final class Config
             'events.allowed_origin' => ['string', ''],
 
             'debug.token'     => ['string', ''],
+            // Deprecated since M39: the browser pages sit behind the admin panel login now.
             'logs.token'      => ['string', ''],
             'logs.page_size'  => ['int', 50],
             'logs.refresh_seconds' => ['int', 30],
             'reload.token'    => ['string', ''],
+
+            // Admin panel (M39). Without username + password_hash admin.php answers 503.
+            // password_hash comes from tools/admin-password.php; plaintext is not accepted.
+            'admin.username'            => ['string', ''],
+            'admin.password_hash'       => ['string', ''],
+            // Comma separated IPs / CIDR ranges; empty = any address may reach the login form.
+            'admin.allowed_ips'         => ['string', ''],
+            'admin.idle_timeout_minutes' => ['int', 30],
+            'admin.session_hours'       => ['int', 8],
+            'admin.login_max_failures'  => ['int', 5],
+            'admin.login_max_failures_global' => ['int', 50],
+            'admin.login_window_minutes' => ['int', 15],
+            'admin.audit_retention_days' => ['int', 180],
+            // Reverse proxies (comma separated IPs / CIDR) whose X-Forwarded-For is believed. Empty
+            // (the default) = the client address is REMOTE_ADDR and the header is ignored.
+            'admin.trusted_proxies'     => ['string', ''],
+            // Accept X-Forwarded-Proto: https as HTTPS (TLS ended at a proxy).
+            'admin.trust_forwarded_proto' => ['bool', false],
+            // Budget of each outbound probe (VPS /health, Redis) on the status page.
+            'admin.probe_timeout_ms'    => ['int', 1000],
 
             'paths.data'          => ['string', $root . '/data'],
             'paths.data_incoming' => ['string', $root . '/data_incoming'],

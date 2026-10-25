@@ -204,7 +204,7 @@ final class InstallerTest extends TestCase
                 Config::flatten(Config::overrides($this->writeTemp($php))),
                 array_flip(['db.dsn', 'db.user', 'db.password', 'vps.url', 'vps.token', 'redis.enabled',
                     'redis.host', 'redis.port', 'redis.auth', 'storefront.store_base', 'storefront.image_base',
-                    'reload.token', 'logs.token', 'debug.token'])
+                    'reload.token', 'admin.username', 'admin.password_hash', 'debug.token'])
             )
         );
     }

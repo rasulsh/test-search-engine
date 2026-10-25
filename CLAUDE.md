@@ -97,8 +97,9 @@ abstraction layers.
 │   │   ├── health.php            # GET /health
 │   │   ├── reload.php            # POST /reload (token-protected, atomic swap)
 │   │   ├── events.php            # POST /events (M37: click / cart / order / dym_click by search_uuid)
-│   │   └── logs.php              # GET /logs.php (M21: token-protected, read-only search_logs view)
-│   │   ├── analytics.php         # GET /analytics.php (M31: logs.token, read-only aggregates, ?format=json)
+│   │   ├── admin.php             # the admin panel (M39): login, status, analytics, logs, audit, help (?p=)
+│   │   ├── logs.php              # redirect to admin.php?p=logs (M39; was the token page of M21)
+│   │   └── analytics.php         # redirect to admin.php?p=analytics (M39; was the token page of M31)
 │   ├── src/
 │   │   ├── Normalizer.php         # MUST mirror pipeline/normalize.py exactly
 │   │   ├── Keyword.php            # FULLTEXT + fuzzy + keymap + did-you-mean
@@ -110,18 +111,25 @@ abstraction layers.
 │   │   ├── QueryPrep.php          # entity decode, query cap, SQL-probe refusal (M37)
 │   │   ├── Events.php             # search_events writer for events.php (M37)
 │   │   ├── Logger.php             # search logs (incl. did_you_mean, tier; v2 columns, M37)
-│   │   ├── LogsPage.php           # read-only search_logs view for logs.php (M21)
+│   │   ├── LogsPage.php           # read-only search_logs query for the panel's logs page (M21, M39)
+│   │   ├── AdminAuth.php          # session, throttling, CSRF, HTTPS / address rules (M39)
+│   │   ├── Audit.php              # admin_audit trail (M39)
+│   │   ├── AdminStatus.php        # status page data, short-timeout VPS / Redis probes (M39)
+│   │   ├── AdminPage.php / .css / .js  # panel shell: RTL, side nav, theme toggle (M39)
+│   │   ├── AdminViews.php         # panel page bodies (M39)
+│   │   ├── AdminStrings.php       # every Persian string and help text of the panel (M39)
 │   │   ├── Db.php                 # thin PDO wrapper
 │   │   ├── Config.php             # config schema + every default; load() merges config.php overrides (M29)
 │   │   ├── ConfigDoctor.php       # checks config.php against the schema (M29)
 │   │   ├── Analytics.php          # read-only search_logs aggregates (M31)
 │   │   ├── AnalyticsInsights.php  # log-v2 metrics: engagement, alias candidates, compare, ... (M37)
 │   │   ├── AnalyticsStrings.php   # M38: every Persian UI string + help text of the dashboard
-│   │   ├── AnalyticsPage.php      # dashboard shell for analytics.php (M31, v2 in M35)
+│   │   ├── AnalyticsPage.php      # dashboard content for the panel's analytics page (M31, v2 in M35)
 │   │   ├── AnalyticsPage.js       # M35: client-side SVG dashboard + refresh (no third-party code)
 │   │   └── AnalyticsPage.css      # M35: dashboard styles (light / dark)
 │   ├── config.php                # deployer overrides only (gitignored); config.example.php committed
 │   ├── tools/config-check.php    # config doctor CLI (M29): exits non-zero on an ERROR
+│   ├── tools/admin-password.php  # prompts for a password, prints the admin.password_hash (M39)
 │   ├── tools/logs-export.php     # search_logs -> CSV / JSON CLI for the zero-result loop (M36)
 │   ├── data/                      # active bundle (gitignored)
 │   └── tests/
@@ -200,7 +208,7 @@ Request: `{ "q": string, "customer_id"?: string, "limit"?: int }` (a legacy
    (ts, raw_q, normalized_q, had_vector, result_count, top_ids, customer_id,
    latency_ms, did_you_mean, tier). A log failure never fails the search.
    `debug=1` (token-guarded) returns the per-result score breakdown, never
-   logged; `logs.php` (token-guarded, read-only) shows the log.
+   logged; the admin panel's logs page (login-guarded, read-only, since M39) shows the log.
 7. Return ordered `product_id`s + the "did you mean" suggestion.
 
 If the VPS is not configured, unreachable, times out or errors, return Tier 1
@@ -372,6 +380,16 @@ wait for review before starting the next.
   light / dark toggle, Jalali dates beside the stored Gregorian ones, centered numeric columns; `?format=json`
   unchanged (golden fixture test). `Synonyms::mergeOverlapping` joins owner alias groups sharing a term so
   "پی اس فایو" reaches every PS5 title.
+
+- **M39 — Admin panel: login, shell, status:** `public/admin.php` (one entry, `?p=`), Persian RTL (`AdminStrings`
+  holds every string and help text), username + `password_hash` login (`tools/admin-password.php`; the doctor reports
+  a missing or invalid `admin.*`, no config = 503), own session (Secure / HttpOnly / SameSite=Strict, idle and absolute
+  timeouts, HTTPS only, optional `admin.allowed_ips`), per-IP and global login throttling and the `admin_audit`
+  trail (idempotent migration + `.down.sql`, 180-day purge on write, never the password), CSRF on every POST, a
+  read-only status page (short-timeout VPS / Redis probes), and the analytics / logs pages moved behind the login
+  (`analytics.php` / `logs.php` redirect; `logs.token` deprecated; the analytics JSON stays byte-identical).
+  Operations (M40), alias manager and synonyms viewer (M41) and dropping the cPanel `vectors.bin` (M42) follow.
+  See `docs/ADMIN.md`.
 
 - **M22 — Offline build speed + reliable export:** `pipeline/db_export.py`
   (direct DB -> CSV, replaces the phpMyAdmin export), GPU/fp16/batch-configured

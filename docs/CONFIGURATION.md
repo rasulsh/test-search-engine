@@ -160,9 +160,31 @@ missing until the TTL or the next reload.
 | key | default | meaning |
 | --- | --- | --- |
 | `debug.token` | empty | enables `"debug": 1` on `/search` (`X-Debug-Token`), see [SEARCH-API.md](SEARCH-API.md#search-logs-and-ranking-debug) |
-| `logs.token` | empty | enables `logs.php` and `analytics.php` (`X-Logs-Token`; one token, no second secret) |
-| `logs.page_size` | 50 | rows per page |
+| `logs.token` | empty | **deprecated (M39)**: unused, the logs and analytics pages need the admin login; the doctor warns while it is set |
+| `logs.page_size` | 50 | rows per page of the panel's logs page |
 | `logs.refresh_seconds` | `30` | how often the analytics dashboard re-fetches its JSON (M35); `0` disables the auto-refresh |
+
+### Admin panel section (M39)
+
+The panel (`admin.php`, [ADMIN.md](ADMIN.md)) needs `admin.username` and `admin.password_hash`; without both it
+answers 503. Plaintext passwords are not accepted: make the hash with `php server/tools/admin-password.php`. The doctor
+reports an unset admin config as a warning and a half-set or non-hash one as an error (key paths only).
+
+| key | default | meaning |
+| --- | --- | --- |
+| `admin.username` | empty | the login name (compared with `hash_equals`) |
+| `admin.password_hash` | empty | a `password_hash()` value (checked with `password_verify`) |
+| `admin.allowed_ips` | empty | comma separated IPs and CIDR ranges (IPv4 / IPv6) that may reach the panel at all; empty = any address |
+| `admin.idle_timeout_minutes` | 30 | a session with no page view for this long ends (background JSON polls do not count) |
+| `admin.session_hours` | 8 | absolute session lifetime, however active |
+| `admin.login_max_failures` | 5 | failed logins per address in the window before that address is refused |
+| `admin.login_max_failures_global` | 50 | failed logins from all addresses in the window before everyone is refused |
+| `admin.login_window_minutes` | 15 | the throttling window |
+| `admin.audit_retention_days` | 180 | `admin_audit` rows older than this are deleted on write |
+| `admin.trusted_proxies` | empty | comma separated IPs / CIDR of reverse proxies whose `X-Forwarded-For` is believed (read from the right); empty = the client is `REMOTE_ADDR` and the header is ignored |
+| `admin.trust_forwarded_proto` | false | accept `X-Forwarded-Proto: https` as HTTPS (TLS ended at a proxy) |
+| `admin.probe_timeout_ms` | 1000 | timeout of the status page's VPS `/health` and Redis probes |
+| `db.admin_audit_table` | `admin_audit` | the audit table ([migration](../db/migrations/2026-10-25_admin_audit.sql)) |
 | `storefront.store_base`, `storefront.image_base` | empty | absolute bases for `with_details` product links and images; empty keeps the exported values |
 
 `search_logs` is never pruned automatically (no daemon on cPanel); an optional operator-run prune is in [DEPLOY.md](DEPLOY.md#upgrading-to-m31).

@@ -129,7 +129,7 @@ The response (and whether it had a vector) is stored under the stage-2 key with 
 | **Redis** | result cache | optional, **off by default** (`redis.enabled`), runs on the VPS LAN (never on cPanel); an in-repo RESP client, no extension |
 | **On-disk bundle** (`paths.data`) | `aliases.json` and `synonyms.json` (variants), `spellcheck.txt` (did-you-mean) | `keymap.json` is built into the bundle but the runtime layout is the in-code `Keymap`. `vectors.bin` / `vectors.idx` are present for `/reload`'s checks but **`/search` does not read them since M18**: the cosine is computed VPS-side from the VPS's own vectors |
 | **Config** (`App\Config::load`) | every knob above | code defaults + the deployer's `config.php` overrides, see below |
-| **Analytics** (M31) | not part of `/search`: `analytics.php` reads `search_logs` afterwards | `logs.token`, read-only, `?window=`, `?format=json` ([SEARCH-API.md](SEARCH-API.md#analytics)) |
+| **Analytics** (M31) | not part of `/search`: the panel's analytics page reads `search_logs` afterwards | admin login (M39), read-only, `?window=`, `?format=json` ([SEARCH-API.md](SEARCH-API.md#analytics)) |
 
 ## Degradation ladder
 
@@ -140,7 +140,7 @@ The response (and whether it had a vector) is stored under the stage-2 key with 
 | bundle missing or incomplete (`aliases.json` / `synonyms.json` / `spellcheck.txt`) | no alias variants; the speller falls back to the `products` table; keyword search still answers |
 | `products` table from before M21 / M13 / M12 / M23 (missing columns) | the keyword tier searches without those fields; no error |
 | `search_logs` from before M21 / M26 (missing columns) | the logger adds them or writes the columns it has; a log failure never fails the search |
-| `search_logs` / analytics unavailable | `/search` is unaffected; `analytics.php` answers `500 Internal error` |
+| `search_logs` / analytics unavailable | `/search` is unaffected; the panel's analytics page answers `500` |
 | config problems | tunables fall back to code defaults; a missing `db.dsn` / `db.user` is reported by `config-check` and `/health` `config`, and database errors surface as `500 internal_error` |
 | MySQL down | `500 internal_error`: the one failure the service cannot hide (`/health` reports `degraded`, `503`) |
 
@@ -158,7 +158,7 @@ The response (and whether it had a vector) is stored under the stage-2 key with 
 ├── config.php                deployer overrides: DB credentials, tokens, VPS, redis (never in the zip)
 ├── data/                     the active bundle (aliases, synonyms, spellcheck, vectors, meta.json)
 ├── data_incoming/  data_old/ staging for the atomic reload swap, and the previous bundle
-└── public/                   served: index.php search.php health.php reload.php logs.php analytics.php
+└── public/                   served: index.php search.php health.php reload.php admin.php (logs.php, analytics.php redirect)
 ```
 
 `config.php` and `data/` are outside the served folder, and deny-all `.htaccess` files (`server/`, `data/`, `data_incoming/`) are a second net if the tree is ever misplaced. Layouts and checks: [DEPLOY.md](DEPLOY.md#layout).

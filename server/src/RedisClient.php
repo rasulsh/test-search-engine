@@ -64,6 +64,28 @@ class RedisClient
         $this->command(['EXPIRE', $key, (string) max(1, $seconds)]);
     }
 
+    public function ping(): bool
+    {
+        return is_string($this->command(['PING'])); // an error reply throws
+    }
+
+    /** How many keys start with $prefix (SCAN, never KEYS); the status page's cache size. */
+    public function countByPrefix(string $prefix): int
+    {
+        $count = 0;
+        $cursor = '0';
+        do {
+            $reply = $this->command(['SCAN', $cursor, 'MATCH', self::escapeGlob($prefix) . '*', 'COUNT', '500']);
+            if (!is_array($reply) || count($reply) !== 2 || !is_array($reply[1])) {
+                throw new RuntimeException('redis: unexpected SCAN reply');
+            }
+            $cursor = (string) $reply[0];
+            $count += count($reply[1]);
+        } while ($cursor !== '0');
+
+        return $count;
+    }
+
     /** Deletes every key starting with $prefix (SCAN + DEL; never KEYS). Returns how many. */
     public function deleteByPrefix(string $prefix): int
     {

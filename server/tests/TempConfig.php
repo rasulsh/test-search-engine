@@ -10,6 +10,17 @@ namespace App\Tests;
  */
 final class TempConfig
 {
+    public const ADMIN_USER = 'admin';
+    public const ADMIN_PASSWORD = 'correct-horse-battery';
+    /** password_hash() of ADMIN_PASSWORD at the cheapest cost, so tests stay fast. */
+    public const ADMIN_HASH = '$2y$04$v/kr1SAX4nx5PRisIO0y4uzV6TS5QR3m.QmKiNIRAvAOi4/h39hlu';
+
+    /** @return array{username: string, password_hash: string} a working admin section */
+    public static function admin(): array
+    {
+        return ['username' => self::ADMIN_USER, 'password_hash' => self::ADMIN_HASH];
+    }
+
     /**
      * @param array<string, mixed> $overrides
      * @return string the file path; removed when the test process exits

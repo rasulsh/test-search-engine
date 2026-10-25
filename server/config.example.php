@@ -56,7 +56,13 @@ return [
     // Tokens: each feature is off until its token is set. Use long random,
     // different values.
     'reload' => ['token' => $setting('SEARCH_RELOAD_TOKEN', '')], // POST /reload
-    'logs'   => ['token' => $setting('SEARCH_LOGS_TOKEN', '')],   // logs.php
+    // Admin panel (docs/ADMIN.md): username + password_hash (make it with tools/admin-password.php,
+    // single-quote it: it contains `$`). Without both, admin.php answers 503.
+    'admin'  => [
+        'username'      => $setting('SEARCH_ADMIN_USERNAME', ''),
+        'password_hash' => $setting('SEARCH_ADMIN_PASSWORD_HASH', ''),
+        // 'allowed_ips' => '203.0.113.7, 10.0.0.0/8', 'idle_timeout_minutes' => 30, 'session_hours' => 8,
+    ],
     'debug'  => ['token' => $setting('SEARCH_DEBUG_TOKEN', '')],  // "debug": 1 in /search
 
     // Only when pinning, add (see App\Config for the keys and defaults):

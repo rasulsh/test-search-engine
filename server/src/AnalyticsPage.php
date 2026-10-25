@@ -21,7 +21,8 @@ final class AnalyticsPage
      * @param array<string, mixed> $report Analytics::report() plus `refresh_seconds`
      * @param string $nonce the per-response CSP nonce the script tags carry
      * @param array<string, mixed> $meta page-only facts that never enter the report JSON: `db_clock`
-     *        {zone, offset_minutes} of the database session, `fonts` URL prefix of the font folder (not sent to the script)
+     *        {zone, offset_minutes} of the database session, `fonts` URL prefix of the font folder
+     *        (not sent to the script)
      */
     public static function render(array $report, string $nonce, array $meta = []): string
     {

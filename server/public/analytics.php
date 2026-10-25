@@ -58,7 +58,8 @@ if (!hash_equals($configuredToken, $provided)) {
         401,
         $fa['errors']['unauthorized'],
         '<form method="get"><label>' . $fa['errors']['token']
-        . ' <input type="password" name="token" autofocus></label> <button>' . $fa['errors']['open'] . '</button></form>'
+        . ' <input type="password" name="token" autofocus></label> <button>'
+        . $fa['errors']['open'] . '</button></form>'
     );
     return;
 }

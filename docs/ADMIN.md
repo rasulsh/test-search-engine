@@ -187,3 +187,19 @@ by try/catch) and applied before first paint, so there is no flash of the wrong 
 
 LiteSpeed / LVE behaviour, the real host's session handling and file permissions, and the behaviour behind the
 production proxy (client address, `X-Forwarded-Proto`). Check them with [DEPLOY.md](DEPLOY.md#upgrading-to-m39).
+
+## Panel polish (M42)
+
+- **Layout.** The content fills the window next to the side navigation up to about 1600 px on every page; tables use the
+  full card width, numeric, date, percentage and short-code columns are centered (headers like their cells), free text
+  starts at the edge, long text wraps or is cut with the whole value as a tooltip. A wide table scrolls inside its card;
+  the page itself never scrolls sideways. The login box is centered in the viewport (theme switch stays in the corner).
+- **Aliases.** The groups table is paginated on the server: 25 / 50 / 100 / 200 per page (default 50), page links, the
+  total. The search covers every group and its result is paginated too. Page, size and search live in the query string
+  (`?p=aliases&q=...&per=25&page=2`) and come back after edit, save, delete and cancel, and with the browser's back button.
+- **Logs.** Click a column heading to sort the whole filtered result (time, query, normalized query, layer, vector,
+  results, latency, cache hit, ...; unknown names are ignored, only whitelisted columns reach the SQL). The search box
+  matches the raw and the normalized query (`%`, `_` and quotes are literal) and combines with the three views, the sort,
+  the page size and the page; everything is in the query string, so a view can be bookmarked. On a huge table the
+  search and unindexed sorts read the newest `logs.scan_limit` rows and the page says so; use `tools/logs-export.php` for
+  older data.

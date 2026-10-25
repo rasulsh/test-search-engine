@@ -477,6 +477,18 @@ web-exposed. No schema or config change. The alias fix ships in the code too (`S
 alias groups that share a term), so no bundle rebuild is needed for it, only the new code and a `/reload`
 (or any worker restart) so the cached alias map is rebuilt.
 
+<a id="upgrading-to-m42"></a>**Upgrading to M42 (no vectors on cPanel, panel polish).** Server code only on the
+cPanel side; nothing to migrate and no `.htaccess` change:
+
+1. Copy `src/`, `public/` (including `admin.php`) and `config.example.php` over the live ones, or unzip the new `release.zip`.
+2. `config.php` needs no edit. If it still sets `model.name`, `model.revision` or `model.dim`, `php tools/config-check.php`
+   warns that they can be deleted ([CHANGELOG.md](CHANGELOG.md)); they are ignored. New key: `logs.scan_limit` (default 200000).
+3. **No rebuild is required.** A bundle built before M42 (with `vectors.bin` / `vectors.idx`) is still accepted by
+   `/reload` and keeps its old checks. The next release you build simply no longer contains them, and `meta.json` is
+   `{normalization_version, count, built_at}`. On the build machine delete `SEARCH_MODEL*` and `SEARCH_BUNDLE_EMBEDDER`
+   from `.env` (ignored now). The VPS vectors are unchanged.
+4. A rollback to a pre-M42 `data_old/` works as before.
+
 <a id="upgrading-to-m40"></a>**Upgrading to M40 (operations page, config upgrade safety).**
 1. **Copy** the new `server/` (or `release.zip`). New files: `src/AdminOps.php`, `src/AdminOpsViews.php`, `src/ConfigReport.php`,
    `tools/_php-guard.php`; changed: `src/Reload.php`, `src/Cache.php`, `src/VpsClient.php`, `src/Audit.php`, `src/Config.php`,

@@ -169,7 +169,8 @@ missing until the TTL or the next reload.
 | --- | --- | --- |
 | `debug.token` | empty | enables `"debug": 1` on `/search` (`X-Debug-Token`), see [SEARCH-API.md](SEARCH-API.md#search-logs-and-ranking-debug) |
 | `logs.token` | empty | **deprecated (M39)**: unused, the logs and analytics pages need the admin login; the doctor warns while it is set |
-| `logs.page_size` | 50 | rows per page of the panel's logs page |
+| `logs.page_size` | 50 | default rows per page of the panel's logs page (the page also offers 25 / 50 / 100 / 200) |
+| `logs.scan_limit` | 200000 | the logs page's search and unindexed sorts read this many of the newest rows (0 = all); the page says when older rows were left out |
 | `logs.refresh_seconds` | `30` | how often the analytics dashboard re-fetches its JSON (M35); `0` disables the auto-refresh |
 
 ### Admin panel section (M39)

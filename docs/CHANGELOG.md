@@ -12,7 +12,10 @@ line can be deleted. `php server/tools/config-check.php` lists all of it.
 
 ## M42: no vectors on cPanel, panel polish
 
-- **Added**: nothing. The aliases page size (default 50) and the logs page size (`logs.page_size`, default 50) need no new key.
+- **Added**: `logs.scan_limit` = 200000. The logs page's keyword search and its sorts on columns without an index read at most this
+  many of the newest rows (0 = all), so one click cannot scan a multi-million-row `search_logs` on the shared host; the page
+  says when older rows were left out. Newest-first and by-time views always cover every row. The rows-per-page default is the
+  existing `logs.page_size` (50); the aliases page defaults to 50 per page with no key.
 - **Removed** (ignored; the config doctor says they can be deleted from `config.php`):
   - `model.name`, `model.revision`, `model.dim`: the cPanel bundle carries no vectors any more, so there is no model or
     dimension to check on `/reload`. The semantic model lives on the VPS (`VPS_MODEL*`).

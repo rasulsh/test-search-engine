@@ -77,7 +77,11 @@ final class LogsPage
         $per = Paging::size($perPage, $this->pageSize);
         $term = trim(mb_substr($term, 0, self::MAX_TERM));
 
-        $sort = in_array($sort, $this->sortable(), true) ? $sort : ($view === 'slowest' ? 'latency_ms' : '');
+        if (!in_array($sort, $this->sortable(), true)) {
+            // An unusable sort takes its direction with it: the view's own order, newest or slowest first.
+            $sort = $view === 'slowest' ? 'latency_ms' : '';
+            $dir = '';
+        }
         $dir = $dir === 'asc' || $dir === 'desc' ? $dir : (in_array($sort, self::TEXT, true) ? 'asc' : 'desc');
         // The unsorted view is the primary key backwards: the newest rows, no sort at all.
         $order = $sort === '' || $sort === 'id'

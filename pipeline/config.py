@@ -84,8 +84,9 @@ def load() -> dict[str, Any]:
             # Raised from 400 in M15: attributes / feature titles are indexed in
             # full as specs and the semantic floor gates description-only hits.
             "desc_index_chars": int(os.getenv("SEARCH_DESC_INDEX_CHARS", "800")),
-            # The shop owner's editable alias file (docs/SEARCH-BEHAVIOR.md, aliases), shipped
-            # in the bundle as aliases.json. A missing file means no aliases.
+            # Deprecated (M41): aliases live on the server (server/storage/aliases.json, edited in
+            # the admin panel) and are not part of the bundle. This file is only the gen_aliases.py
+            # --merge target and a seed for new installs. A missing file means no aliases.
             "aliases_file": os.getenv(
                 "SEARCH_ALIASES_FILE", str(Path(__file__).with_name("aliases.json"))
             ),

@@ -214,8 +214,24 @@ ends by printing the exact commands for both targets.
 `--desc-index-chars N` sets how many leading description characters are
 keyword-indexed (default `SEARCH_DESC_INDEX_CHARS`, else 800; 0 = the whole
 description). It only affects the build; to change it, build and deploy a new
-release. `--aliases FILE` ships another [alias file](SEARCH-BEHAVIOR.md#aliases) instead of
-`pipeline/aliases.json`.
+release. Aliases are not part of the release since M41: they live in `server/storage/aliases.json` and are edited in
+the admin panel (see [ADMIN.md](ADMIN.md#alias-manager-m41)). `storage/` must be writable by the PHP user; only its
+deny-all `.htaccess` ships. Upgrading from M40, in full:
+
+1. Copy `src/`, `tools/` and `public/` over the live ones (and, when unzipping a whole `release.zip`, `storage/.htaccess`).
+2. `server/storage/` must exist and be writable by the PHP user (cPanel: the account itself), mode 755; the panel
+   creates it, its `backups/` and a deny-all `storage/.htaccess` on the first save when `server/` is writable, and shows
+   "storage not writable" otherwise. Never put it under `public/`.
+3. Nothing else: no database migration, no `config.php` edit (the four new keys have defaults), no
+   `public/.htaccess` change, no bundle rebuild or reload (normalization version, model and dim are unchanged; a bundle
+   built before M41 still carries `aliases.json`, which is used only until storage is seeded and then ignored).
+4. Open the panel's aliases page once: it seeds `storage/aliases.json` from the live bundle's `aliases.json`, so the
+   search keeps serving exactly the aliases it served before. From then on edit aliases in the panel only; editing
+   `pipeline/aliases.json` no longer changes the live search.
+
+Directory deletes (`<data>_old` / `<data>_swap` on reload and rollback, backup pruning) go through `App\SafePath`, which
+needs absolute paths of at least 3 segments below the configured base: `/home/ACCOUNT/app/server/data_old` is fine,
+a `paths.data` such as `/srv/data` (giving `/srv/data_old`) is refused with `directory_swap_failed`.
 `--intent-map FILE` likewise ships another [intent map](SEARCH-BEHAVIOR.md#intent-map) instead of
 `pipeline/intent_map.json`.
 
@@ -227,7 +243,7 @@ bundle's `vectors.bin` with the mock embedder (see below) and packs one
 
 | in the zip | what |
 | --- | --- |
-| `data_incoming/` | the bundle: `vectors.bin`, `vectors.idx`, `products.load.sql`, `meta.json`, `spellcheck.txt`, `synonyms.json`, `aliases.json`, `intent_map.json`, `keymap.json` |
+| `data_incoming/` | the bundle: `vectors.bin`, `vectors.idx`, `products.load.sql`, `meta.json`, `spellcheck.txt`, `synonyms.json`, `intent_map.json`, `keymap.json` |
 | `bootstrap.php`, `src/`, `public/`, `tools/config-check.php`, `tools/logs-export.php` | the server code (including `public/install.php` and `public/test.html`), the config doctor and the [log export](SEARCH-API.md#log-export) (M36) |
 | `config.example.php`, `db/schema.sql` | the installer's config template and schema |
 
@@ -375,7 +391,7 @@ ranking keys (`tag_weight`, `brand_weight`, `category_weight`,
 `brand_match_boost`, `category_match_boost`, `tag_match_boost`,
 `tag_match_min_tokens`) default in code, so an older `config.php` keeps
 working; add a key to `config.php` to change it ([CONFIGURATION.md](CONFIGURATION.md)). Add the brand pairs your
-shoppers type in the other script to `pipeline/aliases.json` before building
+shoppers type in the other script to the aliases (admin panel, `?p=aliases`)
 (`["سامسونگ", "samsung"]`).
 
 **Memory note.** The keyword tier reads each matching row's text columns, so the

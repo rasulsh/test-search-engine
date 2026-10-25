@@ -7,14 +7,16 @@
  *
  * ERROR (a required key missing or empty, a value of the wrong type) makes the
  * exit status 1, so deploy scripts and CI can gate on it. WARN flags unknown keys
- * and half-configured features; --verbose adds the tunables still at their code
- * default. Prints key paths only, never values.
+ * and half-configured features. Without --verbose it prints key paths only. --verbose
+ * lists every known key as `key = value [config.php|code default]`; credentials show as
+ * `set` / `empty` and keys the schema does not know are not listed (they are WARNed above).
  */
 
 declare(strict_types=1);
 
 use App\Config;
 use App\ConfigDoctor;
+use App\ConfigReport;
 
 require __DIR__ . '/_php-guard.php'; // PHP 8.1+ check, before anything else runs
 
@@ -32,7 +34,8 @@ if (!is_file($file)) {
     echo "No config file at {$file}: every tunable uses its code default.\n";
 }
 
-$report = ConfigDoctor::check(Config::overrides($file));
+$overrides = Config::overrides($file);
+$report = ConfigDoctor::check($overrides);
 foreach ($report['errors'] as $line) {
     echo "ERROR  {$line}\n";
 }
@@ -40,8 +43,13 @@ foreach ($report['warnings'] as $line) {
     echo "WARN   {$line}\n";
 }
 if (isset($options['verbose'])) {
-    foreach ($report['info'] as $line) {
-        echo "INFO   {$line}\n";
+    foreach (ConfigReport::rows($overrides) as $row) {
+        if ($row['state'] === 'hidden') {
+            continue;
+        }
+        $value = $row['state'] === 'value' ? ($row['value'] === '' ? "''" : $row['value']) : $row['state'];
+        $source = $row['source'] === ConfigReport::SOURCE_FILE ? 'config.php' : 'code default';
+        echo "INFO   {$row['key']} = {$value} [{$source}]\n";
     }
 }
 printf(

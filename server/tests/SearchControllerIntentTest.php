@@ -25,7 +25,7 @@ final class SearchControllerIntentTest extends DatabaseTestCase
     protected function setUp(): void
     {
         parent::setUp();
-        $this->dataDir = sys_get_temp_dir() . '/m34_data_' . uniqid('', true);
+        $this->dataDir = TempTree::path('m34_data');
         mkdir($this->dataDir, 0777, true);
         IntentMap::clearCache();
         Synonyms::clearCache();
@@ -41,8 +41,7 @@ final class SearchControllerIntentTest extends DatabaseTestCase
 
     protected function tearDown(): void
     {
-        @unlink($this->dataDir . '/' . IntentMap::FILE);
-        @rmdir($this->dataDir);
+        TempTree::removeIfAssigned($this->dataDir);
         IntentMap::clearCache();
         Synonyms::clearCache();
     }

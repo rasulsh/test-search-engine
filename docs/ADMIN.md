@@ -63,6 +63,9 @@ plain cPanel hosting (no proxy in front), leave it empty.
 | --- | --- |
 | `status` | Read-only: database and product count, the live bundle's `meta.json` (built at, normalization version, counts), alias and synonym group counts, VPS `/health`, Redis ping and the number of keys under `redis.prefix`, the config doctor result, last reload time. The VPS and Redis probes time out at `admin.probe_timeout_ms` (1 s) and show "unreachable". |
 | `ops` | The operations page (M40), below. |
+| `aliases` | The alias manager (M41), below. |
+| `synonyms` | Read-only `synonyms.json`; "which groups hold term X" across alias and synonym groups with the merged result; "copy to aliases". Hand edits of `synonyms.json` are lost on the next build. |
+| `tester` | A search without a log row and without the result cache: tier, did-you-mean, the top 10 titles with match type. |
 | `analytics` | The M35/M38 dashboard. `?p=analytics&format=json` is the same JSON as before (byte-identical, covered by `AnalyticsJsonCompatTest`), now needing a session: 401 `{"error":"unauthorized"}` without one. |
 | `logs` | Recent / zero-result / slowest `search_logs` rows, paginated. |
 | `audit` | The audit trail. |
@@ -134,11 +137,28 @@ value feeds the new key unless that is set too) and the doctor / status page war
 is ignored and the warning says why and that the line can be deleted. Every config change of a milestone is listed in
 [CHANGELOG.md](CHANGELOG.md).
 
+## Alias manager (M41)
+
+The list is `server/storage/aliases.json` (`paths.storage`). Tabs: **groups** (search, add, edit, delete a group; each
+term shows its normalized form and the merged group when overlapping groups are joined; "count" computes the products
+one term matches, on demand, per group; "test" opens the tester), **backups** (every save or restore keeps the previous
+file, newest `admin.alias_backups`; diff against the current file; one-click restore), **advanced** (the whole file as
+JSON with the same checks, plus a download).
+
+- *Errors block a save*: not a list of lists of strings, an empty term (or one that normalizes to nothing), a group with
+  fewer than 2 distinct normalized terms, duplicates after normalization, a term longer than `admin.alias_max_term_chars`.
+- *Warnings need a confirm, only for groups you changed*: the term is in another group (the merged group is shown),
+  shorter than 3 characters, matches more than `admin.alias_warn_matches` products, or is in `search.suggest_blocklist`.
+- A save sends the file's version hash with the form; if the file changed meanwhile it is refused ("stale") and nothing
+  is overwritten. Saves are audited (`alias_save`, `alias_restore`: counts and the first changed terms, never the file).
+- Live at once: the next search reads the file; the result-cache key includes its version.
+
 ## Numbers and dates
 
 Every number the panel prints uses Latin digits, a comma for thousands and a dot for decimals: `1,118`, `11.7%`,
-`316 ms`. Jalali dates use the Latin numbering system too (`1405/08/03 09:56`, via
-`fa-IR-u-ca-persian-nu-latn`). Persian words and labels stay Persian, and so do the shoppers' own query texts, which
+`316 ms`. Jalali dates use the Latin numbering system too (`1405/08/03`). Server-rendered pages print the stored Gregorian text
+with the Jalali date beside it through `AdminDate` (plain arithmetic, no ext-intl); the dashboard formats in the browser
+(`fa-IR-u-ca-persian-nu-latn`). Persian words and labels stay Persian, and so do the shoppers' own query texts, which
 are shown exactly as typed. The server side formats through `AdminViews::num()`, the dashboard script through the one
 `fmt` helper in `AnalyticsPage.js` (a test fails if a number or date is formatted anywhere else). The JSON output
 carries raw numbers and is unchanged.

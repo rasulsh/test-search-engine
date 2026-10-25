@@ -21,11 +21,10 @@ final class AdminViews
         return is_numeric($n) ? number_format((float) $n, 0, '.', ',') : (string) $n;
     }
 
-    /** A stored timestamp, kept Gregorian and left-to-right inside the RTL text. */
+    /** A stored timestamp: Gregorian as stored (left to right inside the RTL text) with the Jalali date beside it. */
     public static function ts(mixed $value): string
     {
-        return $value === null || $value === '' ? self::e(AdminStrings::fa()['ui']['unknown'])
-            : '<bdi class="ltr">' . self::e($value) . '</bdi>';
+        return AdminDate::html($value);
     }
 
     /** @param array{what: string, how: string, effect: string, when: string, risk: string} $help */
@@ -218,7 +217,7 @@ final class AdminViews
         foreach ($data['rows'] as $row) {
             $label = $t['actions'][$row['action']] ?? $row['action'];
             $rows .= '<tr><td>' . self::ts($row['ts']) . '</td><td><bdi class="ltr">' . self::e($row['ip'])
-                . '</bdi></td><td>' . self::e($label) . '</td><td>' . self::e($row['detail']) . '</td></tr>';
+                . '</bdi></td><td>' . self::e($label) . '</td><td>' . self::auditDetail($row) . '</td></tr>';
         }
         if ($rows === '') {
             $rows = '<tr><td colspan="4">' . self::e($t['empty']) . '</td></tr>';
@@ -232,6 +231,62 @@ final class AdminViews
 
         return self::helpBox($t['help']) . $pager . '<div class="scroll card"><table><thead><tr>' . $head
             . '</tr></thead><tbody>' . $rows . '</tbody></table></div>' . $pager;
+    }
+
+    /**
+     * One audit row's detail as a sentence. The stored text is JSON (or `count=N` from POST /reload) and
+     * must never reach the page raw; a row it does not recognise falls back to the text itself.
+     *
+     * @param array<string, mixed> $row an `admin_audit` row
+     */
+    public static function auditDetail(array $row): string
+    {
+        $t = AdminStrings::fa()['audit']['details'];
+        $action = (string) $row['action'];
+        $raw = trim((string) $row['detail']);
+        if ($raw === '') {
+            return self::e($t['none']);
+        }
+        if ($action === Audit::RELOAD_API && preg_match('/^count=(\d+)$/', $raw, $m) === 1) {
+            return self::e(AdminStrings::fill($t['reload_api_count'], self::num($m[1])));
+        }
+        $detail = json_decode($raw, true);
+        if (!is_array($detail)) {
+            return '<bdi dir="auto">' . self::e($raw) . '</bdi>';
+        }
+        if (in_array($action, AdminOps::ACTIONS, true)) {
+            [$kind, $message] = AdminOpsViews::message($row);
+
+            $label = AdminStrings::fa()['ops']['recent'][$kind === 'ok' ? 'ok' : 'failed'];
+
+            return '<span class="badge ' . ($kind === 'ok' ? 'ok' : 'bad') . '">' . self::e($label) . '</span> '
+                . self::e($message);
+        }
+        if ($action === Audit::ALIAS_SAVE || $action === Audit::ALIAS_RESTORE) {
+            $list = static function (array $names, int $total): string {
+                $text = implode(AdminStrings::fa()['ui']['list_sep'], array_map('strval', $names));
+                $more = $total - count($names);
+
+                return $names === [] ? '-' : $text . ($more > 0 ? ' (+' . self::num($more) . ')' : '');
+            };
+            $summary = AdminStrings::fill(
+                $t['alias_save'],
+                self::num($detail['groups'] ?? 0),
+                self::num($detail['terms'] ?? 0),
+                $list((array) ($detail['added'] ?? []), (int) ($detail['added_total'] ?? 0)),
+                $list((array) ($detail['removed'] ?? []), (int) ($detail['removed_total'] ?? 0))
+            );
+
+            if ($action === Audit::ALIAS_RESTORE) {
+                $backup = (string) ($detail['backup'] ?? '');
+                $summary = AdminStrings::fill($t['alias_restore'], $backup, self::num($detail['groups'] ?? 0))
+                    . ' ' . $summary;
+            }
+
+            return '<bdi dir="auto">' . self::e($summary) . '</bdi>';
+        }
+
+        return '<bdi dir="auto">' . self::e($raw) . '</bdi>';
     }
 
     /**
@@ -257,7 +312,9 @@ final class AdminViews
                 if ($column === 'had_vector' || $column === 'cache_hit') {
                     $value = ($row[$column] ?? 0) ? AdminStrings::fa()['ui']['yes'] : AdminStrings::fa()['ui']['no'];
                 }
-                $body .= '<td dir="auto">' . self::e($value) . '</td>';
+                $body .= $column === 'ts'
+                    ? '<td>' . self::ts($value) . '</td>'
+                    : '<td dir="auto">' . self::e($value) . '</td>';
             }
             $body .= '</tr>';
         }

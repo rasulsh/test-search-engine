@@ -62,6 +62,10 @@ final class AdminOpsViews
                 return '-';
             }
 
+            if ($field === 'built_at') {
+                return AdminViews::ts($bundle[$field]);
+            }
+
             return in_array($field, ['count', 'dim', 'normalization_version'], true)
                 ? self::e(AdminViews::num($bundle[$field]))
                 : '<bdi class="ltr">' . self::e($bundle[$field]) . '</bdi>';

@@ -202,7 +202,7 @@ final class AdminUnitTest extends DatabaseTestCase
     public function testStatusCollectsEverythingAndDegradesWhenProbesFail(): void
     {
         $this->loadSampleFixture();
-        $data = sys_get_temp_dir() . '/admin_status_' . uniqid('', true);
+        $data = TempTree::path('admin_status');
         mkdir($data);
         $meta = [
             'built_at' => '2026-10-01T10:00:00Z', 'normalization_version' => 4,

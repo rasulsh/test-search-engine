@@ -13,7 +13,7 @@ final class AppBaseTest extends TestCase
 
     protected function setUp(): void
     {
-        $this->dir = sys_get_temp_dir() . '/appbase_' . uniqid('', true);
+        $this->dir = TempTree::path('appbase');
         mkdir($this->dir . '/web', 0777, true);
         mkdir($this->dir . '/app', 0777, true);
         copy(dirname(__DIR__) . '/public/app_base.php', $this->dir . '/web/app_base.php');

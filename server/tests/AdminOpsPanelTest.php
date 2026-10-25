@@ -47,7 +47,7 @@ final class AdminOpsPanelTest extends TestCase
             self::markTestSkipped('Cannot reach test database: ' . $e->getMessage());
         }
 
-        self::$root = sys_get_temp_dir() . '/adminops_e2e_' . uniqid('', true);
+        self::$root = TempTree::path('adminops_e2e');
         mkdir(self::$root);
         self::$vps = new MockVpsServer(['token' => FakeVps::TOKEN]);
         self::$redis = new FakeRedisServer();
@@ -69,24 +69,8 @@ final class AdminOpsPanelTest extends TestCase
         self::$server->stop();
         self::$redis->stop();
         self::$vps->stop();
-        foreach (glob(self::$root . '/*') ?: [] as $path) {
-            is_dir($path) ? self::removeDir($path) : @unlink($path);
-        }
-        @rmdir(self::$root);
+        TempTree::remove(self::$root);
         self::$pdo->exec('DROP TABLE IF EXISTS products_new, products_old');
-    }
-
-    private static function removeDir(string $dir): void
-    {
-        if (!is_dir($dir)) {
-            return;
-        }
-        foreach (scandir($dir) ?: [] as $item) {
-            if ($item !== '.' && $item !== '..') {
-                is_dir("{$dir}/{$item}") ? self::removeDir("{$dir}/{$item}") : @unlink("{$dir}/{$item}");
-            }
-        }
-        @rmdir($dir);
     }
 
     protected function setUp(): void
@@ -95,7 +79,7 @@ final class AdminOpsPanelTest extends TestCase
         self::$pdo->exec('DROP TABLE IF EXISTS products_new, products_old');
         self::$pdo->exec('DELETE FROM products');
         foreach (['data', 'data_incoming', 'data_old', 'data_swap'] as $dir) {
-            self::removeDir(self::$root . '/' . $dir);
+            TempTree::remove(self::$root . '/' . $dir);
         }
         // Live: 2 products and a bundle that says so. Staged: a 3-product bundle and its staging table.
         foreach ([1, 2] as $id) {
@@ -185,7 +169,7 @@ final class AdminOpsPanelTest extends TestCase
 
         self::assertSame(200, $page['status']);
         $html = $page['body'];
-        $needles = ['2026-10-01T00:00:00Z', '2026-09-01T00:00:00Z', 'تغییر تعداد: +1',
+        $needles = ['2026-10-01 00:00', '2026-09-01 00:00', 'تغییر تعداد: +1',
             'محصول افزوده‌شده: 1، حذف‌شده: 0', 'مشخصات متفاوت: built_at, count', 'products_new', '3 ردیف',
             'name="action" value="validate"', 'name="action" value="apply"',
             'name="action" value="rollback" disabled', 'راهنمای این صفحه'];

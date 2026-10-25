@@ -336,9 +336,15 @@ final class Config
             'admin.trust_forwarded_proto' => ['bool', false],
             // Budget of each outbound probe (VPS /health, Redis) on the status page.
             'admin.probe_timeout_ms'    => ['int', 1000],
+            // Alias manager (M41): longest term, products one term may match before a warning, backups kept.
+            'admin.alias_max_term_chars' => ['int', 64],
+            'admin.alias_warn_matches'  => ['int', 500],
+            'admin.alias_backups'       => ['int', 20],
 
             'paths.data'          => ['string', $root . '/data'],
             'paths.data_incoming' => ['string', $root . '/data_incoming'],
+            // The owner's editable files (aliases.json, its backups); survives every reload (M41).
+            'paths.storage'       => ['string', $root . '/storage'],
         ];
     }
 }

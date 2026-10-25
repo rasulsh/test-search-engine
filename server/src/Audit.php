@@ -23,6 +23,8 @@ final class Audit
     public const ROLLBACK = 'rollback';
     public const CACHE_FLUSH = 'cache_flush';
     public const VPS_RELOAD = 'vps_reload';
+    public const ALIAS_SAVE = 'alias_save';
+    public const ALIAS_RESTORE = 'alias_restore';
 
     private string $table;
 

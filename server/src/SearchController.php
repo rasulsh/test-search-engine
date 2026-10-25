@@ -49,7 +49,7 @@ use Throwable;
 final class SearchController
 {
     private Keyword $keyword;
-    private Logger $logger;
+    private ?Logger $logger;
     /** @var callable(): Speller */
     private $spellerFactory;
     /** @var callable(?string): string */
@@ -82,7 +82,7 @@ final class SearchController
      */
     public function __construct(
         Keyword $keyword,
-        Logger $logger,
+        ?Logger $logger,
         callable $spellerFactory,
         ?callable $normalizer = null,
         int $topIdsLimit = 10,
@@ -130,40 +130,23 @@ final class SearchController
      * @param array<string, mixed> $config the server config array
      * @param VpsClient|null $vps replaces the client built from $config['vps'] (tests)
      * @param Cache|null $cache replaces the result cache built from $config['redis'] (tests)
+     * @param bool $record false builds the controller the admin panel's tester uses: no log row and
+     *        no result cache (read or write), so trying a query leaves no trace
      */
-    public static function fromConfig(PDO $pdo, array $config, ?VpsClient $vps = null, ?Cache $cache = null): self
-    {
+    public static function fromConfig(
+        PDO $pdo,
+        array $config,
+        ?VpsClient $vps = null,
+        ?Cache $cache = null,
+        bool $record = true
+    ): self {
         $search = $config['search'];
         $productsTable = $config['db']['products_table'];
         $maxDistance = (int) $search['suggest_max_distance'];
         $minFrequency = (int) $search['suggest_min_frequency'];
 
-        $synonyms = Synonyms::fromDirectory($config['paths']['data'], (int) $search['synonyms_max_group_size']);
-        $keyword = new Keyword(
-            $pdo,
-            $productsTable,
-            (int) $search['min_token_size'],
-            (int) $search['default_limit'],
-            null,
-            (float) $search['title_weight'],
-            (float) $search['desc_weight'],
-            (float) $search['phrase_bonus'],
-            (int) $search['sku_prefix_min_length'],
-            (float) $search['spec_weight'],
-            $synonyms,
-            (int) $search['alias_max_variants'],
-            (bool) $search['require_all_terms'],
-            (float) $search['tag_weight'],
-            (float) $search['brand_weight'],
-            (float) $search['category_weight'],
-            (float) $search['collapse_weight'],
-            (int) $search['collapse_min_length'],
-            (int) $search['soft_and_min_results'],
-            (float) $search['soft_and_min_coverage'],
-            (float) $search['soft_and_partial_penalty'],
-            (int) $search['soft_and_candidate_cap'],
-            (int) $search['facet_min_products']
-        );
+        $synonyms = self::synonymsFromConfig($config);
+        $keyword = self::keywordFromConfig($pdo, $config, $synonyms);
         // The bundle dictionary is cached per worker (and in APCu); the table scan
         // is only a fallback for a data directory without spellcheck.txt.
         $dictionaryPath = $config['paths']['data'] . '/' . Speller::DICTIONARY_FILE;
@@ -174,7 +157,8 @@ final class SearchController
         $spellerFactory = static fn (): Speller => (
             Speller::fromDictionary($dictionaryPath, null, $maxDistance, $minFrequency)
             ?? Speller::fromProducts($pdo, $productsTable, $maxDistance, $minFrequency)
-        )->withBlocked($blocked);
+        )->withExtraWords($synonyms->aliasTokens(), Speller::ALIAS_TOKEN_COUNT, $synonyms->version())
+            ->withBlocked($blocked);
 
         // The signals provider both fetches business signals and acts as the
         // existence filter (ids it omits are treated as absent from the catalog).
@@ -217,7 +201,7 @@ final class SearchController
 
         return new self(
             $keyword,
-            new Logger($pdo, $config['db']['search_logs_table']),
+            $record ? new Logger($pdo, $config['db']['search_logs_table']) : null,
             $spellerFactory,
             null,
             10,
@@ -238,7 +222,7 @@ final class SearchController
             (int) $search['default_limit'],
             (float) $search['semantic_min_score'],
             (int) $search['suggest_min_results'],
-            $cache ?? Cache::fromConfig($config),
+            $record ? ($cache ?? Cache::fromConfig($config)) : null,
             IntentMap::fromDirectory($config['paths']['data']),
             (int) $search['intent_max_terms'],
             $synonyms->version(),
@@ -246,6 +230,61 @@ final class SearchController
             (int) $search['query_max_tokens'],
             (int) $search['result_cap']
         );
+    }
+
+    /**
+     * The bundle's synonyms plus the owner's aliases, read from the live alias file
+     * (server/storage/aliases.json once seeded, else the bundle's own).
+     *
+     * @param array<string, mixed> $config the server config array
+     */
+    public static function synonymsFromConfig(array $config): Synonyms
+    {
+        return Synonyms::fromDirectory(
+            $config['paths']['data'],
+            (int) $config['search']['synonyms_max_group_size'],
+            AliasStore::fromConfig($config)->runtimePath()
+        );
+    }
+
+    /**
+     * The keyword tier as /search builds it. $synonyms null = no synonym / alias expansion (the
+     * alias manager counts the products a term matches literally).
+     *
+     * @param array<string, mixed> $config the server config array
+     */
+    public static function keywordFromConfig(PDO $pdo, array $config, ?Synonyms $synonyms): Keyword
+    {
+        $search = $config['search'];
+        $productsTable = $config['db']['products_table'];
+
+        $keyword = new Keyword(
+            $pdo,
+            $productsTable,
+            (int) $search['min_token_size'],
+            (int) $search['default_limit'],
+            null,
+            (float) $search['title_weight'],
+            (float) $search['desc_weight'],
+            (float) $search['phrase_bonus'],
+            (int) $search['sku_prefix_min_length'],
+            (float) $search['spec_weight'],
+            $synonyms,
+            (int) $search['alias_max_variants'],
+            (bool) $search['require_all_terms'],
+            (float) $search['tag_weight'],
+            (float) $search['brand_weight'],
+            (float) $search['category_weight'],
+            (float) $search['collapse_weight'],
+            (int) $search['collapse_min_length'],
+            (int) $search['soft_and_min_results'],
+            (float) $search['soft_and_min_coverage'],
+            (float) $search['soft_and_partial_penalty'],
+            (int) $search['soft_and_candidate_cap'],
+            (int) $search['facet_min_products']
+        );
+
+        return $keyword;
     }
 
     /**
@@ -474,6 +513,9 @@ final class SearchController
     /** @param array<string, mixed> $entry */
     private function writeLog(array $entry): void
     {
+        if ($this->logger === null) {
+            return;
+        }
         try {
             $this->logger->log($entry);
         } catch (Throwable $e) {

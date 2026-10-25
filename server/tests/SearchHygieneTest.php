@@ -24,7 +24,7 @@ final class SearchHygieneTest extends DatabaseTestCase
     private const ASSASSIN = 4;
     private const RAZER = 5;
 
-    private string $dataDir;
+    private string $dataDir = '';
     private string $errorLog = '';
     private string $previousErrorLog = '';
 
@@ -41,7 +41,7 @@ final class SearchHygieneTest extends DatabaseTestCase
             $this->row(7, 'Battle Royale Poster', 5),
             $this->row(8, 'Battery Pack 5000', 5),
         ]);
-        $this->dataDir = sys_get_temp_dir() . '/hygiene_' . uniqid('', true);
+        $this->dataDir = TempTree::path('hygiene');
         mkdir($this->dataDir);
         $this->writeAliases([['mafia', 'مافیا']]);
         $this->errorLog = (string) tempnam(sys_get_temp_dir(), 'hyglog_');
@@ -52,8 +52,7 @@ final class SearchHygieneTest extends DatabaseTestCase
     {
         ini_set('error_log', $this->previousErrorLog);
         @unlink($this->errorLog);
-        array_map('unlink', glob($this->dataDir . '/*') ?: []);
-        rmdir($this->dataDir);
+        TempTree::removeIfAssigned($this->dataDir);
         Synonyms::clearCache();
     }
 

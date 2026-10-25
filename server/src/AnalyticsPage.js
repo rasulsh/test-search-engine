@@ -438,8 +438,8 @@
         tile(T.tiles.zero_unique, P(r.zero_result.rate), 'tile_zero_unique'), tile(T.tiles.cold_p95, M(c.p95), 'tile_cold_p95'),
         tile(T.tiles.capped, P(r.capped_share.share), 'tile_capped')];
       if (e.tracking) {
-        extra.push(tile(T.tiles.ctr, P(e.ctr), 'tile_ctr'), tile(T.tiles.mrr, fmt.d2(e.mrr), 'tile_mrr'),
-          tile(T.tiles.cart, P(e.cart_rate), 'tile_cart'));
+        // Cart and order rates stay in the JSON report; the storefront's own analytics owns those figures.
+        extra.push(tile(T.tiles.ctr, P(e.ctr), 'tile_ctr'), tile(T.tiles.mrr, fmt.d2(e.mrr), 'tile_mrr'));
       }
       tiles.append.apply(tiles, extra);
       if (delta) {

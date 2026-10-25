@@ -37,8 +37,7 @@ so schema changes such as the `sku` and `normalized_specs` columns reach the liv
 swap with no manual `ALTER`; then its rows, normalized columns from the canonical Normalizer,
 split into statements of at most `SEARCH_LOAD_MAX_STATEMENT_BYTES`, 1 MB by
 default, so each fits a shared host's `max_allowed_packet`),
-`synonyms.json`, `aliases.json` (the owner's [alias file](SEARCH-BEHAVIOR.md#aliases),
-normalized), `intent_map.json` (the owner's [intent map](SEARCH-BEHAVIOR.md#intent-map), keys checked
+`synonyms.json` (no `aliases.json` since M41: the owner's [aliases](SEARCH-BEHAVIOR.md#aliases) live on the server, [panel-edited](ADMIN.md#alias-manager-m41)), `intent_map.json` (the owner's [intent map](SEARCH-BEHAVIOR.md#intent-map), keys checked
 to be normalized), `spellcheck.txt`, `keymap.json`, and `meta.json`
 (`{model, revision, dim, normalization_version, count, built_at, checksum, embedder}`).
 M21 added the `normalized_tags`, `normalized_brand` and `normalized_category`

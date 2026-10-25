@@ -1,6 +1,6 @@
 # Alias generator (M25)
 
-`pipeline/gen_aliases.py` fills `pipeline/aliases.json` (the equivalence groups
+`pipeline/gen_aliases.py` fills `pipeline/aliases.json` (since M41 only a seed and the `--merge` target; paste the result into the panel's advanced editor) (the equivalence groups
 of [SEARCH-BEHAVIOR.md](SEARCH-BEHAVIOR.md#aliases)) with the Persian spellings
 shoppers type for English catalog names, so "مدرن وارفار" finds "Modern Warfare".
 It is **offline and prep-time only**: search never calls an LLM, and the runtime

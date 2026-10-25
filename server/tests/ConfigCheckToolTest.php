@@ -55,15 +55,44 @@ final class ConfigCheckToolTest extends TestCase
         self::assertStringContainsString('ERROR  db.dsn', $out);
     }
 
-    public function testWarningsDoNotFailAndVerboseAddsTheDefaults(): void
+    public function testWarningsDoNotFailAndVerboseListsEveryKeyWithItsSource(): void
     {
         [$status, $out] = $this->runTool(
-            ['db' => ['dsn' => 'x', 'user' => 'u'], 'typo' => 1],
+            ['db' => ['dsn' => 'x', 'user' => 'u'], 'search' => ['title_weight' => 7.5], 'typo' => 1],
             '--verbose'
         );
 
         self::assertSame(0, $status, $out);
         self::assertStringContainsString('WARN   typo: unknown key', $out);
-        self::assertStringContainsString('INFO   search.title_weight: code default', $out);
+        // A key config.php sets, with its value, and one left at the code default.
+        self::assertStringContainsString('INFO   search.title_weight = 7.5 [config.php]', $out);
+        self::assertMatchesRegularExpression('/^INFO   search\.desc_weight = \S+ \[code default\]$/m', $out);
+        self::assertStringContainsString("INFO   admin.username = '' [code default]", $out);
+        // An unknown key is warned about, not listed.
+        self::assertStringNotContainsString('INFO   typo', $out);
+    }
+
+    public function testVerboseNeverPrintsACredentialOnlyWhetherItIsSet(): void
+    {
+        [, $out] = $this->runTool([
+            'db' => ['dsn' => 'mysql:host=secret-host;dbname=d', 'user' => 'secret-user', 'password' => 'secret-pass'],
+            'reload' => ['token' => 'secret-token'],
+            'admin' => TempConfig::admin(),
+        ], '--verbose');
+
+        foreach (['secret-host', 'secret-user', 'secret-pass', 'secret-token', TempConfig::ADMIN_PASSWORD] as $secret) {
+            self::assertStringNotContainsString($secret, $out);
+        }
+        self::assertStringContainsString('INFO   db.password = set [config.php]', $out);
+        self::assertStringContainsString('INFO   reload.token = set [config.php]', $out);
+        self::assertStringContainsString('INFO   admin.password_hash = set [config.php]', $out);
+        self::assertStringContainsString('INFO   vps.token = empty [code default]', $out);
+    }
+
+    public function testWithoutVerboseNoValueIsPrinted(): void
+    {
+        [, $out] = $this->runTool(['db' => ['dsn' => 'x', 'user' => 'u'], 'search' => ['title_weight' => 7.5]]);
+        self::assertStringNotContainsString('7.5', $out);
+        self::assertStringNotContainsString('INFO', $out);
     }
 }

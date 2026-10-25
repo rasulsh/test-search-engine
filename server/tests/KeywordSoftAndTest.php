@@ -227,7 +227,7 @@ final class KeywordSoftAndTest extends DatabaseTestCase
 
     public function testSearchEndpointWiringReadsAliasesFromTheDataDirectory(): void
     {
-        $dir = sys_get_temp_dir() . '/softand_' . uniqid('', true);
+        $dir = TempTree::path('softand');
         mkdir($dir);
         file_put_contents($dir . '/' . Synonyms::ALIASES_FILE, '[["وارفار", "warfare"], ["مدرن", "modern"]]');
         Synonyms::clearCache();
@@ -246,8 +246,7 @@ final class KeywordSoftAndTest extends DatabaseTestCase
                 $strict['product_ids']
             );
         } finally {
-            unlink($dir . '/' . Synonyms::ALIASES_FILE);
-            rmdir($dir);
+            TempTree::remove($dir);
             Synonyms::clearCache();
         }
     }
@@ -260,7 +259,7 @@ final class KeywordSoftAndTest extends DatabaseTestCase
             'queries'  => ['*' => [1.0, 0.0, 0.0, 0.0]],
             'products' => [self::MW_TITLE => [1.0, 0.0, 0.0, 0.0]],
         ]);
-        $dir = sys_get_temp_dir() . '/softand_' . uniqid('', true);
+        $dir = TempTree::path('softand');
         mkdir($dir);
         file_put_contents($dir . '/' . Synonyms::ALIASES_FILE, '[["وارفار", "warfare"]]');
         Synonyms::clearCache();
@@ -276,8 +275,7 @@ final class KeywordSoftAndTest extends DatabaseTestCase
             self::assertContains(self::MW_TITLE, $hybrid['product_ids']);
             self::assertNotContains(self::MODERN_DESK, $hybrid['product_ids']);
         } finally {
-            unlink($dir . '/' . Synonyms::ALIASES_FILE);
-            rmdir($dir);
+            TempTree::remove($dir);
             Synonyms::clearCache();
         }
     }

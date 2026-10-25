@@ -25,10 +25,7 @@ final class AdminOpsTest extends DatabaseTestCase
     protected function tearDown(): void
     {
         foreach ($this->dirs as $dir) {
-            foreach (glob($dir . '/*') ?: [] as $file) {
-                @unlink($file);
-            }
-            @rmdir($dir);
+            TempTree::remove($dir);
         }
         $this->dirs = [];
     }
@@ -148,7 +145,7 @@ final class AdminOpsTest extends DatabaseTestCase
 
     private function bundle(int $count, array $meta = []): string
     {
-        $dir = sys_get_temp_dir() . '/adminops_' . uniqid('', true);
+        $dir = TempTree::path('adminops');
         mkdir($dir);
         $this->dirs[] = $dir;
         $bin = pack('g*', ...array_fill(0, $count * 4, 0.5));
@@ -178,7 +175,7 @@ final class AdminOpsTest extends DatabaseTestCase
         foreach ([3000, 3001] as $id) {
             $insert->execute([$id]);
         }
-        $data = sys_get_temp_dir() . '/adminops_' . uniqid('', true) . '_data';
+        $data = TempTree::path('adminops') . '_data';
         $incoming = $this->bundle(2);
         $ops = $this->opsFor($data, $incoming);
 
@@ -200,7 +197,7 @@ final class AdminOpsTest extends DatabaseTestCase
 
     public function testARejectedBundleIsReportedWithItsReasonAndNothingChanges(): void
     {
-        $data = sys_get_temp_dir() . '/adminops_' . uniqid('', true) . '_data';
+        $data = TempTree::path('adminops') . '_data';
         $incoming = $this->bundle(2, ['normalization_version' => 9]);
 
         $result = $this->opsFor($data, $incoming)->apply(false);
@@ -214,7 +211,7 @@ final class AdminOpsTest extends DatabaseTestCase
 
     public function testASecondOperationWhileOneRunsIsBusyNotQueued(): void
     {
-        $data = sys_get_temp_dir() . '/adminops_' . uniqid('', true) . '_data';
+        $data = TempTree::path('adminops') . '_data';
         $incoming = $this->bundle(2);
         $held = fopen(dirname($data) . '/reload.lock', 'c');
         flock($held, LOCK_EX | LOCK_NB);
@@ -230,7 +227,7 @@ final class AdminOpsTest extends DatabaseTestCase
 
     public function testRollbackWithNothingToRollBackToIsAnAuditedRefusal(): void
     {
-        $result = $this->opsFor(sys_get_temp_dir() . '/adminops_none_data', sys_get_temp_dir() . '/adminops_none_in')->rollback();
+        $result = $this->opsFor(TempTree::root() . '/adminops_none_data', TempTree::root() . '/adminops_none_in')->rollback();
 
         self::assertFalse($result['ok']);
         self::assertSame('nothing_to_roll_back', $result['reason']);
@@ -269,7 +266,7 @@ final class AdminOpsTest extends DatabaseTestCase
     {
         $reasons = AdminStrings::fa()['ops']['reasons'];
         $known = ['busy', 'nothing_to_roll_back', 'missing_meta', 'invalid_meta', 'model_mismatch', 'dim_mismatch',
-            'normalization_version_mismatch', 'invalid_synonyms', 'invalid_aliases', 'invalid_intent_map',
+            'normalization_version_mismatch', 'invalid_synonyms', 'invalid_intent_map',
             'count_mismatch', 'missing_index', 'missing_vectors', 'vectors_size_mismatch', 'checksum_mismatch',
             'missing_staging_table', 'missing_load_sql', 'staging_load_failed', 'unexpected_statement',
             'directory_swap_failed', 'lock_unavailable', 'redis_off', 'redis_unreachable', 'vps_off', 'internal'];

@@ -15,15 +15,14 @@ final class SynonymsTest extends TestCase
     protected function tearDown(): void
     {
         foreach ($this->tempDirs as $dir) {
-            array_map('unlink', glob($dir . '/*') ?: []);
-            rmdir($dir);
+            TempTree::remove($dir);
         }
         Synonyms::clearCache();
     }
 
     private function dataDir(?string $synonyms, ?string $aliases): string
     {
-        $dir = sys_get_temp_dir() . '/synonyms_' . uniqid('', true);
+        $dir = TempTree::path('synonyms');
         mkdir($dir);
         $this->tempDirs[] = $dir;
         if ($synonyms !== null) {
@@ -34,6 +33,40 @@ final class SynonymsTest extends TestCase
         }
 
         return $dir;
+    }
+
+    public function testAliasesCanComeFromAnotherFileThanTheBundle(): void
+    {
+        $dir = $this->dataDir(null, '[["gta", "bundle only"]]');
+        $storage = $this->dataDir(null, '[["gta", "grand theft auto"]]');
+        $storageFile = $storage . '/' . Synonyms::ALIASES_FILE;
+
+        $fromStorage = Synonyms::fromDirectory($dir, 4, $storageFile);
+        self::assertSame([['gta'], ['grand', 'theft', 'auto']], $fromStorage->variants(['gta'], 4));
+        // The default stays the bundle's own file.
+        self::assertSame([['gta'], ['bundle', 'only']], Synonyms::fromDirectory($dir, 4)->variants(['gta'], 4));
+
+        // A save through the panel changes the file: the next search sees it (the version changes with it).
+        $version = $fromStorage->version();
+        file_put_contents($storageFile, '[["gta", "جی تی ای"]]');
+        $next = Synonyms::fromDirectory($dir, 4, $storageFile);
+        self::assertNotSame($version, $next->version());
+        self::assertSame([['gta'], ['جی', 'تی', 'ای']], $next->variants(['gta'], 4));
+    }
+
+    public function testAliasTokensAreTheTokensOfTheMergedOwnerGroupsOnly(): void
+    {
+        $dir = $this->dataDir('[["laptop", "لپ تاپ"]]', '[["ps5", "پلی استیشن 5"], ["PS5", "پی اس فایو"]]');
+        $tokens = Synonyms::fromDirectory($dir, 4)->aliasTokens();
+
+        self::assertEqualsCanonicalizing(['ps5', 'پلی', 'استیشن', '5', 'پی', 'اس', 'فایو'], $tokens);
+        self::assertSame([], (new Synonyms([['a', 'b']]))->aliasTokens());
+    }
+
+    public function testAMissingAliasFileMeansNoAliasTokens(): void
+    {
+        $dir = $this->dataDir(null, null);
+        self::assertSame([], Synonyms::fromDirectory($dir, 4, $dir . '/nope.json')->aliasTokens());
     }
 
     public function testPhraseAliasExpandsBothWays(): void

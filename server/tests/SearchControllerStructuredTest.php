@@ -25,7 +25,7 @@ final class SearchControllerStructuredTest extends DatabaseTestCase
     protected function setUp(): void
     {
         parent::setUp();
-        $this->dataDir = sys_get_temp_dir() . '/m21_data_' . uniqid('', true);
+        $this->dataDir = TempTree::path('m21_data');
         mkdir($this->dataDir, 0777, true);
         file_put_contents($this->dataDir . '/aliases.json', '[["سامسونگ", "samsung"]]');
         Synonyms::clearCache();
@@ -47,8 +47,7 @@ final class SearchControllerStructuredTest extends DatabaseTestCase
 
     protected function tearDown(): void
     {
-        @unlink($this->dataDir . '/aliases.json');
-        @rmdir($this->dataDir);
+        TempTree::removeIfAssigned($this->dataDir);
         Synonyms::clearCache();
     }
 

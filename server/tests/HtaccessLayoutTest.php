@@ -16,7 +16,12 @@ final class HtaccessLayoutTest extends TestCase
     /** @return array<string, array{string}> */
     public static function deniedDirectories(): array
     {
-        return ['app tree' => ['.'], 'data' => ['data'], 'data_incoming' => ['data_incoming']];
+        return [
+            'app tree' => ['.'],
+            'data' => ['data'],
+            'data_incoming' => ['data_incoming'],
+            'storage' => ['storage'],
+        ];
     }
 
     #[\PHPUnit\Framework\Attributes\DataProvider('deniedDirectories')]

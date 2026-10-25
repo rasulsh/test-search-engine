@@ -1,7 +1,7 @@
 """One-command release: catalog export in -> a single deployable release.zip.
 
     python pipeline/release.py --csv export.csv --out release.zip
-        [--desc-index-chars N] [--aliases aliases.json] [--intent-map intent_map.json]
+        [--desc-index-chars N] [--intent-map intent_map.json]
         [--vps-out DIR | --no-vps]
 
 Builds the bundle and packs, relative to the host's
@@ -11,7 +11,7 @@ Builds the bundle and packs, relative to the host's
     bootstrap.php, config.example.php, src/, public/ (incl. public/install.php),
     tools/config-check.php (the config doctor), tools/logs-export.php (log export, M36),
     tools/admin-password.php (admin password hash, M39), tools/_php-guard.php (their PHP 8.1 check)
-    .htaccess, data/.htaccess, data_incoming/.htaccess (deny-all safety nets)
+    .htaccess, data/.htaccess, data_incoming/.htaccess, storage/.htaccess (deny-all safety nets)
     db/schema.sql         read by install.php on the first deploy
     db/migrations/        one-off SQL for an existing database (apply by hand, see docs/DEPLOY.md)
 
@@ -65,7 +65,8 @@ SERVER_CODE = ("bootstrap.php", "config.example.php", "src", "public", "tools/co
                "tools/logs-export.php", "tools/admin-password.php", "tools/_php-guard.php")
 # Deny-all files (M30): a safety net if the tree is ever misplaced under a web root.
 # The bundle's own data_incoming/.htaccess becomes data/.htaccess on reload.
-SAFETY_NET = (".htaccess", "data/.htaccess", "data_incoming/.htaccess")
+# storage/ (M41) holds the owner's aliases and their backups; only its deny-all file ships.
+SAFETY_NET = (".htaccess", "data/.htaccess", "data_incoming/.htaccess", "storage/.htaccess")
 
 
 def _files(root: Path, relative: str) -> Iterator[tuple[Path, str]]:
@@ -148,8 +149,6 @@ def main(argv: list[str] | None = None) -> int:
                         help="Leading description characters keyword-indexed (default "
                              "SEARCH_DESC_INDEX_CHARS or 800; 0 = whole description). "
                              "Build-time only: the server never re-indexes.")
-    parser.add_argument("--aliases", help="Alias file shipped in the bundle (default "
-                                          "SEARCH_ALIASES_FILE, else pipeline/aliases.json).")
     parser.add_argument("--intent-map", help="Intent map file shipped in the bundle (default "
                                              "SEARCH_INTENT_MAP_FILE, else "
                                              "pipeline/intent_map.json).")
@@ -174,16 +173,11 @@ def main(argv: list[str] | None = None) -> int:
         if args.desc_index_chars < 0:
             parser.error("--desc-index-chars must be 0 or more")
         config["build"]["desc_index_chars"] = args.desc_index_chars
-    if args.aliases:
-        if not Path(args.aliases).is_file():
-            parser.error(f"alias file not found: {args.aliases}")
-        config["build"]["aliases_file"] = args.aliases
     if args.intent_map:
         if not Path(args.intent_map).is_file():
             parser.error(f"intent map file not found: {args.intent_map}")
         config["build"]["intent_map_file"] = args.intent_map
     try:
-        build._keyword.load_aliases(config["build"]["aliases_file"])
         build._keyword.load_intent_map(config["build"]["intent_map_file"])
     except ValueError as exc:
         parser.error(str(exc))

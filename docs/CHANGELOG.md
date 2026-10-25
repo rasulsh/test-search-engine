@@ -10,6 +10,19 @@ holds overrides). A **renamed** key keeps working for two releases (its value is
 config doctor / status page warn with the new name. A **removed** key is ignored; the doctor says why and that the
 line can be deleted. `php server/tools/config-check.php` lists all of it.
 
+## M41: alias manager and synonyms viewer
+
+- **Added**:
+  - `paths.storage` = `<app base>/storage` (the owner's `aliases.json` and its `backups/`; writable by the PHP user,
+    never served: `storage/.htaccess` ships in `release.zip`).
+  - `admin.alias_max_term_chars` = `64`, `admin.alias_warn_matches` = `500` (a term that alone matches more products
+    than this needs a confirm), `admin.alias_backups` = `20` (newest backups kept).
+- **Removed / renamed / changed defaults**: none. The build no longer reads or ships aliases, so
+  `SEARCH_ALIASES_FILE` / `build.aliases_file` only feed `gen_aliases.py --merge` and seed new installs.
+- **Upgrade**: no action needed. The first visit to `?p=aliases` creates `storage/aliases.json` from the live bundle's
+  `aliases.json`; until then the search reads the bundle's file. `/reload` no longer validates a bundled
+  `aliases.json` (`invalid_aliases` is gone) and never touches storage.
+
 ## M40: operations page, config upgrade safety
 
 - **Added**: `vps.reload_timeout_ms` = `60000` (timeout of the panel's "load the uploaded vectors on the VPS" call).

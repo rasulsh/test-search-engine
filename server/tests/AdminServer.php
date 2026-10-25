@@ -27,7 +27,7 @@ final class AdminServer
         fclose($socket);
         $port = (int) substr($address, (int) strrpos($address, ':') + 1);
 
-        $this->sessionDir = sys_get_temp_dir() . '/admin_sessions_' . uniqid('', true);
+        $this->sessionDir = TempTree::path('admin_sessions');
         mkdir($this->sessionDir, 0700, true);
         $overrides = array_replace_recursive([
             'admin' => TempConfig::admin() + ['trust_forwarded_proto' => true],
@@ -79,9 +79,6 @@ final class AdminServer
     {
         proc_terminate($this->process);
         proc_close($this->process);
-        foreach (glob($this->sessionDir . '/sess_*') ?: [] as $file) {
-            @unlink($file);
-        }
-        @rmdir($this->sessionDir);
+        TempTree::remove($this->sessionDir);
     }
 }

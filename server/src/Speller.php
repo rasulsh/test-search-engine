@@ -40,6 +40,8 @@ final class Speller
     private const MAX_CODES = 255;
     private const UNKNOWN_CODE = "\xFF";
     private const SHORT_TOKEN = 4;
+    /** Each token of an owner alias counts as at least this many products (pipeline/keyword.py ALIAS_TOKEN_COUNT). */
+    public const ALIAS_TOKEN_COUNT = 5;
     // Shorter tokens are codes and abbreviations ("mw4"): every near word is a wrong guess.
     private const MIN_CORRECTED = 4;
     // Up to this length a typo rarely hits the first letter, so a candidate must share it.
@@ -60,6 +62,14 @@ final class Speller
      * @var array<string, self>
      */
     private static array $instances = [];
+
+    /**
+     * The alias overlay last built from each base speller: [version, overlay]. Weak, so a base
+     * dropped by a dictionary reload takes its overlay with it.
+     *
+     * @var \WeakMap<self, array{0: string, 1: self}>|null
+     */
+    private static ?\WeakMap $overlays = null;
 
     /** @var array<string, int> token => frequency */
     private array $vocabulary;
@@ -262,6 +272,58 @@ final class Speller
     {
         $copy = clone $this;
         $copy->blocked = array_fill_keys($tokens, 0);
+
+        return $copy;
+    }
+
+    /**
+     * The same speller that also knows the owner's alias words: every token of 2+ characters seen
+     * fewer than $count times in the catalog counts as $count, so an alias word is never "corrected"
+     * and can be offered. Built from the live alias file at search time (the file is edited in the
+     * panel, not in the bundle); the overlay is cached per base speller and $version.
+     *
+     * @param list<string> $tokens
+     */
+    public function withExtraWords(array $tokens, int $count, string $version): self
+    {
+        if ($tokens === []) {
+            return $this;
+        }
+        self::$overlays ??= new \WeakMap();
+        $cached = self::$overlays[$this] ?? null;
+        if ($cached !== null && $cached[0] === $version) {
+            return $cached[1];
+        }
+
+        $copy = clone $this;
+        foreach ($tokens as $token) {
+            $token = (string) $token;
+            $length = mb_strlen($token);
+            if ($length < 2 || ($copy->vocabulary[$token] ?? 0) >= $count) {
+                continue;
+            }
+            $copy->vocabulary[$token] = $count;
+            $updated = false;
+            foreach ($copy->byLength[$length] ?? [] as $i => $entry) {
+                if ((string) $entry[0] === $token) {
+                    $copy->byLength[$length][$i][2] = $count;
+                    $updated = true;
+                    break;
+                }
+            }
+            if (!$updated) {
+                $encoded = '';
+                foreach (mb_str_split($token) as $char) {
+                    if (!isset($copy->codes[$char])) {
+                        $encoded = null;
+                        break;
+                    }
+                    $encoded .= $copy->codes[$char];
+                }
+                $copy->byLength[$length][] = [$token, $encoded, $count];
+            }
+        }
+        self::$overlays[$this] = [$version, $copy];
 
         return $copy;
     }

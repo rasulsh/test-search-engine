@@ -17,10 +17,7 @@ final class SpellerTest extends TestCase
     protected function tearDown(): void
     {
         foreach ($this->tempDirs as $dir) {
-            foreach (glob($dir . '/*') ?: [] as $file) {
-                unlink($file);
-            }
-            rmdir($dir);
+            TempTree::remove($dir);
         }
         $this->tempDirs = [];
         self::resetProcessCache();
@@ -231,9 +228,82 @@ final class SpellerTest extends TestCase
         }
     }
 
+    private static function vocabularyOf(Speller $speller): array
+    {
+        return (new ReflectionProperty(Speller::class, 'vocabulary'))->getValue($speller);
+    }
+
+    public function testAnAliasWordIsKnownAndNoLongerCorrected(): void
+    {
+        $base = $this->speller();
+        // "sont" is one edit from the catalog word "sony": without the overlay it is "fixed".
+        self::assertSame('sony camera', $base->suggest('sont camera'));
+
+        $overlay = $base->withExtraWords(['sont'], Speller::ALIAS_TOKEN_COUNT, 'v1');
+        self::assertNull($overlay->suggest('sont camera'));
+    }
+
+    public function testAnAliasWordCanBeOfferedAsTheCorrectionOfATypo(): void
+    {
+        $base = $this->speller();
+        self::assertNull($base->suggest('wolverin'));
+
+        $overlay = $base->withExtraWords(['wolverine', 'ولورینگ'], Speller::ALIAS_TOKEN_COUNT, 'v1');
+        self::assertSame('wolverine', $overlay->suggest('wolverin'));
+        self::assertSame('ولورینگ', $overlay->suggest('ولورینک'));
+    }
+
+    public function testOnlyWordsBelowTheCountAreRaisedAndOneCharacterTokensAreSkipped(): void
+    {
+        $base = new Speller(Speller::buildVocabulary(['camera camera camera camera camera camera sony']));
+        $overlay = $base->withExtraWords(['camera', 'sony', 'a', 'wolverine'], 5, 'v1');
+        $vocabulary = self::vocabularyOf($overlay);
+
+        self::assertSame(6, $vocabulary['camera'], 'a more frequent catalog word keeps its own count');
+        self::assertSame(5, $vocabulary['sony']);
+        self::assertSame(5, $vocabulary['wolverine']);
+        self::assertArrayNotHasKey('a', $vocabulary);
+    }
+
+    public function testTheBaseSpellerIsNeverModified(): void
+    {
+        $base = $this->speller();
+        $before = self::vocabularyOf($base);
+        $base->withExtraWords(['wolverine'], 5, 'v1');
+
+        self::assertSame($before, self::vocabularyOf($base));
+        self::assertNull($base->suggest('wolverin'));
+    }
+
+    public function testNoAliasWordsReturnsTheSameSpeller(): void
+    {
+        $base = $this->speller();
+        self::assertSame($base, $base->withExtraWords([], 5, 'v1'));
+    }
+
+    public function testTheOverlayIsCachedPerBaseAndVersionAndRebuiltFromTheBaseOnANewVersion(): void
+    {
+        $base = $this->speller();
+        $first = $base->withExtraWords(['wolverine'], 5, 'v1');
+        self::assertSame($first, $base->withExtraWords(['wolverine'], 5, 'v1'));
+
+        // The owner deleted the term and added another: the new overlay must not remember the old word.
+        $second = $base->withExtraWords(['venom'], 5, 'v2');
+        self::assertNotSame($first, $second);
+        self::assertNull($second->suggest('wolverin'));
+        self::assertSame('venom', $second->suggest('venon'));
+        self::assertArrayNotHasKey('wolverine', self::vocabularyOf($second));
+    }
+
+    public function testAnAliasOverlayHonoursTheBlocklist(): void
+    {
+        $overlay = $this->speller()->withExtraWords(['wolverine'], 5, 'v1')->withBlocked(['wolverine']);
+        self::assertNull($overlay->suggest('wolverin'));
+    }
+
     private function tempDir(): string
     {
-        $dir = sys_get_temp_dir() . '/speller_' . uniqid('', true);
+        $dir = TempTree::path('speller');
         mkdir($dir, 0777, true);
         $this->tempDirs[] = $dir;
 

@@ -59,7 +59,8 @@ from normalize import NORMALIZATION_VERSION
 REPO_ROOT = Path(__file__).resolve().parents[1]
 # config.example.php is the template for a first deploy; config.php is never packed.
 # Three tools ship (run on the host after unzipping): the config doctor, since M36 the
-# log export and, since M39, the admin password hash maker. tools/eval.php is dev-only and stays out.
+# log export and, since M39, the admin password hash maker. tools/eval.php is dev-only and
+# stays out.
 SERVER_CODE = ("bootstrap.php", "config.example.php", "src", "public", "tools/config-check.php",
                "tools/logs-export.php", "tools/admin-password.php")
 # Deny-all files (M30): a safety net if the tree is ever misplaced under a web root.

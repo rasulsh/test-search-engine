@@ -19,7 +19,7 @@ final class NormalizationVersionBumpTest extends DatabaseTestCase
 {
     private const COUNT = 2;
 
-    private string $serverDir;
+    private string $serverDir = '';
 
     protected function setUp(): void
     {
@@ -36,8 +36,10 @@ final class NormalizationVersionBumpTest extends DatabaseTestCase
 
     protected function tearDown(): void
     {
-        InstallerTest::removeDir($this->serverDir);
-        $this->pdo->exec('DROP TABLE IF EXISTS products_new, products_old');
+        TempTree::removeIfAssigned($this->serverDir);
+        if (isset($this->pdo)) { // a skipped setUp never connected
+            $this->pdo->exec('DROP TABLE IF EXISTS products_new, products_old');
+        }
     }
 
     public function testReloadAcceptsABumpedVersionWithNoConfigEdit(): void

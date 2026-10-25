@@ -17,7 +17,7 @@ from normalize import NORMALIZATION_VERSION
 REPO_ROOT = Path(__file__).resolve().parents[2]
 INPUT_SQL = REPO_ROOT / "fixtures" / "products.input.sql"
 BUNDLE_FILES = ("vectors.bin", "vectors.idx", "products.load.sql", "synonyms.json",
-                "aliases.json", "intent_map.json", "spellcheck.txt", "keymap.json", "meta.json")
+                "intent_map.json", "spellcheck.txt", "keymap.json", "meta.json")
 
 
 @pytest.fixture()
@@ -32,7 +32,8 @@ def dev_tree(tmp_path: Path) -> Path:
                 "tools/config-check.php", "tools/logs-export.php", "tools/admin-password.php",
                 "tools/_php-guard.php", "public/.htaccess",
                 "public/app_base.php",
-                ".htaccess", "data/.htaccess", "data_incoming/.htaccess"):
+                ".htaccess", "data/.htaccess", "data_incoming/.htaccess", "storage/.htaccess",
+                "storage/aliases.json", "storage/backups/aliases-20260101-000000-000000.json"):
         (server / rel).parent.mkdir(parents=True, exist_ok=True)
         (server / rel).write_text(rel, encoding="utf-8")
     return server
@@ -65,6 +66,8 @@ def test_release_packs_bundle_under_data_incoming_and_the_server_code(
     assert not any(n.endswith("config.php") for n in names)
     assert "config.example.php" in names  # install.php's template
     assert [n for n in names if n.startswith("data/")] == ["data/.htaccess"]  # no live data
+    # The owner's aliases and backups (M41) never ship: only the deny-all net around storage/.
+    assert [n for n in names if n.startswith("storage/")] == ["storage/.htaccess"]
     assert not any(n.startswith("tests/") for n in names)
     # The tools shipped (run on the host after unzipping): the config doctor, the log
     # export (M36) and the admin password hash maker (M39); never the dev-only tools/eval.php.
@@ -73,8 +76,8 @@ def test_release_packs_bundle_under_data_incoming_and_the_server_code(
         "tools/logs-export.php"]
     assert "data_incoming/old.txt" not in names
     # M30 layout: unzipped into server/, public/ stays a child of it, with the deny-all nets.
-    assert {".htaccess", "data/.htaccess", "data_incoming/.htaccess", "public/.htaccess",
-            "public/app_base.php"} <= set(names)
+    assert {".htaccess", "data/.htaccess", "data_incoming/.htaccess", "storage/.htaccess",
+            "public/.htaccess", "public/app_base.php"} <= set(names)
     assert not (tmp_path / "out" / "release.zip.tmp").exists()
     # First deploy needs nothing else: the web installer, its template, the schema.
     assert {"public/install.php", "config.example.php", "db/schema.sql"} <= set(names)
@@ -140,13 +143,18 @@ def test_release_stamps_the_code_version_whatever_the_environment_says(
     assert meta["normalization_version"] == NORMALIZATION_VERSION + 1
 
 
-def test_release_ships_the_alias_file(tmp_path: Path, dev_tree: Path) -> None:
-    aliases = tmp_path / "my_aliases.json"
-    aliases.write_text('[["GTA", "Grand Theft Auto"]]', encoding="utf-8")
-    _release(tmp_path, dev_tree, "--aliases", str(aliases))
+def test_release_ships_no_alias_file_and_rejects_the_old_flag(
+    tmp_path: Path, dev_tree: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # Aliases live on the server since M41; the release carries none.
+    _release(tmp_path, dev_tree)
     with zipfile.ZipFile(tmp_path / "out" / "release.zip") as archive:
-        shipped = json.loads(archive.read("data_incoming/aliases.json"))
-    assert shipped == [["gta", "grand theft auto"]]
+        assert "data_incoming/aliases.json" not in archive.namelist()
+    with pytest.raises(SystemExit) as exc:
+        release.main(["--sql", str(INPUT_SQL), "--out", str(tmp_path / "r.zip"),
+                      "--no-model", "--aliases", str(tmp_path / "aliases.json")])
+    assert exc.value.code == 2
+    assert "unrecognized arguments: --aliases" in capsys.readouterr().err
 
 
 def test_release_ships_the_intent_map_and_rejects_a_bad_one(
@@ -166,19 +174,6 @@ def test_release_ships_the_intent_map_and_rejects_a_bad_one(
     assert exc.value.code == 2
     assert "not in normalized form" in capsys.readouterr().err
 
-
-def test_release_rejects_a_missing_or_malformed_alias_file(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
-    broken = tmp_path / "aliases.json"
-    broken.write_text('[["gta", "grand theft auto"],]', encoding="utf-8")
-    for path in (tmp_path / "absent.json", broken):
-        with pytest.raises(SystemExit) as exc:
-            release.main(["--sql", str(INPUT_SQL), "--out", str(tmp_path / "r.zip"),
-                          "--no-model", "--aliases", str(path)])
-        assert exc.value.code == 2
-    assert "invalid JSON" in capsys.readouterr().err
-    assert not (tmp_path / "r.zip").exists()
 
 
 def _seen_embedders(monkeypatch: pytest.MonkeyPatch, *args: str) -> dict[str, str]:

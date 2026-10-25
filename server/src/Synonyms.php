@@ -39,14 +39,18 @@ final class Synonyms
     private array $byCollapsed = [];
     private int $longestPhrase = 0;
     private string $version;
+    /** @var list<string> */
+    private array $aliasTokens;
 
     /**
      * @param list<list<string>> $groups
      * @param string $version identifies the files the groups came from (see {@see version()})
+     * @param list<string> $aliasTokens every token of the owner's alias groups ({@see aliasTokens()})
      */
-    public function __construct(array $groups, string $version = '')
+    public function __construct(array $groups, string $version = '', array $aliasTokens = [])
     {
         $this->version = $version;
+        $this->aliasTokens = $aliasTokens;
         foreach ($groups as $group) {
             $terms = [];
             foreach ($group as $term) {
@@ -72,11 +76,14 @@ final class Synonyms
      * nothing and an unreadable one is skipped (search must never fail on it —
      * /reload validates the files before they go live). Cached per worker,
      * keyed by the files' content hashes, so the reload swap is picked up unaided.
+     *
+     * The owner's aliases come from $aliasesPath (the server's storage file, M41); the default
+     * stays the bundle's own `aliases.json` for an install that has not been seeded yet.
      */
-    public static function fromDirectory(string $dataDir, int $maxSynonymGroupSize): self
+    public static function fromDirectory(string $dataDir, int $maxSynonymGroupSize, ?string $aliasesPath = null): self
     {
         $synonymsPath = $dataDir . '/' . self::SYNONYMS_FILE;
-        $aliasesPath = $dataDir . '/' . self::ALIASES_FILE;
+        $aliasesPath ??= $dataDir . '/' . self::ALIASES_FILE;
         // Content hashes, not stat identities: the key is also part of the result-cache
         // key, so it must change exactly when an answer could, an edit that keeps the size
         // and lands in the same mtime tick included. Both files are small next to a query.
@@ -95,8 +102,20 @@ final class Synonyms
         $version = substr(sha1($key), 0, 12);
 
         $aliases = self::mergeOverlapping(self::readGroups($aliasesPath) ?? []);
+        $tokens = [];
+        foreach ($aliases as $group) {
+            foreach ($group as $term) {
+                foreach (Tokenizer::split($term) as $token) {
+                    $tokens[$token] = true;
+                }
+            }
+        }
 
-        return self::$cache[$key] = new self(array_merge($synonyms, $aliases), $version);
+        return self::$cache[$key] = new self(
+            array_merge($synonyms, $aliases),
+            $version,
+            array_map('strval', array_keys($tokens))
+        );
     }
 
     /**
@@ -156,6 +175,12 @@ final class Synonyms
         $phrase = $this->byCollapsed[Normalizer::collapse($normalized)] ?? null;
 
         return $phrase !== null && $phrase !== $normalized ? $phrase : null;
+    }
+
+    /** Tokens of the merged owner alias groups: the words the spell checker must treat as known. @return list<string> */
+    public function aliasTokens(): array
+    {
+        return $this->aliasTokens;
     }
 
     /** Drop cached maps (POST /reload, after the swap). */

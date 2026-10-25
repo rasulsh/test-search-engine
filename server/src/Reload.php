@@ -20,7 +20,7 @@ use Throwable;
  * class then, BEFORE swapping, rejects the bundle unless
  * model + dim + normalization_version match server config AND
  * meta.count == vectors.idx lines == staging rows == vectors.bin size/checksum,
- * and a present synonyms.json / aliases.json parses (M15).
+ * and a present synonyms.json / intent_map.json parses (M15; aliases left the bundle in M41).
  * On success it swaps the tables and the directory, keeping the previous table
  * and directory for one-step rollback ({@see rollback()}).
  *
@@ -221,7 +221,7 @@ final class Reload
      */
     private function finish(int $count): array
     {
-        // Searches in this worker re-read synonyms.json / aliases.json at once.
+        // Searches in this worker re-read synonyms.json (and the alias file) at once.
         Synonyms::clearCache();
         IntentMap::clearCache();
 
@@ -375,18 +375,15 @@ final class Reload
     }
 
     /**
-     * synonyms.json, aliases.json and intent_map.json are optional (older bundles
-     * have no aliases.json), but a present one must parse: the shop owner edits
-     * aliases.json by hand, and a typo there should fail the reload loudly
-     * rather than silently switch the aliases off.
+     * synonyms.json and intent_map.json are optional, but a present one must parse: a typo
+     * should fail the reload loudly rather than silently switch the feature off. A bundled
+     * aliases.json is ignored (M41): the owner's aliases live in storage/aliases.json, which a
+     * reload never reads, validates or writes.
      */
     private function assertGroupFiles(): void
     {
         if (!$this->groupsFileParses(Synonyms::SYNONYMS_FILE)) {
             throw new ReloadException('invalid_synonyms', ['file' => Synonyms::SYNONYMS_FILE]);
-        }
-        if (!$this->groupsFileParses(Synonyms::ALIASES_FILE)) {
-            throw new ReloadException('invalid_aliases', ['file' => Synonyms::ALIASES_FILE]);
         }
         $intentPath = $this->incomingDir . '/' . IntentMap::FILE;
         if (is_file($intentPath) && IntentMap::parse((string) file_get_contents($intentPath)) === null) {

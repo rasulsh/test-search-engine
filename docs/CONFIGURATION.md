@@ -67,6 +67,7 @@ It prints key paths only, never values, and exits non-zero on any ERROR, so a de
 | `events.allowed_origin` | empty | storefront origin for a `fetch()`-based events call (CORS); `sendBeacon` needs none |
 | `paths.data` | `server/data` | active bundle (spellcheck, synonyms, aliases, keymap) |
 | `paths.data_incoming` | `server/data_incoming` | staging directory for the atomic reload swap |
+| `paths.storage` | `server/storage` | the owner's `aliases.json` and its `backups/` (M41); writable, never served |
 | `reload.token` | empty | enables `POST /reload` (`X-Reload-Token`); set a strong random value |
 
 ### Bundle compatibility (checked on `POST /reload`, contract 3)
@@ -194,6 +195,9 @@ reports an unset admin config as a warning and a half-set or non-hash one as an 
 | `admin.trusted_proxies` | empty | comma separated IPs / CIDR of reverse proxies whose `X-Forwarded-For` is believed (read from the right); empty = the client is `REMOTE_ADDR` and the header is ignored |
 | `admin.trust_forwarded_proto` | false | accept `X-Forwarded-Proto: https` as HTTPS (TLS ended at a proxy) |
 | `admin.probe_timeout_ms` | 1000 | timeout of the status page's VPS `/health` and Redis probes |
+| `admin.alias_max_term_chars` | 64 | longest alias term (M41); longer is an error |
+| `admin.alias_warn_matches` | 500 | an alias term matching more products than this needs a confirm (M41) |
+| `admin.alias_backups` | 20 | newest alias backups kept (M41) |
 | `db.admin_audit_table` | `admin_audit` | the audit table ([migration](../db/migrations/2026-10-25_admin_audit.sql)) |
 | `storefront.store_base`, `storefront.image_base` | empty | absolute bases for `with_details` product links and images; empty keeps the exported values |
 

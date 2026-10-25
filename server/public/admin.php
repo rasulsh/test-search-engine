@@ -2,14 +2,17 @@
 
 /**
  * The admin panel (M39): one entry file, routed with `?p=`. Persian RTL, username + password
- * login, its own session, CSRF on every POST, HTTPS only. Pages: status, analytics, logs, audit,
- * help. `?p=analytics&format=json` is the dashboard's JSON for a logged-in session.
+ * login, its own session, CSRF on every POST, HTTPS only. Pages: status, ops, aliases (M41), synonyms,
+ * tester, analytics, logs, audit, help. `?p=analytics&format=json` is the dashboard's JSON for a
+ * logged-in session.
  * Setup and settings: docs/ADMIN.md.
  */
 
 declare(strict_types=1);
 
 use App\AdminAuth;
+use App\AdminAliases;
+use App\AdminAliasViews;
 use App\AdminOps;
 use App\AdminOpsViews;
 use App\AdminPage;
@@ -23,7 +26,10 @@ use App\Config;
 use App\ConfigDoctor;
 use App\Db;
 use App\LogsPage;
+use App\ProductDetails;
 use App\Reload;
+use App\SearchController;
+use App\Synonyms;
 
 /** @var array<string, mixed> $config */
 if (!isset($config)) {
@@ -87,7 +93,7 @@ try {
     $auth = new AdminAuth($admin, $audit);
     $auth->start($mount);
 
-    $pages = ['status', 'ops', 'analytics', 'logs', 'audit', 'help'];
+    $pages = ['status', 'ops', 'aliases', 'synonyms', 'tester', 'analytics', 'logs', 'audit', 'help'];
     $page = (string) ($_GET['p'] ?? 'status');
     $json = $page === 'analytics' && ($_GET['format'] ?? '') === 'json';
     $state = $auth->check(time(), $json);
@@ -157,12 +163,40 @@ try {
         $redirect('p=status');
         return;
     }
-    if (!in_array($page, $pages, true) || ($method !== 'GET' && $page !== 'ops')) {
+    if (!in_array($page, $pages, true) || ($method !== 'GET' && !in_array($page, ['ops', 'aliases'], true))) {
         $unknown = !in_array($page, $pages, true);
         $refuse($unknown ? 404 : 405, $fa['errors'][$unknown ? 'not_found' : 'method']);
         return;
     }
-    if ($method === 'POST') {
+    $aliasPost = null;
+    if ($method === 'POST' && $page === 'aliases') {
+        $aliasOps = new AdminAliases($config, $pdo, $audit, $ip);
+        $action = (string) ($_POST['action'] ?? '');
+        $mode = ['alias_save' => 'group', 'alias_delete' => 'delete', 'alias_raw' => 'raw'][$action] ?? null;
+        if ($action === 'alias_restore') {
+            $outcome = $aliasOps->restore((string) ($_POST['backup'] ?? ''), (string) ($_POST['version'] ?? ''));
+            $tab = 'history';
+        } elseif ($mode !== null) {
+            $outcome = $aliasOps->save($mode, $_POST);
+            $tab = $mode === 'raw' ? 'advanced' : 'groups';
+        } else {
+            $refuse(400, $fa['errors']['method']);
+            return;
+        }
+        if (in_array($outcome['status'], ['saved', 'restored'], true)) {
+            $redirect('p=aliases&tab=' . $tab . '&saved=' . $outcome['status']);
+            return;
+        }
+        // Not saved: show the same page again with what was typed and what is wrong with it.
+        $aliasPost = [
+            'tab' => $tab,
+            'result' => $outcome,
+            'form' => ['version' => (string) ($_POST['version'] ?? '')] + ($mode === 'group'
+                ? ['index' => (string) ($_POST['index'] ?? ''), 'terms' => (string) ($_POST['terms'] ?? '')]
+                : []),
+            'raw_text' => $mode === 'raw' ? (string) ($_POST['json'] ?? '') : null,
+        ];
+    } elseif ($method === 'POST') {
         // The action runs to the end whatever the browser does, and must not hold the session lock meanwhile.
         session_write_close();
         $ops = new AdminOps($config, $pdo, $audit, $ip);
@@ -202,6 +236,75 @@ try {
                 'csrf' => $csrf,
                 'prefix' => (string) $config['redis']['prefix'],
             ]);
+            break;
+        case 'aliases':
+            $aliasOps ??= new AdminAliases($config, $pdo, $audit, $ip);
+            $state = $aliasOps->state();
+            if (($_GET['download'] ?? '') === '1') {
+                header('Content-Type: application/json; charset=utf-8');
+                header('Content-Disposition: attachment; filename="aliases.json"');
+                echo $state['raw'] !== '' ? $state['raw'] : App\AliasStore::encode($state['groups']);
+                return;
+            }
+            $tab = (string) ($aliasPost['tab'] ?? $_GET['tab'] ?? 'groups');
+            $edit = $_GET['edit'] ?? null;
+            $data = [
+                'tab' => $tab, 'csrf' => $csrf, 'state' => $state, 'q' => (string) ($_GET['q'] ?? ''),
+                'edit' => $edit === null ? null : (string) $edit, 'prefill' => (string) ($_GET['prefill'] ?? ''),
+                'result' => $aliasPost['result'] ?? null, 'form' => $aliasPost['form'] ?? null,
+                'raw_text' => $aliasPost['raw_text'] ?? null,
+                'saved' => in_array($_GET['saved'] ?? '', ['saved', 'restored'], true) ? $_GET['saved'] : '',
+                'writable' => is_dir($aliasOps->store()->directory()) ? is_writable($aliasOps->store()->directory())
+                    : is_writable(dirname($aliasOps->store()->directory())),
+                'counts' => null, 'backups' => [], 'diff' => null,
+            ];
+            if (isset($_GET['count']) && isset($state['groups'][(int) $_GET['count']])) {
+                $counter = $aliasOps->counts();
+                $index = (int) $_GET['count'];
+                $data['counts'] = ['index' => $index, 'cap' => $counter->cap(), 'rows' => array_map(
+                    static fn (string $term): array => ['term' => $term, 'count' => $counter->count($term)],
+                    $state['groups'][$index]
+                )];
+            }
+            if ($tab === 'history') {
+                $data['backups'] = $aliasOps->store()->backups();
+                $name = (string) ($_GET['diff'] ?? '');
+                $content = $name === '' ? null : $aliasOps->store()->backupContent($name);
+                if ($content !== null) {
+                    $data['diff'] = ['name' => $name] + AdminAliasViews::groupDiff(
+                        Synonyms::parseGroups($content) ?? [],
+                        $state['groups']
+                    );
+                }
+            }
+            $body = AdminAliasViews::aliases($data);
+            break;
+        case 'synonyms':
+            $path = $config['paths']['data'] . '/' . Synonyms::SYNONYMS_FILE;
+            $synonymGroups = is_file($path) ? Synonyms::parseGroups((string) file_get_contents($path)) : null;
+            $body = AdminAliasViews::synonyms([
+                'term' => (string) ($_GET['term'] ?? ''), 'filter' => (string) ($_GET['filter'] ?? ''),
+                'groups' => (new AdminAliases($config, $pdo, $audit, $ip))->store()->read()['groups'],
+                'synonyms' => $synonymGroups,
+            ]);
+            break;
+        case 'tester':
+            $q = trim((string) ($_GET['q'] ?? ''));
+            $view = ['q' => $q, 'asked' => isset($_GET['q'])];
+            if ($q !== '') {
+                try {
+                    $found = SearchController::fromConfig($pdo, $config, null, null, false)
+                        ->search(['q' => $q, 'limit' => 10], true);
+                    $products = new ProductDetails($pdo, (string) $config['db']['products_table']);
+                    $details = $products->fetch($found['product_ids']);
+                    $view['result'] = $found;
+                    $view['titles'] = array_column($details, 'title', 'id');
+                } catch (Throwable $e) {
+                    error_log('admin tester: ' . $e->getMessage());
+                    $view['error'] = true;
+                }
+            }
+            $body = AdminAliasViews::tester($view);
             break;
         case 'audit':
             $body = AdminViews::audit($audit->recent((int) ($_GET['page'] ?? 1)));

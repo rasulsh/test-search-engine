@@ -38,10 +38,7 @@ final class AdminPage
         }
         $title = $fa['nav'][$current] ?? $fa['title'];
         $bar = '<header class="bar"><h1>' . self::esc($title) . '</h1><div>'
-            . '<button type="button" class="btn" id="theme" aria-label="' . self::esc($fa['ui']['theme_label'])
-            . '" data-to-dark="' . self::esc($fa['ui']['theme_to_dark'])
-            . '" data-to-light="' . self::esc($fa['ui']['theme_to_light']) . '">'
-            . self::esc($fa['ui']['theme_to_dark']) . '</button> '
+            . self::themeButton() . ' '
             . '<form method="post" action="?p=logout"><input type="hidden" name="csrf" value="'
             . self::esc($ctx['csrf']) . '"><button class="btn">' . self::esc($fa['ui']['logout'])
             . '</button></form></div></header>';
@@ -60,7 +57,22 @@ final class AdminPage
      */
     public static function bare(string $title, string $body, array $ctx): string
     {
-        return self::document($title, '<div class="content">' . $body . '</div>', $ctx);
+        return self::document(
+            $title,
+            '<div class="float">' . self::themeButton() . '</div><div class="content">' . $body . '</div>',
+            $ctx
+        );
+    }
+
+    /** The light / dark switch, on every page including the ones without the side navigation. */
+    private static function themeButton(): string
+    {
+        $ui = AdminStrings::fa()['ui'];
+
+        return '<button type="button" class="btn" id="theme" aria-label="' . self::esc($ui['theme_label'])
+            . '" data-to-dark="' . self::esc($ui['theme_to_dark'])
+            . '" data-to-light="' . self::esc($ui['theme_to_light']) . '">'
+            . self::esc($ui['theme_to_dark']) . '</button>';
     }
 
     /** @param array{nonce: string, fonts: string, css?: string} $ctx */

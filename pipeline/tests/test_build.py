@@ -227,10 +227,10 @@ def test_build_bundle_format_and_determinism(tmp_path: Path) -> None:
     assert meta["embedder"] == "mock"
 
     for name in ("vectors.bin", "vectors.idx", "products.load.sql", "synonyms.json",
-                 "aliases.json", "spellcheck.txt", "keymap.json", "meta.json"):
+                 "spellcheck.txt", "keymap.json", "meta.json"):
         assert (tmp_path / "b1" / name).exists()
-    # No alias file configured: the bundle still carries an (empty) aliases.json.
-    assert json.loads((tmp_path / "b1" / "aliases.json").read_text()) == []
+    # Aliases live on the server since M41: the bundle never carries them.
+    assert not (tmp_path / "b1" / "aliases.json").exists()
 
     raw = (tmp_path / "b1" / "vectors.bin").read_bytes()
     assert len(raw) == 6 * 384 * 4
@@ -268,28 +268,25 @@ def test_build_bundle_format_and_determinism(tmp_path: Path) -> None:
     assert meta2["checksum"] == meta["checksum"]
 
 
-def test_bundle_ships_the_normalized_alias_file(tmp_path: Path) -> None:
+def test_aliases_never_reach_the_bundle_or_the_spellcheck(tmp_path: Path) -> None:
     aliases = tmp_path / "aliases.json"
-    aliases.write_text('[["GTA V", "Grand Theft Auto ۵"]]', encoding="utf-8")
+    aliases.write_text('[["wolverinexyz", "ولورینگ"]]', encoding="utf-8")
     config = _config()
     config["build"]["aliases_file"] = str(aliases)
 
     build.build_bundle(build.read_products(INPUT_SQL), tmp_path / "b", config)
 
-    shipped = json.loads((tmp_path / "b" / "aliases.json").read_text(encoding="utf-8"))
-    assert shipped == [["gta v", "grand theft auto 5"]]
+    assert not (tmp_path / "b" / "aliases.json").exists()
+    spellcheck = (tmp_path / "b" / "spellcheck.txt").read_text(encoding="utf-8")
+    assert "wolverinexyz" not in spellcheck
 
 
-def test_malformed_alias_file_fails_the_build_before_embedding(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
-    aliases = tmp_path / "aliases.json"
-    aliases.write_text('[["gta" "grand theft auto"]]', encoding="utf-8")
+def test_the_aliases_flag_is_gone(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     with pytest.raises(SystemExit) as exc:
         build.main(["--sql", str(INPUT_SQL), "--out", str(tmp_path / "b"),
-                    "--aliases", str(aliases)])
+                    "--aliases", str(tmp_path / "aliases.json")])
     assert exc.value.code == 2
-    assert "invalid JSON" in capsys.readouterr().err
+    assert "unrecognized arguments: --aliases" in capsys.readouterr().err
     assert not (tmp_path / "b").exists()
 
 

@@ -214,8 +214,10 @@ ends by printing the exact commands for both targets.
 `--desc-index-chars N` sets how many leading description characters are
 keyword-indexed (default `SEARCH_DESC_INDEX_CHARS`, else 800; 0 = the whole
 description). It only affects the build; to change it, build and deploy a new
-release. `--aliases FILE` ships another [alias file](SEARCH-BEHAVIOR.md#aliases) instead of
-`pipeline/aliases.json`.
+release. Aliases are not part of the release since M41: they live in `server/storage/aliases.json` and are edited in
+the admin panel (see [ADMIN.md](ADMIN.md#alias-manager-m41)). `storage/` must be writable by the PHP user; only its
+deny-all `.htaccess` ships. Upgrading from M40: nothing to do, the first visit to the aliases page seeds the file from
+the live bundle.
 `--intent-map FILE` likewise ships another [intent map](SEARCH-BEHAVIOR.md#intent-map) instead of
 `pipeline/intent_map.json`.
 
@@ -227,7 +229,7 @@ bundle's `vectors.bin` with the mock embedder (see below) and packs one
 
 | in the zip | what |
 | --- | --- |
-| `data_incoming/` | the bundle: `vectors.bin`, `vectors.idx`, `products.load.sql`, `meta.json`, `spellcheck.txt`, `synonyms.json`, `aliases.json`, `intent_map.json`, `keymap.json` |
+| `data_incoming/` | the bundle: `vectors.bin`, `vectors.idx`, `products.load.sql`, `meta.json`, `spellcheck.txt`, `synonyms.json`, `intent_map.json`, `keymap.json` |
 | `bootstrap.php`, `src/`, `public/`, `tools/config-check.php`, `tools/logs-export.php` | the server code (including `public/install.php` and `public/test.html`), the config doctor and the [log export](SEARCH-API.md#log-export) (M36) |
 | `config.example.php`, `db/schema.sql` | the installer's config template and schema |
 
@@ -375,7 +377,7 @@ ranking keys (`tag_weight`, `brand_weight`, `category_weight`,
 `brand_match_boost`, `category_match_boost`, `tag_match_boost`,
 `tag_match_min_tokens`) default in code, so an older `config.php` keeps
 working; add a key to `config.php` to change it ([CONFIGURATION.md](CONFIGURATION.md)). Add the brand pairs your
-shoppers type in the other script to `pipeline/aliases.json` before building
+shoppers type in the other script to the aliases (admin panel, `?p=aliases`)
 (`["سامسونگ", "samsung"]`).
 
 **Memory note.** The keyword tier reads each matching row's text columns, so the

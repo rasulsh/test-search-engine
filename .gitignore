@@ -25,6 +25,8 @@ venv/
 !/server/data/.htaccess
 /server/data_incoming/*
 !/server/data_incoming/.htaccess
+/server/storage/*
+!/server/storage/.htaccess
 /server/data_old/
 /server/data_swap/
 # Held while a reload or rollback runs (M40)

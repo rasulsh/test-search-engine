@@ -118,10 +118,10 @@ Persian query. Keep one brand per group, and add a variant to its existing
 group rather than a second group; the same Persian word may head several
 brands (`سونی` is in both Sony groups) and each is tried as a variant. List every
 spelling shoppers type: normalization removes the half-space, so `پلی‌استیشن`
-and `پلی استیشن` are two different terms. To bulk-generate Persian spellings of English names offline, see [ALIASES.md](ALIASES.md). To change the aliases: edit the
-file, build a release, deploy and reload as for a catalog update. The build
-and the reload both reject a malformed file (`invalid_aliases`), so a typo
-never silently turns aliases off. Not solved by this: queries that describe a
+and `پلی استیشن` are two different terms. To bulk-generate Persian spellings of English names offline, see [ALIASES.md](ALIASES.md). To change the aliases: use the admin panel's
+"نام‌های هم‌معنی" page (since M41). The list lives in `server/storage/aliases.json`, not in the bundle: a save is
+validated, written atomically, backed up, and live on the next search without a build or a reload. A malformed
+file is refused at save time, so a typo never silently turns aliases off. Not solved by this: queries that describe a
 need rather than name a product ("مانیتور مناسب کنسول"); aliases only fix
 name / alias / form matching.
 

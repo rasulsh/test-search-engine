@@ -183,8 +183,8 @@ Breaking any of these produces silently wrong results. Enforce each with a test.
   popularity, plus `normalized_collapsed` since M23). Tags (M21) are the store's `oc_tag` names via `oc_product_tag`
   (export column `tags`); tags, brand and category are FULLTEXT-searched fields
   with their own weights.
-- `synonyms.json`, `aliases.json` (owner-maintained, M15), `spellcheck.txt`,
-  `keymap.json`.
+- `synonyms.json`, `spellcheck.txt`, `keymap.json`, `intent_map.json`. The owner's aliases are not in the bundle since
+  M41: they live in `server/storage/aliases.json`, edited in the admin panel.
 - `meta.json` — see contract 3.
 
 Since M18 cPanel's `/search` does not read the bundle's `vectors.bin` (the VPS
@@ -405,6 +405,14 @@ wait for review before starting the next.
   `Config::deprecated()` (renamed keys keep working two releases, removed keys explain themselves in the doctor),
   `docs/CHANGELOG.md` (config changes per milestone), the status page's effective-configuration table (secrets masked),
   and `tools/*.php` checking `PHP_VERSION_ID >= 80100` first (`su - ACCOUNT -c`, not root, in `docs/DEPLOY.md`).
+
+- **M41 — Admin panel: alias manager, synonyms viewer, tester:** `server/storage/aliases.json` is the single source of the
+  owner's aliases (`AliasStore`: flock + atomic rename, version hash against stale saves, backups, restore, seed from
+  the bundle's file on the first visit; `/reload` ignores a bundled one). `AliasValidator` (errors block, warnings need
+  a confirm), `AliasCounts` (on demand), pages `aliases` / `synonyms` / `tester` (`SearchController::fromConfig(...,
+  $record = false)`: no log row, no result cache), `Speller::withExtraWords`, `AdminDate` (Jalali beside every date),
+  readable audit details, theme switch on every page, `config-check --verbose` listing every key with its source, and
+  `SafePath`: the only code that deletes trees (refuses `/`, < 3 segments, symlinks, anything outside its base).
 
 - **M22 — Offline build speed + reliable export:** `pipeline/db_export.py`
   (direct DB -> CSV, replaces the phpMyAdmin export), GPU/fp16/batch-configured

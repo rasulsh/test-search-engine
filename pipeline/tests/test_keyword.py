@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.util
+import inspect
 import json
 from pathlib import Path
 
@@ -86,13 +87,11 @@ def test_build_spellcheck_uses_high_signal_fields_only() -> None:
         assert name in freq
 
 
-def test_build_spellcheck_learns_alias_tokens() -> None:
-    freq = dict(kw.build_spellcheck(ROWS, aliases=[["wolverine", "ولورینگ"], ["Apple", "اپل"]]))
-
-    assert freq["wolverine"] == kw.ALIAS_TOKEN_COUNT
-    assert freq["ولورینگ"] == kw.ALIAS_TOKEN_COUNT
-    # A token the catalog already has more often keeps its own count.
-    assert freq["apple"] == kw.ALIAS_TOKEN_COUNT or freq["apple"] > 2
+def test_build_spellcheck_has_no_alias_input() -> None:
+    # The server applies the owner's aliases to the live dictionary (Speller::withExtraWords).
+    assert "aliases" not in inspect.signature(kw.build_spellcheck).parameters
+    freq = dict(kw.build_spellcheck(ROWS))
+    assert "wolverine" not in freq and "ولورینگ" not in freq
 
 
 def test_build_spellcheck_counts_each_product_once() -> None:

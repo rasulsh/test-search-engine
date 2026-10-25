@@ -19,6 +19,14 @@ a{color:var(--s1)}:focus-visible{outline:2px solid var(--s1);outline-offset:2px}
 main{min-width:0}
 .bar{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 24px;border-bottom:1px solid var(--line);background:var(--card)}
 .bar form{display:inline;margin:0}
+.float{position:fixed;inset-block-start:12px;inset-inline-end:12px}
+.chip{display:inline-block;margin:2px 4px 2px 0;padding:0 10px;border:1px solid var(--line);border-radius:12px;background:var(--help)}
+a.btn{text-decoration:none;display:inline-block}a.btn.primary{color:#fff}.inline{display:inline;margin:0}.card form.inline{margin:0}
+.difflist li.bad{color:var(--bad)}.difflist li.ok{color:var(--ok)}.msg.warn{border-color:var(--warn);color:var(--warn)}
+.jal{color:var(--ink2)}
+textarea{font:inherit;width:100%;max-width:100%;padding:6px 8px;border:1px solid var(--line);border-radius:6px;background:var(--surface);color:var(--ink)}
+.controls{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:8px 0}
+.controls input[type=search]{font:inherit;padding:4px 8px;border:1px solid var(--line);border-radius:6px;background:var(--surface);color:var(--ink);min-width:240px}
 .content{padding:16px 24px;max-width:1280px}
 .btn,button.btn{font:inherit;padding:4px 12px;border:1px solid var(--line);border-radius:6px;background:var(--card);color:var(--ink);cursor:pointer}
 .btn:hover{border-color:var(--ink2)}

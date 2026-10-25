@@ -29,6 +29,10 @@ final class AliasStore
         private readonly string $bundleFile,
         private readonly int $keepBackups = 20
     ) {
+        // An unset config value would otherwise become "/aliases.json" at the filesystem root.
+        if ($storageDir === '' || $storageDir[0] !== '/') {
+            throw new AliasStoreException('io', 'the storage path must be a non-empty absolute path');
+        }
     }
 
     /** @param array<string, mixed> $config the loaded server config */
@@ -44,6 +48,11 @@ final class AliasStore
     public function path(): string
     {
         return $this->storageDir . '/' . self::FILE;
+    }
+
+    public function directory(): string
+    {
+        return $this->storageDir;
     }
 
     /** The file the search reads: the storage file, else (until it is seeded) the live bundle's. */

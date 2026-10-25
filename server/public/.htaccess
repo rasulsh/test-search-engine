@@ -15,6 +15,16 @@ Options -Indexes
     Header always set Referrer-Policy "no-referrer"
 </IfModule>
 
+# Self-hosted dashboard fonts (fonts/vazirmatn, OFL): the right type, cacheable for a year.
+<IfModule mod_mime.c>
+    AddType font/woff2 .woff2
+</IfModule>
+<IfModule mod_headers.c>
+    <FilesMatch "\.woff2$">
+        Header set Cache-Control "public, max-age=31536000, immutable"
+    </FilesMatch>
+</IfModule>
+
 # Web-root deploy: /search, /health, /reload, /logs, /analytics reach the front controller.
 # Direct *.php requests (the subfolder deploy) keep working.
 <IfModule mod_rewrite.c>

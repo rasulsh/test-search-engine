@@ -116,6 +116,7 @@ abstraction layers.
 │   │   ├── ConfigDoctor.php       # checks config.php against the schema (M29)
 │   │   ├── Analytics.php          # read-only search_logs aggregates (M31)
 │   │   ├── AnalyticsInsights.php  # log-v2 metrics: engagement, alias candidates, compare, ... (M37)
+│   │   ├── AnalyticsStrings.php   # M38: every Persian UI string + help text of the dashboard
 │   │   ├── AnalyticsPage.php      # dashboard shell for analytics.php (M31, v2 in M35)
 │   │   ├── AnalyticsPage.js       # M35: client-side SVG dashboard + refresh (no third-party code)
 │   │   └── AnalyticsPage.css      # M35: dashboard styles (light / dark)
@@ -365,6 +366,12 @@ wait for review before starting the next.
   cap, probe refusal), alias-versioned result-cache key + `redis.ttl_zero`, "did you mean" quality rules,
   `search_logs` v2 + `search_events` (`db/migrations/`, `POST /events`), `AnalyticsInsights` (new analytics
   keys, `compare=1`), seed aliases. Needs a bundle rebuild (version 4) and the log migration.
+
+- **M38 — Persian analytics dashboard + alias fix:** `analytics.php` is RTL Persian (`AnalyticsStrings` holds every
+  string and the "؟" help texts), self-hosted Vazirmatn under `public/fonts/vazirmatn/` (OFL, in `release.zip`),
+  light / dark toggle, Jalali dates beside the stored Gregorian ones, centered numeric columns; `?format=json`
+  unchanged (golden fixture test). `Synonyms::mergeOverlapping` joins owner alias groups sharing a term so
+  "پی اس فایو" reaches every PS5 title.
 
 - **M22 — Offline build speed + reliable export:** `pipeline/db_export.py`
   (direct DB -> CSV, replaces the phpMyAdmin export), GPU/fp16/batch-configured

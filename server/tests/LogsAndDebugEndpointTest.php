@@ -385,8 +385,8 @@ final class LogsAndDebugEndpointTest extends TestCase
 
         self::assertSame(200, $status);
         foreach (
-            ['Top queries', 'Zero-result queries', 'Tier and cache', 'Latency', 'Volume', 'Cache hit rate',
-            'Zero-result rate', 'Last 7 days'] as $section
+            ['پرجستجوترین عبارت‌ها', 'عبارت‌های بی‌نتیجه', 'لایه جستجو و کش', 'تأخیر', 'حجم جستجو',
+            'نرخ برخورد کش', 'نرخ جستجوی بی‌نتیجه', '۷ روز گذشته', 'lang="fa" dir="rtl"', 'id="meta"'] as $section
         ) {
             self::assertStringContainsString($section, $body);
         }
@@ -398,7 +398,7 @@ final class LogsAndDebugEndpointTest extends TestCase
         $all = strtolower(implode("\n", $headers));
         foreach (
             ['cache-control: no-store', 'x-robots-tag: noindex', 'x-frame-options: deny',
-            'content-security-policy: default-src \'none\'', "connect-src 'self'"] as $header
+            'content-security-policy: default-src \'none\'', "connect-src 'self'", "font-src 'self'"] as $header
         ) {
             self::assertStringContainsString($header, $all);
         }

@@ -448,6 +448,14 @@ any other host, so it works behind a restrictive network; reopen it as
 the M31 one (`ALTER TABLE search_logs ADD INDEX IF NOT EXISTS ...`): `/reload` never
 touches `search_logs`.
 
+<a id="upgrading-to-m38"></a>**Upgrading to M38 (Persian analytics dashboard).** Server code only: upload the new
+`server/` (or `release.zip`), which now carries `src/AnalyticsStrings.php` and the font folder
+**`server/public/fonts/vazirmatn/`** (`Vazirmatn-Regular.woff2`, `Vazirmatn-Bold.woff2`, `OFL.txt`). Copy that
+folder next to `analytics.php` inside your document root (public/); nothing outside `public/` is
+web-exposed. No schema or config change. The alias fix ships in the code too (`Synonyms` merges owner
+alias groups that share a term), so no bundle rebuild is needed for it, only the new code and a `/reload`
+(or any worker restart) so the cached alias map is rebuilt.
+
 **Log retention (optional, operator-run).** `search_logs` grows with traffic and
 nothing prunes it, on purpose: no daemon runs on the cPanel host. When the table
 gets large, delete old rows by hand or from a cPanel cron you own, for example

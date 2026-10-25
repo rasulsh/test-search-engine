@@ -38,6 +38,11 @@
     if (only) { only.addEventListener('change', apply); }
   });
 
+  // A page-size <select data-autosubmit> sends its GET form at once (a <noscript> button covers no-JS).
+  Array.prototype.forEach.call(document.querySelectorAll('select[data-autosubmit]'), function (box) {
+    box.addEventListener('change', function () { if (box.form) { box.form.submit(); } });
+  });
+
   // Every write action asks first: data-confirm on the form, or on the button that was pressed.
   var confirmed = true;
   Array.prototype.forEach.call(document.querySelectorAll('form'), function (form) {

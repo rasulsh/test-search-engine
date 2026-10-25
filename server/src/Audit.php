@@ -90,20 +90,21 @@ final class Audit
     }
 
     /**
-     * @return array{rows: list<array<string, mixed>>, total: int, page: int, pages: int}
+     * @return array{rows: list<array<string, mixed>>, total: int, page: int, pages: int, from: int, to: int}
      */
     public function recent(int $page, int $pageSize = 50): array
     {
-        $pageSize = max(1, $pageSize);
         $total = (int) $this->pdo->query("SELECT COUNT(*) FROM {$this->table}")->fetchColumn();
-        $pages = max(1, (int) ceil($total / $pageSize));
-        $page = min(max(1, $page), $pages);
+        $paging = Paging::of($total, $page, $pageSize);
         $rows = $this->pdo->query(
-            "SELECT id, ts, ip, action, detail FROM {$this->table} ORDER BY id DESC LIMIT {$pageSize} OFFSET "
-            . (($page - 1) * $pageSize)
+            "SELECT id, ts, ip, action, detail FROM {$this->table} ORDER BY id DESC"
+            . " LIMIT {$paging['limit']} OFFSET {$paging['offset']}"
         )->fetchAll(PDO::FETCH_ASSOC);
 
-        return ['rows' => $rows, 'total' => $total, 'page' => $page, 'pages' => $pages];
+        return [
+            'rows' => $rows, 'total' => $paging['total'], 'page' => $paging['page'], 'pages' => $paging['pages'],
+            'from' => $paging['from'], 'to' => $paging['to'],
+        ];
     }
 
     /** Timestamp of the newest row of any of $actions, or null. */

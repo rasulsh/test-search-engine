@@ -494,7 +494,7 @@ final class AdminPanelTest extends TestCase
         $out = [];
         foreach ($rows[1] as $row) {
             preg_match_all('#<td[^>]*>(.*?)</td>#su', $row, $cells);
-            $out[] = $cells[1][$n] ?? '';
+            $out[] = strip_tags($cells[1][$n] ?? '');
         }
 
         return $out;

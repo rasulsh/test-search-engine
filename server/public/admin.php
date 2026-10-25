@@ -26,6 +26,7 @@ use App\Config;
 use App\ConfigDoctor;
 use App\Db;
 use App\LogsPage;
+use App\Paging;
 use App\ProductDetails;
 use App\Reload;
 use App\SearchController;
@@ -183,8 +184,14 @@ try {
             $refuse(400, $fa['errors']['method']);
             return;
         }
+        // The page, page size and search of the groups table come back with the form (hidden fields).
+        $listState = array_filter([
+            'q' => trim((string) ($_POST['q'] ?? '')), 'per' => (string) ($_POST['per'] ?? ''),
+            'page' => (string) ($_POST['page'] ?? ''),
+        ], static fn (string $v): bool => $v !== '');
         if (in_array($outcome['status'], ['saved', 'restored'], true)) {
-            $redirect('p=aliases&tab=' . $tab . '&saved=' . $outcome['status']);
+            $redirect(http_build_query(['p' => 'aliases', 'tab' => $tab, 'saved' => $outcome['status']]
+                + ($tab === 'groups' ? $listState : [])));
             return;
         }
         // Not saved: show the same page again with what was typed and what is wrong with it.
@@ -195,6 +202,7 @@ try {
                 ? ['index' => (string) ($_POST['index'] ?? ''), 'terms' => (string) ($_POST['terms'] ?? '')]
                 : []),
             'raw_text' => $mode === 'raw' ? (string) ($_POST['json'] ?? '') : null,
+            'list' => $listState,
         ];
     } elseif ($method === 'POST') {
         // The action runs to the end whatever the browser does, and must not hold the session lock meanwhile.
@@ -249,7 +257,11 @@ try {
             $tab = (string) ($aliasPost['tab'] ?? $_GET['tab'] ?? 'groups');
             $edit = $_GET['edit'] ?? null;
             $data = [
-                'tab' => $tab, 'csrf' => $csrf, 'state' => $state, 'q' => (string) ($_GET['q'] ?? ''),
+                'tab' => $tab, 'csrf' => $csrf, 'state' => $state,
+                'list' => $aliasPost['list'] ?? [
+                    'q' => (string) ($_GET['q'] ?? ''), 'per' => $_GET['per'] ?? null,
+                    'page' => (int) ($_GET['page'] ?? 1),
+                ],
                 'edit' => $edit === null ? null : (string) $edit, 'prefill' => (string) ($_GET['prefill'] ?? ''),
                 'result' => $aliasPost['result'] ?? null, 'form' => $aliasPost['form'] ?? null,
                 'raw_text' => $aliasPost['raw_text'] ?? null,
@@ -310,8 +322,23 @@ try {
             $body = AdminViews::audit($audit->recent((int) ($_GET['page'] ?? 1)));
             break;
         case 'logs':
-            $logs = new LogsPage($pdo, (string) $config['db']['search_logs_table'], (int) $config['logs']['page_size']);
-            $body = AdminViews::logs($logs->fetch((string) ($_GET['view'] ?? 'recent'), (int) ($_GET['page'] ?? 1)));
+            $logs = new LogsPage(
+                $pdo,
+                (string) $config['db']['search_logs_table'],
+                (int) $config['logs']['page_size'],
+                (int) $config['logs']['scan_limit']
+            );
+            $found = $logs->fetch(
+                (string) ($_GET['view'] ?? 'recent'),
+                (int) ($_GET['page'] ?? 1),
+                (string) ($_GET['sort'] ?? ''),
+                (string) ($_GET['dir'] ?? ''),
+                (string) ($_GET['q'] ?? ''),
+                isset($_GET['per']) ? (int) $_GET['per'] : null
+            );
+            $body = AdminViews::logs($found + [
+                'default_per' => $logs->pageSize(), 'sizes' => Paging::sizes($logs->pageSize()),
+            ]);
             break;
         case 'help':
             $body = AdminViews::help();

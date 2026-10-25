@@ -1,4 +1,4 @@
-#app{max-width:1200px;margin:0 auto}
+#app{margin:0 auto}
 .topbar{display:flex;align-items:center;justify-content:space-between;gap:12px}
 .note{color:var(--ink2);margin:4px 0;font-size:12px}
 .controls{display:flex;flex-wrap:wrap;gap:12px;align-items:center;margin:12px 0}
@@ -35,7 +35,7 @@ rect.s1,rect.s2,.dot{stroke:none}.line{fill:none;stroke-width:2}.line.s1,.line.s
 .sw{display:inline-block;width:10px;height:10px;border-radius:3px;margin-inline-end:6px}
 .split{display:flex;gap:2px;height:16px;margin:4px 0}.seg{border-radius:4px;min-width:2px}.splitTitle{font-weight:600;margin-top:8px}
 .scroll{overflow-x:auto;max-height:420px;overflow-y:auto}
-table{border-collapse:collapse;width:100%}th,td{border-bottom:1px solid var(--line);padding:4px 8px;text-align:start;vertical-align:top}
+table{border-collapse:collapse;width:100%}th,td{border-bottom:1px solid var(--line);padding:6px 10px;text-align:start;vertical-align:top}
 th{cursor:pointer;white-space:nowrap;position:sticky;top:0;background:var(--card)}
 th.c,td.c{text-align:center}td.c{font-variant-numeric:tabular-nums;font-feature-settings:"tnum"}
 .dt{display:flex;flex-direction:column;align-items:center;line-height:1.4}

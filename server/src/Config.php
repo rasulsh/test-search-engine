@@ -324,6 +324,9 @@ final class Config
             'debug.token'     => ['string', ''],
             'logs.page_size'  => ['int', 50],
             'logs.refresh_seconds' => ['int', 30],
+            // The logs page's search and unindexed sorts read this many of the newest rows (a full
+            // scan of a huge table would load the shared host); 0 = no bound. Index-ordered views cover all rows.
+            'logs.scan_limit' => ['int', 200000],
             'reload.token'    => ['string', ''],
 
             // Admin panel (M39). Without username + password_hash admin.php answers 503.

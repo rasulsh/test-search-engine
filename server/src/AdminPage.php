@@ -59,7 +59,8 @@ final class AdminPage
     {
         return self::document(
             $title,
-            '<div class="float">' . self::themeButton() . '</div><div class="content">' . $body . '</div>',
+            '<div class="float">' . self::themeButton() . '</div><main class="center"><div class="content">' . $body
+                . '</div></main>',
             $ctx
         );
     }

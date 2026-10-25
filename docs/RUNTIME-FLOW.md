@@ -127,7 +127,7 @@ The response (and whether it had a vector) is stored under the stage-2 key with 
 | **MySQL / MariaDB** | `products` (FULLTEXT over the `normalized_*` columns, `normalized_sku`, `normalized_collapsed`, business signals `stock` / `popularity`, display fields), `search_logs` | the only hard dependency. Table names come from `db.products_table` / `db.search_logs_table` |
 | **VPS vector service** | query embedding (bge-m3) and the cosine top-K over its own product vectors | optional; bearer token; reachable only from cPanel; bounded by `vps.timeout_ms` |
 | **Redis** | result cache | optional, **off by default** (`redis.enabled`), runs on the VPS LAN (never on cPanel); an in-repo RESP client, no extension |
-| **On-disk bundle** (`paths.data`) | `aliases.json` and `synonyms.json` (variants), `spellcheck.txt` (did-you-mean) | `keymap.json` is built into the bundle but the runtime layout is the in-code `Keymap`. `vectors.bin` / `vectors.idx` are present for `/reload`'s checks but **`/search` does not read them since M18**: the cosine is computed VPS-side from the VPS's own vectors |
+| **On-disk bundle** (`paths.data`) | `aliases.json` and `synonyms.json` (variants), `spellcheck.txt` (did-you-mean) | `keymap.json` is built into the bundle but the runtime layout is the in-code `Keymap`. the bundle carries no vectors since M42 (`/search` has not read them since M18): the cosine is computed VPS-side from the VPS's own vectors |
 | **Config** (`App\Config::load`) | every knob above | code defaults + the deployer's `config.php` overrides, see below |
 | **Analytics** (M31) | not part of `/search`: the panel's analytics page reads `search_logs` afterwards | admin login (M39), read-only, `?window=`, `?format=json` ([SEARCH-API.md](SEARCH-API.md#analytics)) |
 

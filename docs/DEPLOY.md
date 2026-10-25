@@ -125,10 +125,10 @@ the form. No config file editing, no separate model upload, no SSH needed.
    - the reload token: pre-filled with a fresh random value. **Copy it before
      submitting**; later updates need it and the installer never shows it again
      (it is stored in `config.php`);
-   - model name, dimension and normalization version: keep the defaults unless
-     the release was built with another model (a mismatch with the staged
-     bundle is rejected before anything is written). The normalization version
-     default is the code's own and follows later releases; another number pins it;
+   - the normalization version (since M42 the form has no model name or dimension: the
+     cPanel bundle carries no vectors): its default is the code's own and follows later
+     releases; another number pins it, and a mismatch with the staged bundle is rejected
+     before anything is written;
    - `STORE_BASE` / `IMAGE_BASE`: absolute store and image URLs (for example
      `https://shop.example.com/` and `https://shop.example.com/image/`). With
      them, `with_details` results carry absolute product links and images;
@@ -198,7 +198,7 @@ pip install -r pipeline/requirements.txt 'sentence-transformers>=2.2'   # once
 python pipeline/release.py --csv export.csv --out release.zip
 # -> Embedder: BAAI/bge-m3 on cuda, fp16=on, batch_size=16   (progress bar follows)
 # -> Built VPS vectors in <dir>/vps_vectors: <count> products, BAAI/bge-m3, dim 1024, embedder real
-# -> Built release.zip: <count> products, dim 384, embedder mock, <n> files
+# -> Built release.zip: <count> products, <n> files
 # -> (then the copy-paste deploy commands for both hosts)
 ```
 
@@ -238,30 +238,21 @@ a `paths.data` such as `/srv/data` (giving `/srv/data_old`) is refused with `dir
 On Windows: `pipeline\release.bat --csv export.csv --out release.zip`
 (same arguments). The command embeds the VPS vectors with the **real** model
 (whatever `EMBEDDER` says; `--mock` exists for tests only), builds the cPanel
-bundle's `vectors.bin` with the mock embedder (see below) and packs one
-`release.zip`, laid out relative to the host's `server/` directory:
+bundle (no vectors since M42) and packs one `release.zip`, laid out relative to the host's `server/` directory:
 
 | in the zip | what |
 | --- | --- |
-| `data_incoming/` | the bundle: `vectors.bin`, `vectors.idx`, `products.load.sql`, `meta.json`, `spellcheck.txt`, `synonyms.json`, `intent_map.json`, `keymap.json` |
+| `data_incoming/` | the bundle: `products.load.sql`, `meta.json`, `spellcheck.txt`, `synonyms.json`, `intent_map.json`, `keymap.json` |
 | `bootstrap.php`, `src/`, `public/`, `tools/config-check.php`, `tools/logs-export.php` | the server code (including `public/install.php` and `public/test.html`), the config doctor and the [log export](SEARCH-API.md#log-export) (M36) |
 | `config.example.php`, `db/schema.sql` | the installer's config template and schema |
 
 `config.php` is **never** in the zip, so unzipping never overwrites the
 server's configuration. Tests, local data and the other tools are not packed either.
-**The cPanel `vectors.bin` is a mock (M22).** `/search` has not read it since
-M18; `/reload` only checks `meta.json` (model, dim, normalization version),
-the file size and the checksum, and those all hold for deterministic mock vectors
-of the configured dim. Embedding 20,000 products with e5 just to produce an
-unused file doubled the build time, so `release.py` uses `SEARCH_BUNDLE_EMBEDDER`
-(default `mock`; `meta.json` says `"embedder": "mock"`). Set it to `real` to get
-real e5 vectors. The VPS vectors are always real (its `/reload` refuses mock
-ones). `build.py` run directly still follows `EMBEDDER`.
-
-`SEARCH_MODEL`, `SEARCH_MODEL_REVISION` and `SEARCH_MODEL_DIM` must match
-`server/config.php`'s `model.*` (code defaults: pin them there if you changed the
-build's; the reload rejects a mismatch). New config keys come with code
-defaults, so an older `config.php` keeps working.
+**The cPanel bundle has no vectors (M42).** `/search` has not read them since M18, so
+the bundle is `products.load.sql`, `meta.json` (`normalization_version`, `count`,
+`built_at`) and the keyword data, and `release.zip` is about a sixth of its former size.
+The VPS vectors are always real (its `/reload` refuses mock ones). New config keys come
+with code defaults, so an older `config.php` keeps working.
 
 **Upgrading to M29 (layered config).** `config.php` now holds only overrides and
 the code owns every default ([CONFIGURATION.md](CONFIGURATION.md#the-layered-server-config)).
@@ -300,7 +291,7 @@ cd ~/search-service/server && unzip -o ~/release.zip
 php tools/config-check.php      # exits non-zero on an ERROR: fix config.php first
 curl -sS -X POST -H "X-Reload-Token: $SEARCH_RELOAD_TOKEN" \
      "https://shop.example.com/search-api/reload.php?load=1"
-# {"ok":true,"count":20000,"model":"intfloat/multilingual-e5-small","dim":384}
+# {"ok":true,"count":20000}
 curl -sS https://shop.example.com/search-api/health.php   # product_count == count, config.ok true
 ```
 
@@ -320,13 +311,13 @@ before extracting; a failed earlier reload can leave one, and the extract then
 overwrites every bundle file anyway.
 
 With `?load=1` the reload does, in order, and stops at the first failure:
-1. Checks `meta.json` against `config.php` (model, dim, normalization
-   version), before loading anything.
+1. Checks `meta.json`'s normalization version against the code, before loading
+   anything.
 2. Loads `data_incoming/products.load.sql` into `products_new`: the file drops
    and recreates the staging table, then inserts the rows. It is streamed one
    statement at a time (each at most 1 MB), and only statements aimed at
    `products_new` are accepted.
-3. Checks counts, `vectors.bin` size, and checksum against the staging table.
+3. Checks `meta.count` against the staging table's rows.
 4. Swaps tables and directories atomically, keeping the previous version.
 
 A `422 invalid_bundle` means **nothing was swapped** and the live catalog is
@@ -361,7 +352,7 @@ python pipeline/release.py --csv export.csv --out release.zip
 cd ~/search-service/server && unzip -o ~/release.zip
 curl -sS -X POST -H "X-Reload-Token: $SEARCH_RELOAD_TOKEN" \
      "https://shop.example.com/search-api/reload.php?load=1"
-# {"ok":true,"count":20000,"model":"intfloat/multilingual-e5-small","dim":384}
+# {"ok":true,"count":20000}
 
 # 3. VPS (any order relative to step 2; both hold the same catalog afterwards)
 rsync -a --delete ./vps_vectors/ root@vps:/var/lib/search-vectors/incoming/
@@ -579,9 +570,9 @@ accepts `.sql.gz`, and a 20k-product file shrank from 46 MB to 12 MB in
 testing). Check that `SELECT COUNT(*) FROM products_new` equals `count` in
 `meta.json`. The bundle files can also be uploaded without the zip: copy them
 into `~/search-service/server/data_incoming/` in **binary** mode (for example
-SFTP). A corrupted file is caught as `vectors_size_mismatch` or
-`checksum_mismatch`. `python pipeline/build.py --csv export.csv --out ./bundle`
-(with `EMBEDDER=real`) builds just the bundle.
+SFTP). `python pipeline/build.py --csv export.csv --out ./bundle`
+builds just the bundle (no embedder involved since M42). A truncated
+`products.load.sql` shows up as a `count_mismatch` (or a failed staging load).
 
 ### Result cache (optional, Redis, M26)
 
@@ -622,7 +613,7 @@ If Redis stops, searches carry on uncached (each costs at most `redis.timeout_ms
 **From the panel (M40):** the operations page has a "return to the previous version" button, enabled only when both
 `products_old` and `data_old` exist. It swaps the tables and the directories back in one step, flushes the result cache and
 is audited; pressing it again undoes the rollback (the version you left becomes the "previous" one). It refuses, changing
-nothing, when the previous bundle no longer matches this code's model, dimension or normalization version. Roll the VPS
+nothing, when the previous bundle no longer matches this code's normalization version. Roll the VPS
 vectors back separately (`vps/README.md`, "Rollback").
 
 **By hand**, to return to the previous catalog after a bad reload:

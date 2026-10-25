@@ -12,7 +12,7 @@ Never commit secrets, `server/data/`, bundles or model files.
 - **Pipeline.** Environment variables only (a `.env` next to the repo works for `db_export.py`; `cp .env.example .env`). Defaults live in `pipeline/config.py`. Command-line flags of `release.py` / `build.py` / `db_export.py` override them for one run.
 - **VPS.** `/etc/search-vectors.env` on the vector-service VM, written once by `vps/setup.sh` (template `vps/search-vectors.env.example`, runbook [`vps/README.md`](../vps/README.md)).
 
-The model, revision, dimension, pooling and prefixes are parameterized and shared between the pipeline and the VPS (bge-m3, contract 2), and between the pipeline and the cPanel bundle check (e5, contract 3); see [ARCHITECTURE.md](ARCHITECTURE.md#the-three-contracts) and [INTEGRATION.md, Changing the model](../INTEGRATION.md#changing-the-model).
+The model, revision, dimension, pooling and prefixes are parameterized and shared between the pipeline and the VPS (bge-m3, contract 2), and, for the cPanel bundle check, only the normalization version is shared (contract 3; the bundle has carried no model since M42); see [ARCHITECTURE.md](ARCHITECTURE.md#the-three-contracts) and [INTEGRATION.md, Changing the model](../INTEGRATION.md#changing-the-model).
 
 ## The layered server config
 
@@ -74,12 +74,9 @@ It prints key paths only, never values, and exits non-zero on any ERROR, so a de
 
 | key | default | meaning |
 | --- | --- | --- |
-| `model.name` | `intfloat/multilingual-e5-small` | model stamped in the cPanel bundle's `meta.json` |
-| `model.revision` | `main` | its revision |
-| `model.dim` | `384` | its dimension |
 | `model.normalization_version` | the code's `Normalizer::VERSION` (4) | set only to pin a version; a rules bump then needs no config edit |
 
-`/search` does not read the bundle's vectors since M18 (the semantic tier's model, bge-m3, runs on the VPS); `/reload` still checks model, dim, normalization version, file size and checksum.
+The cPanel bundle carries no vectors and no model since M42 (the semantic tier's model, bge-m3, runs on the VPS); `/reload` checks the normalization version and `meta.count` against the staging rows. `model.name`, `model.revision` and `model.dim` were removed; an old `config.php` that still sets them keeps loading and the config doctor says they can be deleted ([CHANGELOG.md](CHANGELOG.md)).
 
 ### Keyword search
 
@@ -210,7 +207,7 @@ The test page's `PRICE_SUFFIX` is a constant in `server/public/test.html`, not a
 | env | default | meaning |
 | --- | --- | --- |
 | `EMBEDDER` | `mock` | `mock` (deterministic, no model download; tests) or `real`. `release.py` embeds the VPS vectors for real regardless |
-| `SEARCH_MODEL`, `SEARCH_MODEL_REVISION`, `SEARCH_MODEL_DIM`, `SEARCH_NORMALIZATION_VERSION` | as the server | stamped into the cPanel bundle's `meta.json`; must match `config.php`'s `model.*` (code defaults, pin them there) |
+| `SEARCH_NORMALIZATION_VERSION` | the code's | stamped into the cPanel bundle's `meta.json`; must match `config.php`'s `model.normalization_version` (code default; pin it only to override). `SEARCH_MODEL*` and `SEARCH_BUNDLE_EMBEDDER` were removed in M42 |
 | `SEARCH_VPS_MODEL` | `BAAI/bge-m3` | model of the vector service |
 | `SEARCH_VPS_MODEL_REVISION` | `5617a9f61b028005a4858fdac845db406aefb181` | pinned revision |
 | `SEARCH_VPS_MODEL_DIM` | 1024 | dimension |
@@ -219,7 +216,6 @@ The test page's `PRICE_SUFFIX` is a constant in `server/public/test.html`, not a
 | `SEARCH_EMBED_DEVICE` | `auto` | `auto` (cuda when torch sees a GPU, else cpu), `cpu`, `cuda` or `cuda:N` |
 | `SEARCH_EMBED_FP16` | `auto` | `auto` = on for CUDA only; `on` / `off` |
 | `SEARCH_EMBED_BATCH_SIZE` | 16 | fits bge-m3 on 4 GB; lower it (8, 4) on a CUDA out-of-memory error |
-| `SEARCH_BUNDLE_EMBEDDER` | `mock` | embedder of the cPanel bundle's unread `vectors.bin`; `real` builds real e5 vectors |
 | `SEARCH_DESC_CHAR_LIMIT` | 300 | description characters in the embedded passage |
 | `SEARCH_PASSAGE_CHAR_LIMIT` | 1000 | cap on the whole embedded passage (0 = none) |
 | `SEARCH_DESC_INDEX_CHARS` | 800 | leading description characters keyword-indexed (0 = whole); `release.py --desc-index-chars` overrides. Build-time only |

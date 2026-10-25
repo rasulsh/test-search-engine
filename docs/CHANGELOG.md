@@ -10,6 +10,20 @@ holds overrides). A **renamed** key keeps working for two releases (its value is
 config doctor / status page warn with the new name. A **removed** key is ignored; the doctor says why and that the
 line can be deleted. `php server/tools/config-check.php` lists all of it.
 
+## M42: no vectors on cPanel, panel polish
+
+- **Added**: nothing. The aliases page size (default 50) and the logs page size (`logs.page_size`, default 50) need no new key.
+- **Removed** (ignored; the config doctor says they can be deleted from `config.php`):
+  - `model.name`, `model.revision`, `model.dim`: the cPanel bundle carries no vectors any more, so there is no model or
+    dimension to check on `/reload`. The semantic model lives on the VPS (`VPS_MODEL*`).
+  - Their pipeline counterparts in `.env`: `SEARCH_MODEL`, `SEARCH_MODEL_REVISION`, `SEARCH_MODEL_DIM` and
+    `SEARCH_BUNDLE_EMBEDDER` (the pipeline ignores them; delete them).
+- **Kept**: `model.normalization_version` (still checked on `/reload`, still defaults to the code's version).
+- **Renamed / re-defaulted**: nothing.
+- **Behaviour**: `/reload` (and the panel's validate / apply) compares `meta.count` with the staging rows; a bundle that
+  still ships `vectors.bin` / `vectors.idx` keeps its old checks (index lines, size from `meta.dim`, checksum) during the
+  transition. The installer form lost its model name and dimension fields.
+
 ## M41: alias manager and synonyms viewer
 
 - **Added**:

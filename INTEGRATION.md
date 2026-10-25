@@ -243,7 +243,7 @@ curl -sS -X POST -H "X-Reload-Token: $SEARCH_RELOAD_TOKEN" \
 Success `200`:
 
 ```json
-{ "ok": true, "count": 20000, "model": "intfloat/multilingual-e5-small", "dim": 384 }
+{ "ok": true, "count": 20000 }
 ```
 
 After a success, the previous table is kept as `products_old` and the previous
@@ -267,16 +267,16 @@ that helps.
 | reason | fix |
 | --- | --- |
 | `missing_meta`, `invalid_meta` | `data_incoming/meta.json` is absent or not JSON. Re-upload the bundle. |
-| `model_mismatch`, `dim_mismatch`, `normalization_version_mismatch` | The bundle was built with a different model, dim, or normalization rules than `server/config.php` (contract 3). Rebuild, or change config deliberately (see [Changing the model](#changing-the-model)). `normalization_version` itself follows the deployed code, except in a `config.php` from before M15.1, which needs a one-time edit ([normalization version upgrades](docs/DEPLOY.md#upgrading-to-m15)). |
+| `normalization_version_mismatch` | The bundle was built with different normalization rules than the deployed code (contract 3; since M42 the only compatibility key, as the cPanel bundle has no model or dimension). Rebuild with the matching code. `normalization_version` itself follows the deployed code, except in a `config.php` from before M15.1, which needs a one-time edit ([normalization version upgrades](docs/DEPLOY.md#upgrading-to-m15)). |
 | `invalid_intent_map` | `data_incoming/intent_map.json` is not a JSON object of `{"category": [..], "tags": [..]}` entries (`details.file` names it). Fix `pipeline/intent_map.json` (see [intent map](docs/SEARCH-BEHAVIOR.md#intent-map)) and rebuild. |
 | `invalid_synonyms` | `data_incoming/synonyms.json` is not a JSON list of lists of strings (`details.file` names it). Fix `pipeline/aliases.json` (see [aliases](docs/SEARCH-BEHAVIOR.md#aliases)) and rebuild. |
-| `missing_index`, `missing_vectors` | `vectors.idx` / `vectors.bin` not uploaded. |
+| `missing_index`, `missing_vectors` | Only for a bundle of the old shape (before M42) that ships one of `vectors.idx` / `vectors.bin` but not the other. A bundle without both files is the current shape and needs neither. |
 | `missing_staging_table` | `products_new` does not exist. Call with `?load=1`, or load `products.load.sql` into the database first. |
 | `missing_load_sql` | `?load=1` was sent but `data_incoming/products.load.sql` is absent. Re-extract `release.zip` (or upload the file). |
 | `staging_load_failed` | A statement of `products.load.sql` failed (`details.statement` is its number, `details.error` the database error), or the file ends mid-statement (truncated upload). The staging table may be partial; it is never swapped in. Re-extract the release, or on hosts with tight limits use the manual fallback load. |
 | `unexpected_statement` | `products.load.sql` contains a statement that is not one `build.py` writes for `products_new` (`details.start` shows its beginning). Nothing after it ran. Rebuild the release; never hand-edit the file. |
-| `count_mismatch` | `meta.count`, `vectors.idx` lines, and `products_new` rows disagree. Usually an incomplete SQL load: recreate `products_new` and reload the SQL. |
-| `vectors_size_mismatch`, `checksum_mismatch` | `vectors.bin` is truncated or corrupted (such as an interrupted upload or FTP ASCII mode). Re-upload it in binary mode. |
+| `count_mismatch` | `meta.count` and the `products_new` rows disagree (for a bundle of the old shape, also the `vectors.idx` lines). Usually an incomplete SQL load: recreate `products_new` and reload the SQL. |
+| `vectors_size_mismatch`, `checksum_mismatch` | Only for a bundle of the old shape (before M42): `vectors.bin` is truncated or corrupted (such as an interrupted upload or FTP ASCII mode). Rebuild without it, or re-upload it in binary mode. |
 | `directory_swap_failed` | Renaming `data_incoming` to `data` failed (permissions). The table swap was rolled back, so the service is unchanged. |
 | `busy` | Not an `invalid_bundle`: another reload or rollback holds `server/reload.lock`. `POST /reload` answers it as `409` `reload_busy` (above); the admin panel shows it as "in progress". Nothing changed. |
 | `lock_unavailable` | `server/reload.lock` cannot be created (the app folder is not writable by the web user): `POST /reload` answers `500` `internal_error`; the panel says so. Nothing ran. |
@@ -481,6 +481,6 @@ The semantic model lives on the VPS. Contract 2 (`CLAUDE.md`) is now between
 `search.semantic_min_score` for the new model's score range. Nothing changes
 on cPanel or in the storefront.
 
-`SEARCH_MODEL` / `SEARCH_MODEL_DIM` in `server/config.php` only describe the
-bundle's `meta.json` for `/reload` (contract 3); `/search` does not read the
-bundle's vectors.
+cPanel has no model setting since M42 (the former `model.name` / `dim` only
+described the bundle's `meta.json` for `/reload`, and `/search` never read the
+bundle's vectors).

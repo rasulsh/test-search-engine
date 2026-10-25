@@ -11,8 +11,10 @@ namespace App;
  */
 final class AdminAliasViews
 {
-    /** Rows of the group table on one page; the filter narrows it, the page never grows without a bound. */
+    /** Rows of the synonyms viewer's table (its filter narrows it); the alias groups are paginated instead. */
     public const PAGE_ROWS = 200;
+    /** Alias groups per page unless the request asks for another {@see Paging::SIZES} choice. */
+    public const DEFAULT_PER = 50;
 
     private static function e(mixed $value): string
     {
@@ -141,42 +143,96 @@ final class AdminAliasViews
         };
     }
 
-    /** @param array<string, mixed> $d */
+    /**
+     * The groups table's address for one list state (search, page size, page); $extra adds the page's own
+     * parameters (an edit, a count). Escaped for an attribute.
+     *
+     * @param array{q?: string, per?: int, page?: int} $list
+     * @param array<string, string|int> $extra
+     */
+    public static function listUrl(array $list, array $extra = []): string
+    {
+        $query = ['p' => 'aliases', 'tab' => 'groups'] + $extra;
+        if (($list['q'] ?? '') !== '') {
+            $query['q'] = $list['q'];
+        }
+        if (($list['per'] ?? self::DEFAULT_PER) !== self::DEFAULT_PER) {
+            $query['per'] = $list['per'];
+        }
+        if (($list['page'] ?? 1) > 1) {
+            $query['page'] = $list['page'];
+        }
+
+        return '?' . self::e(http_build_query($query));
+    }
+
+    /**
+     * The list state as hidden form fields, so a save or a delete comes back to the same page of the same search.
+     *
+     * @param array{q?: string, per?: int, page?: int} $list
+     */
+    private static function listFields(array $list): string
+    {
+        return self::hiddenAll([
+            'q' => (string) ($list['q'] ?? ''),
+            'per' => (string) ($list['per'] ?? self::DEFAULT_PER),
+            'page' => (string) ($list['page'] ?? 1),
+        ]);
+    }
+
+    /**
+     * @param array<string, mixed> $d list {q, per, page}: the search and the page, as requested (clamped here)
+     */
     private static function groups(array $t, array $d): string
     {
         $groups = $d['state']['groups'];
         $version = (string) $d['state']['version'];
         $merged = Synonyms::mergeOverlapping($groups);
-        $needle = trim((string) ($d['q'] ?? ''));
+        $requested = $d['list'] ?? ['q' => (string) ($d['q'] ?? '')];
+        $needle = trim((string) ($requested['q'] ?? ''));
         $phrase = $needle === '' ? '' : AliasValidator::phrase($needle);
 
-        $rows = '';
-        $shown = 0;
-        $matched = 0;
+        // The search covers every group; only then is the result cut into pages.
+        $found = [];
         foreach ($groups as $i => $group) {
-            if ($needle !== '' && !self::groupHas($group, $needle, $phrase)) {
-                continue;
+            if ($needle === '' || self::groupHas($group, $needle, $phrase)) {
+                $found[] = $i;
             }
-            $matched++;
-            if ($shown >= self::PAGE_ROWS) {
-                continue;
-            }
-            $shown++;
-            $rows .= self::groupRow($t, $d, $i, $group, $merged, $version);
+        }
+        $per = Paging::size($requested['per'] ?? null, self::DEFAULT_PER);
+        $paging = Paging::of(count($found), (int) ($requested['page'] ?? 1), $per);
+        $list = ['q' => $needle, 'per' => $per, 'page' => $paging['page']];
+        $d['list'] = $list;
+
+        $rows = '';
+        foreach (array_slice($found, $paging['offset'], $paging['limit']) as $i) {
+            $rows .= self::groupRow($t, $d, $i, $groups[$i], $merged, $version);
         }
         if ($rows === '') {
             $rows = '<tr><td colspan="4">' . self::e($needle === '' ? $t['no_groups'] : $t['no_match']) . '</td></tr>';
         }
 
-        $count = AdminStrings::fill($t['group_count'], AdminViews::num(count($groups)), AdminViews::num($shown));
+        $count = $needle === ''
+            ? AdminStrings::fill($t['group_count'], AdminViews::num(count($groups)))
+            : AdminStrings::fill($t['group_found'], AdminViews::num(count($found)), AdminViews::num(count($groups)));
         $search = '<form method="get" class="controls">' . self::hidden('p', 'aliases')
+            . ($per === self::DEFAULT_PER ? '' : self::hidden('per', (string) $per))
             . '<input type="search" name="q" value="' . self::e($needle) . '" placeholder="' . self::e($t['search'])
             . '" aria-label="' . self::e($t['search']) . '" dir="auto"> <button class="btn">'
             . self::e($t['search_go']) . '</button> <span class="note">' . self::e($count) . '</span> '
-            . self::button('p=aliases&amp;tab=groups&amp;edit=new', $t['new_group']) . '</form>';
+            . self::button(substr(self::listUrl($list, ['edit' => 'new']), 1), $t['new_group']) . '</form>';
         $counts = ($d['counts'] ?? null) !== null ? self::countsCard($t, $d['counts']) : '';
+        $pager = AdminViews::pager(
+            $paging,
+            static fn (int $page): string => self::listUrl(['page' => $page] + $list),
+            AdminViews::perPage(
+                ['p' => 'aliases', 'tab' => 'groups'] + ($needle === '' ? [] : ['q' => $needle]),
+                $per,
+                Paging::sizes(self::DEFAULT_PER)
+            )
+        );
 
-        return $counts . self::editor($t, $d, $version) . $search . self::table($t, $rows);
+        return $counts . self::editor($t, $d, $version) . $search . $pager . self::table($t, $rows) . $pager;
     }
 
     /** @param list<string> $group */
@@ -194,9 +250,9 @@ final class AdminAliasViews
 
     private static function table(array $t, string $rows): string
     {
-        return '<div class="scroll card"><table><thead><tr><th class="c">#</th><th>'
+        return '<div class="scroll card"><table class="groups"><thead><tr><th class="c">#</th><th>'
             . self::e($t['tabs']['groups']) . '</th><th>' . self::e($t['effective'])
-            . '</th><th></th></tr></thead><tbody>' . $rows . '</tbody></table></div>';
+            . '</th><th class="act"></th></tr></thead><tbody>' . $rows . '</tbody></table></div>';
     }
 
     /**
@@ -229,13 +285,14 @@ final class AdminAliasViews
             . self::e($t['delete_confirm']) . '">' . self::hiddenAll([
                 'csrf' => (string) $d['csrf'], 'action' => 'alias_delete',
                 'index' => (string) $i, 'version' => $version,
-            ]) . '<button class="btn danger">' . self::e($t['delete']) . '</button></form>';
-        $actions = self::button("p=aliases&amp;tab=groups&amp;edit={$i}", $t['edit']) . ' '
-            . self::button("p=aliases&amp;tab=groups&amp;count={$i}", $t['count']) . ' '
+            ]) . self::listFields($d['list']) . '<button class="btn danger">' . self::e($t['delete'])
+            . '</button></form>';
+        $actions = self::button(substr(self::listUrl($d['list'], ['edit' => $i]), 1), $t['edit']) . ' '
+            . self::button(substr(self::listUrl($d['list'], ['count' => $i]), 1), $t['count']) . ' '
             . self::button('p=tester&amp;q=' . rawurlencode($first), $t['test']) . ' ' . $delete;
 
-        return '<tr><td class="c">' . AdminViews::num($i + 1) . '</td><td>' . $chips . '</td><td>' . $effective
-            . '</td><td>' . $actions . '</td></tr>';
+        return '<tr><td class="c">' . AdminViews::num($i + 1) . '</td><td>' . $chips . '</td><td class="wrap">'
+            . $effective . '</td><td class="act">' . $actions . '</td></tr>';
     }
 
     /** @param array{index: int, rows: list<array{term: string, count: int}>, cap: int} $counts */
@@ -275,11 +332,11 @@ final class AdminAliasViews
         ] + ($confirm ? ['confirm' => '1'] : []);
 
         return '<section class="card"><h2>' . self::e($title) . '</h2><form method="post" action="?p=aliases">'
-            . self::hiddenAll($fields) . '<label>' . self::e($t['terms_label'])
+            . self::hiddenAll($fields) . self::listFields($d['list']) . '<label>' . self::e($t['terms_label'])
             . '<br><textarea name="terms" rows="6" cols="48" dir="auto">' . self::e($terms)
             . '</textarea></label><p class="note">' . self::e($t['terms_hint']) . '</p><div class="actions">'
             . '<button class="btn primary">' . self::e($confirm ? $t['save_anyway'] : $t['save']) . '</button> '
-            . self::button('p=aliases&amp;tab=groups', $t['cancel']) . '</div></form></section><br>';
+            . self::button(substr(self::listUrl($d['list']), 1), $t['cancel']) . '</div></form></section><br>';
     }
 
     /** @param array<string, mixed> $d */
@@ -315,14 +372,15 @@ final class AdminAliasViews
                     'csrf' => (string) $d['csrf'], 'action' => 'alias_restore',
                     'backup' => $name, 'version' => $version,
                 ]) . '<button class="btn">' . self::e($h['restore']) . '</button></form>';
-            $body .= '<tr><td>' . AdminViews::ts(AdminDate::fromUnix((int) $backup['time'])) . '</td><td class="c">'
+            $when = AdminViews::ts(AdminDate::fromUnix((int) $backup['time']));
+            $body .= '<tr><td class="c">' . $when . '</td><td class="c">'
                 . $groupsCell . '</td><td class="c">' . AdminViews::num($backup['size']) . '</td><td>'
                 . self::button('p=aliases&amp;tab=history&amp;diff=' . rawurlencode($name), $h['diff']) . ' '
                 . $restore . '</td></tr>';
         }
         $table = $body === ''
             ? '<p class="note">' . self::e($h['empty']) . '</p>'
-            : '<div class="scroll card"><table><thead><tr><th>' . self::e($h['time']) . '</th><th class="c">'
+            : '<div class="scroll card"><table><thead><tr><th class="c">' . self::e($h['time']) . '</th><th class="c">'
                 . self::e($h['groups']) . '</th><th class="c">' . self::e($h['size']) . '</th><th>'
                 . self::e($h['actions']) . '</th></tr></thead><tbody>' . $body . '</tbody></table></div>';
 
@@ -492,7 +550,7 @@ final class AdminAliasViews
             $coverage = $hit === null ? '—' : self::e(number_format((float) $hit['coverage'], 2, '.', ''));
             $rows .= '<tr><td class="c">' . AdminViews::num($row['rank']) . '</td><td class="c">'
                 . AdminViews::num($row['product_id']) . '</td><td dir="auto">'
-                . self::e($d['titles'][$row['product_id']] ?? '') . '</td><td>'
+                . self::e($d['titles'][$row['product_id']] ?? '') . '</td><td class="c">'
                 . self::e($t['match_types'][$type] ?? $type) . '</td><td class="c">' . $coverage . '</td></tr>';
         }
         if ($rows === '') {
@@ -501,7 +559,8 @@ final class AdminAliasViews
 
         return $html . '<section class="card">' . $meta . '</section><br><div class="scroll card"><table>'
             . '<thead><tr><th class="c">' . self::e($t['rank']) . '</th><th class="c">' . self::e($t['id'])
-            . '</th><th>' . self::e($t['product']) . '</th><th>' . self::e($t['match']) . '</th><th class="c">'
+            . '</th><th>' . self::e($t['product']) . '</th><th class="c">' . self::e($t['match'])
+            . '</th><th class="c">'
             . self::e($t['coverage']) . '</th></tr></thead><tbody>' . $rows . '</tbody></table></div>';
     }
 }

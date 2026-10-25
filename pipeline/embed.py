@@ -11,9 +11,9 @@ What is embedded is the passage composed by build.compose_passage (M21: titles,
 tags, brand, category, model, features, attributes, description); this module
 only prefixes and embeds it, for the mock and real paths alike.
 
-The same code embeds for two models: config['model'] (e5, the cPanel bundle)
-and config['vps_model'] (bge-m3, the VPS vector service, which embeds queries
-since M18; contract 2 is between this file and vps/search_vectors).
+It embeds for config['vps_model'] (bge-m3, the VPS vector service, which embeds
+queries since M18; contract 2 is between this file and vps/search_vectors). The cPanel
+bundle carries no vectors since M42.
 """
 
 from __future__ import annotations
@@ -22,9 +22,6 @@ import hashlib
 from typing import Protocol
 
 import numpy as np
-
-# e5 passage prefix (the cPanel bundle's model).
-PASSAGE_PREFIX = "passage: "
 
 
 def l2_normalize(vectors: np.ndarray) -> np.ndarray:
@@ -159,11 +156,10 @@ def _pooling_mode(module: object) -> str | None:
     return mode if isinstance(mode, str) else None
 
 
-def create_embedder(config: dict, model: dict | None = None) -> Embedder:
+def create_embedder(config: dict, model: dict) -> Embedder:
     """Build the embedder named by config['embedder'] ('mock' or 'real') for
-    `model` (default config['model']; config['vps_model'] for the VPS vectors)."""
+    `model` (config['vps_model'] for the VPS vectors)."""
     mode = config["embedder"]
-    model = config["model"] if model is None else model
     dim = int(model["dim"])
     if mode == "mock":
         return MockEmbedder(dim)
@@ -180,8 +176,6 @@ def create_embedder(config: dict, model: dict | None = None) -> Embedder:
     raise ValueError(f"Unknown embedder: {mode!r} (expected 'mock' or 'real')")
 
 
-def embed_passages(
-    embedder: Embedder, texts: list[str], prefix: str = PASSAGE_PREFIX
-) -> np.ndarray:
-    """Embed product passages with the model's passage prefix (e5 by default)."""
+def embed_passages(embedder: Embedder, texts: list[str], prefix: str) -> np.ndarray:
+    """Embed product passages with the model's passage prefix."""
     return embedder.embed([prefix + text for text in texts])

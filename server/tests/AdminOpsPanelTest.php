@@ -54,7 +54,7 @@ final class AdminOpsPanelTest extends TestCase
         self::$server = new AdminServer([
             'db' => ['dsn' => $dsn, 'user' => $user, 'password' => $password],
             'paths' => ['data' => self::$root . '/data', 'data_incoming' => self::$root . '/data_incoming'],
-            'model' => ['dim' => 4, 'normalization_version' => 2],
+            'model' => ['normalization_version' => 2],
             'reload' => ['token' => self::RELOAD_TOKEN],
             'vps' => ['url' => self::$vps->url, 'token' => FakeVps::TOKEN],
             'redis' => ['enabled' => true, 'host' => '127.0.0.1', 'port' => self::$redis->port],
@@ -85,8 +85,8 @@ final class AdminOpsPanelTest extends TestCase
         foreach ([1, 2] as $id) {
             $this->insertProduct('products', $id);
         }
-        $this->bundle('data', 2, ['built_at' => '2026-09-01T00:00:00Z'], [1, 2]);
-        $this->bundle('data_incoming', 3, ['built_at' => '2026-10-01T00:00:00Z'], [1, 2, 3]);
+        $this->bundle('data', 2, ['built_at' => '2026-09-01T00:00:00Z']);
+        $this->bundle('data_incoming', 3, ['built_at' => '2026-10-01T00:00:00Z']);
         self::$pdo->exec('CREATE TABLE products_new LIKE products');
         foreach ([1, 2, 3] as $id) {
             $this->insertProduct('products_new', $id);
@@ -103,18 +103,12 @@ final class AdminOpsPanelTest extends TestCase
         )->execute([$id]);
     }
 
-    /** @param list<int> $ids @param array<string, mixed> $meta */
-    private function bundle(string $name, int $count, array $meta, array $ids): void
+    /** @param array<string, mixed> $meta */
+    private function bundle(string $name, int $count, array $meta): void
     {
         $dir = self::$root . '/' . $name;
         mkdir($dir);
-        $bin = pack('g*', ...array_fill(0, $count * 4, 0.5));
-        file_put_contents($dir . '/vectors.bin', $bin);
-        file_put_contents($dir . '/vectors.idx', implode("\n", $ids) . "\n");
-        file_put_contents($dir . '/meta.json', json_encode($meta + [
-            'model' => Config::defaults()['model']['name'], 'dim' => 4, 'normalization_version' => 2,
-            'count' => $count, 'checksum' => hash('sha256', $bin),
-        ]));
+        file_put_contents($dir . '/meta.json', json_encode($meta + ['normalization_version' => 2, 'count' => $count]));
     }
 
     /**
@@ -220,12 +214,12 @@ final class AdminOpsPanelTest extends TestCase
 
     public function testARefusedApplyShowsWhyAndLeavesTheLiveVersionAlone(): void
     {
-        file_put_contents(self::$root . '/data_incoming/meta.json', json_encode(['model' => 'wrong/model', 'dim' => 4,
-            'normalization_version' => 2, 'count' => 3, 'built_at' => 'x']));
+        file_put_contents(self::$root . '/data_incoming/meta.json', json_encode(['normalization_version' => 9,
+            'count' => 3, 'built_at' => 'x']));
 
         $page = $this->act('apply');
 
-        self::assertStringContainsString('انجام نشد: مدل بسته با مدل تنظیم‌شده در config.php یکی نیست.', self::banner($page['body']));
+        self::assertStringContainsString('انجام نشد: نسخهٔ نرمال‌سازی بسته با نسخهٔ کد یکی نیست؛ بسته باید دوباره ساخته شود.', self::banner($page['body']));
         self::assertStringContainsString('class="msg bad"', $page['body']);
         self::assertSame(2, $this->rows('products'));
         self::assertDirectoryExists(self::$root . '/data_incoming');

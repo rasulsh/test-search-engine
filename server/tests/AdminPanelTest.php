@@ -486,6 +486,46 @@ final class AdminPanelTest extends TestCase
         self::assertStringContainsString('page=2', $recent);
     }
 
+    public function testTheLogsViewIsSortedSearchedAndPagedFromTheQueryString(): void
+    {
+        $this->seedLogs([
+            ['raw_q' => 'phone a', 'latency_ms' => 50], ['raw_q' => 'phone b', 'latency_ms' => 10],
+            ['raw_q' => 'phone c', 'latency_ms' => 30, 'result_count' => 0], ['raw_q' => 'laptop', 'latency_ms' => 99],
+            ['raw_q' => '50% off', 'latency_ms' => 70], ['raw_q' => 'a_b', 'latency_ms' => 20],
+        ]);
+        $client = self::client();
+        $this->loggedIn($client);
+        $get = static fn (string $query): string => $client->request('GET', '/admin.php?p=logs&' . $query)['body'];
+
+        $sorted = $get('sort=latency_ms&dir=asc&q=phone&per=25');
+        self::assertSame(['10', '30', '50'], self::cells($sorted, 8));
+        self::assertSame(['phone b', 'phone c', 'phone a'], self::cells($sorted, 2));
+        self::assertStringContainsString('نمایش 1 تا 3 از 3', $sorted);
+        self::assertMatchesRegularExpression(
+            '#<th class="c" aria-sort="ascending"><a class="sort" href="[^"]*dir=desc#',
+            $sorted
+        );
+        self::assertStringContainsString('aria-sort="none"', $sorted);
+        // Every link of the page keeps the state, so a bookmark reproduces the view.
+        self::assertSame(1, preg_match('#href="(\?p=logs[^"]*sort=raw_q[^"]*)"#', $sorted, $link));
+        self::assertStringContainsString('q=phone', $link[1]);
+        self::assertStringContainsString('per=25', $link[1]);
+        self::assertStringContainsString('name="q" value="phone"', $sorted);
+
+        self::assertSame(['phone c'], self::cells($get('view=zero&q=phone&sort=raw_q&dir=desc'), 2));
+        self::assertSame(['50% off'], self::cells($get('q=' . rawurlencode('%')), 2));
+        self::assertSame(['a_b'], self::cells($get('q=_'), 2));
+        self::assertStringContainsString('ردیفی با این عبارت پیدا نشد', $get('q=zzz'));
+
+        $fallback = $get('sort=' . rawurlencode('latency_ms; DROP TABLE search_logs') . '&dir=sideways&per=9999');
+        self::assertCount(3, self::cells($fallback, 2), 'an unknown sort and size fall back to the configured size');
+        self::assertSame('a_b', self::cells($fallback, 2)[0], 'newest first');
+        self::assertStringNotContainsString('DROP', $fallback);
+
+        $paged = $get('per=25&page=99');
+        self::assertStringContainsString('نمایش 1 تا 6 از 6', $paged, 'a page past the end shows the last page');
+    }
+
     /** @return list<string> the n-th cell (0-based) of every body row */
     private static function cells(string $html, int $n): array
     {
@@ -494,7 +534,7 @@ final class AdminPanelTest extends TestCase
         $out = [];
         foreach ($rows[1] as $row) {
             preg_match_all('#<td[^>]*>(.*?)</td>#su', $row, $cells);
-            $out[] = $cells[1][$n] ?? '';
+            $out[] = strip_tags($cells[1][$n] ?? '');
         }
 
         return $out;

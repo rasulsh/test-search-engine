@@ -225,6 +225,127 @@ final class AdminAliasPanelTest extends TestCase
         self::assertStringContainsString('گروه انتخاب‌شده وجود ندارد', $gone['body']);
     }
 
+    /** Writes $n two-term groups as the seed; call before the first visit of the test. */
+    private function seedGroups(int $n): void
+    {
+        $groups = [];
+        for ($i = 1; $i <= $n; $i++) {
+            $groups[] = ["word{$i} alpha", "کلمه{$i} بتا"];
+        }
+        file_put_contents(self::$root . '/data/aliases.json', json_encode($groups, JSON_UNESCAPED_UNICODE));
+    }
+
+    /** @return list<int> the group numbers (first column) listed on a page of the groups table */
+    private static function listed(string $html): array
+    {
+        preg_match('#<table class="groups">.*?<tbody>(.*?)</tbody>#su', $html, $body);
+        preg_match_all('#<tr><td class="c">(\d+)</td>#u', $body[1] ?? '', $numbers);
+
+        return array_map('intval', $numbers[1]);
+    }
+
+    public function testGroupsArePaginatedAndEveryGroupIsReachable(): void
+    {
+        $this->seedGroups(130);
+
+        $first = $this->get('p=aliases')['body'];
+        self::assertSame(range(1, 50), self::listed($first), 'the default is 50 per page');
+        self::assertStringContainsString('نمایش 1 تا 50 از 130', $first);
+        self::assertStringContainsString('کل: 130 گروه', $first);
+        self::assertStringContainsString('page=3', $first, 'the page links reach the last page');
+
+        self::assertSame(range(101, 130), self::listed($this->get('p=aliases&page=3')['body']));
+        self::assertSame(range(101, 130), self::listed($this->get('p=aliases&page=99')['body']), 'out of range: last');
+        self::assertSame(range(1, 50), self::listed($this->get('p=aliases&page=0')['body']));
+        self::assertSame(range(1, 25), self::listed($this->get('p=aliases&per=25')['body']));
+        self::assertSame(range(126, 130), self::listed($this->get('p=aliases&per=25&page=6')['body']));
+        self::assertSame(range(1, 130), self::listed($this->get('p=aliases&per=200')['body']));
+        self::assertSame(range(1, 50), self::listed($this->get('p=aliases&per=7')['body']), 'only the offered sizes');
+        self::assertSame(range(1, 50), self::listed($this->get('p=aliases&per=100000')['body']));
+
+        $selector = $this->get('p=aliases&per=100')['body'];
+        self::assertStringContainsString('<option value="100" selected>100</option>', $selector);
+        foreach ([25, 50, 100, 200] as $size) {
+            self::assertStringContainsString('<option value="' . $size . '"', $selector);
+        }
+    }
+
+    public function testTheSearchFiltersEveryGroupNotJustTheCurrentPageAndIsPaginatedToo(): void
+    {
+        $this->seedGroups(130);
+
+        $one = $this->get('p=aliases&q=' . rawurlencode('word120 '))['body'];
+        self::assertSame([120], self::listed($one), 'found on page 3 of the unfiltered list, shown from page 1');
+        self::assertStringContainsString('1 گروه با این جستجو پیدا شد (از 130 گروه)', $one);
+
+        // "word1" matches 1, 10-19 and 100-130 (substring): 1 + 10 + 31 = 42 groups.
+        $page1 = $this->get('p=aliases&q=word1&per=25')['body'];
+        $page2 = $this->get('p=aliases&q=word1&per=25&page=2')['body'];
+        self::assertSame([...[1], ...range(10, 19), ...range(100, 113)], self::listed($page1));
+        self::assertSame(range(114, 130), self::listed($page2));
+        self::assertStringContainsString('نمایش 26 تا 42 از 42', $page2);
+        self::assertStringContainsString('q=word1&amp;per=25&amp;page=2', $page1, 'the page links keep the search');
+
+        self::assertSame([], self::listed($this->get('p=aliases&q=zzzz')['body']));
+        self::assertStringContainsString('گروهی با این واژه پیدا نشد', $this->get('p=aliases&q=zzzz')['body']);
+        $byPersian = $this->get('p=aliases&q=' . rawurlencode('کلمه7'))['body'];
+        self::assertSame([7, ...range(70, 79)], self::listed($byPersian));
+        self::assertSame([], self::listed($this->get('p=aliases&q=%25')['body']), 'a percent sign is just a character');
+    }
+
+    public function testPageSizeAndSearchSurviveEditSaveDeleteCancelAndAFailedSave(): void
+    {
+        $this->seedGroups(130);
+        $state = 'q=word1&per=25&page=2';
+
+        // Links on the list carry the state to the editor, the counter and back.
+        $list = $this->get('p=aliases&' . $state)['body'];
+        self::assertStringContainsString('edit=114&amp;q=word1&amp;per=25&amp;page=2', $list);
+        self::assertStringContainsString('count=114&amp;q=word1&amp;per=25&amp;page=2', $list);
+        $editor = $this->get('p=aliases&tab=groups&edit=113&' . $state)['body'];
+        self::assertStringContainsString('name="q" value="word1"', $editor);
+        self::assertStringContainsString('name="per" value="25"', $editor);
+        self::assertStringContainsString('name="page" value="2"', $editor);
+        self::assertMatchesRegularExpression('#href="\?[^"]*q=word1&amp;per=25&amp;page=2"[^>]*>انصراف#u', $editor);
+
+        $listState = ['q' => 'word1', 'per' => '25', 'page' => '2'];
+        $saved = $this->saveGroup('113', $this->version(), "word114 alpha\nکلمه114 بتا\nextra114", $listState);
+        self::assertSame(303, $saved['status']);
+        self::assertStringContainsString('saved=saved', $saved['headers']['location'] ?? '');
+        parse_str((string) parse_url($saved['headers']['location'], PHP_URL_QUERY), $back);
+        self::assertSame($listState, array_intersect_key($back, $listState));
+        self::assertContains(3, array_map('count', $this->stored()['groups']));
+
+        $deleted = $this->post('p=aliases', [
+            'action' => 'alias_delete', 'index' => '129', 'version' => $this->version(),
+        ] + $listState);
+        self::assertSame(303, $deleted['status']);
+        parse_str((string) parse_url($deleted['headers']['location'], PHP_URL_QUERY), $afterDelete);
+        self::assertSame($listState, array_intersect_key($afterDelete, $listState));
+        self::assertCount(129, $this->stored()['groups']);
+
+        // A rejected save shows the form again on the same page of the same search.
+        $bad = $this->saveGroup('113', $this->version(), 'only-one-term', $listState);
+        self::assertSame(200, $bad['status']);
+        self::assertStringContainsString('name="q" value="word1"', $bad['body']);
+        self::assertStringContainsString('name="per" value="25"', $bad['body']);
+        self::assertStringContainsString('name="page" value="2"', $bad['body']);
+        self::assertSame(range(114, 129), self::listed($bad['body']), 'the list behind is page 2 of the search');
+    }
+
+    public function testDeletingTheOnlyGroupOfTheLastPageLandsOnTheNewLastPage(): void
+    {
+        $this->seedGroups(51);
+        $this->get('p=aliases');
+        $this->post('p=aliases', [
+            'action' => 'alias_delete', 'index' => '50', 'version' => $this->version(),
+            'per' => '50', 'page' => '2', 'q' => '',
+        ]);
+
+        self::assertSame(range(1, 50), self::listed($this->get('p=aliases&page=2')['body']));
+        self::assertCount(50, $this->stored()['groups']);
+    }
+
     public function testCountsAreComputedOnDemandForOneGroup(): void
     {
         $this->get('p=aliases');

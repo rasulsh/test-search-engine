@@ -6,6 +6,7 @@ namespace App\Tests;
 
 use App\Config;
 use App\ConfigDoctor;
+use App\Normalizer;
 use PHPUnit\Framework\TestCase;
 
 final class ConfigDoctorTest extends TestCase
@@ -67,6 +68,24 @@ final class ConfigDoctorTest extends TestCase
         self::assertStringStartsWith('admin.ip_header: removed in M39 (X-Forwarded-For', $byKey['admin.ip_header']);
         self::assertStringNotContainsString('unknown key', implode("\n", $report['warnings']));
         self::assertStringNotContainsString('old-token-value', (string) json_encode($report));
+    }
+
+    public function testAnOldConfigWithTheCpanelModelKeysStillLoadsAndIsToldToDropThem(): void
+    {
+        $overrides = self::clean();
+        $overrides['model'] = [
+            'name' => 'intfloat/multilingual-e5-small', 'revision' => 'main', 'dim' => 384,
+            'normalization_version' => Normalizer::VERSION,
+        ];
+        $report = ConfigDoctor::check($overrides);
+
+        self::assertSame([], $report['errors']);
+        self::assertCount(3, $report['warnings']);
+        foreach (['model.name', 'model.revision', 'model.dim'] as $key) {
+            self::assertStringContainsString("{$key}: removed in M42", implode("\n", $report['warnings']));
+        }
+        self::assertStringNotContainsString('unknown key', implode("\n", $report['warnings']));
+        self::assertSame(Normalizer::VERSION, Config::merge($overrides)['model']['normalization_version']);
     }
 
     public function testEveryDeprecatedKeyIsGoneFromTheSchemaAndWellFormed(): void

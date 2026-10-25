@@ -110,20 +110,12 @@ final class NormalizationVersionBumpTest extends DatabaseTestCase
     /** A consistent bundle in data_incoming plus its staging table. */
     private function stageBundle(int $normalizationVersion): void
     {
-        $dim = (int) InstallerTest::evaluateConfig($this->serverDir . '/config.php')['model']['dim'];
         $dir = $this->serverDir . '/data_incoming';
         is_dir($dir) || mkdir($dir);
-        $bin = pack('g*', ...array_fill(0, self::COUNT * $dim, 0.5));
-        file_put_contents($dir . '/vectors.bin', $bin);
-        file_put_contents($dir . '/vectors.idx', "4001\n4002\n");
         file_put_contents($dir . '/meta.json', (string) json_encode([
-            'model' => 'intfloat/multilingual-e5-small',
-            'revision' => 'main',
-            'dim' => $dim,
             'normalization_version' => $normalizationVersion,
             'count' => self::COUNT,
             'built_at' => '2026-01-01T00:00:00+00:00',
-            'checksum' => hash('sha256', $bin),
         ]));
 
         $this->pdo->exec('DROP TABLE IF EXISTS products_new');

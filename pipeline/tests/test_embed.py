@@ -10,16 +10,11 @@ import pytest
 
 import embed
 from embed import (
-    PASSAGE_PREFIX,
     MockEmbedder,
     create_embedder,
     embed_passages,
     l2_normalize,
 )
-
-
-def test_passage_prefix() -> None:
-    assert PASSAGE_PREFIX == "passage: "
 
 
 def test_mock_is_deterministic_correct_dim_and_l2() -> None:
@@ -45,18 +40,18 @@ def test_l2_normalize_handles_zero_row() -> None:
 
 
 def test_create_embedder_mock_and_unknown() -> None:
-    embedder = create_embedder({"embedder": "mock", "model": {"dim": 8}})
+    embedder = create_embedder({"embedder": "mock"}, {"dim": 8})
     assert isinstance(embedder, MockEmbedder)
     assert embedder.dim == 8
 
     with pytest.raises(ValueError):
-        create_embedder({"embedder": "nope", "model": {"dim": 8}})
+        create_embedder({"embedder": "nope"}, {"dim": 8})
 
 
 def test_embed_passages_applies_prefix() -> None:
     embedder = MockEmbedder(16)
-    prefixed = embed_passages(embedder, ["laptop"])
-    manual = embedder.embed([PASSAGE_PREFIX + "laptop"])
+    prefixed = embed_passages(embedder, ["laptop"], "passage: ")
+    manual = embedder.embed(["passage: laptop"])
     np.testing.assert_array_equal(prefixed, manual)
 
 
@@ -115,14 +110,17 @@ def _install_fake(monkeypatch: pytest.MonkeyPatch, cuda: bool) -> None:
     monkeypatch.setattr(embed, "cuda_available", lambda: cuda)
 
 
+_MODEL = {"name": "m", "revision": "r", "dim": 4}
+
+
 def _real_config(**embed_settings: str | int) -> dict:
-    return {"embedder": "real", "model": {"name": "m", "revision": "r", "dim": 4},
+    return {"embedder": "real",
             "embed": {"device": "auto", "fp16": "auto", "batch_size": 16, **embed_settings}}
 
 
 def test_create_embedder_on_gpu_uses_fp16_and_batch(monkeypatch: pytest.MonkeyPatch) -> None:
     _install_fake(monkeypatch, cuda=True)
-    embedder = create_embedder(_real_config(batch_size=8))
+    embedder = create_embedder(_real_config(batch_size=8), _MODEL)
     assert (_FakeModel.calls["device"], _FakeModel.calls["half"]) == ("cuda", True)
 
     vectors = embedder.embed(["a", "b"])
@@ -134,17 +132,17 @@ def test_create_embedder_on_gpu_uses_fp16_and_batch(monkeypatch: pytest.MonkeyPa
 
 def test_create_embedder_cpu_and_overrides(monkeypatch: pytest.MonkeyPatch) -> None:
     _install_fake(monkeypatch, cuda=False)
-    create_embedder(_real_config())
+    create_embedder(_real_config(), _MODEL)
     assert (_FakeModel.calls["device"], _FakeModel.calls["half"]) == ("cpu", False)
 
     _install_fake(monkeypatch, cuda=True)
-    create_embedder(_real_config(device="cpu"))
+    create_embedder(_real_config(device="cpu"), _MODEL)
     assert (_FakeModel.calls["device"], _FakeModel.calls["half"]) == ("cpu", False)
-    create_embedder(_real_config(fp16="off"))
+    create_embedder(_real_config(fp16="off"), _MODEL)
     assert (_FakeModel.calls["device"], _FakeModel.calls["half"]) == ("cuda", False)
 
     with pytest.raises(ValueError, match="batch"):
-        create_embedder(_real_config(batch_size=0))
+        create_embedder(_real_config(batch_size=0), _MODEL)
 
 
 def test_embed_config_comes_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -153,7 +151,6 @@ def test_embed_config_comes_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("SEARCH_EMBED_DEVICE", "cpu")
     monkeypatch.setenv("SEARCH_EMBED_FP16", "off")
     monkeypatch.setenv("SEARCH_EMBED_BATCH_SIZE", "4")
-    monkeypatch.delenv("SEARCH_BUNDLE_EMBEDDER", raising=False)
     loaded = pipeline_config.load()
     assert loaded["embed"] == {"device": "cpu", "fp16": "off", "batch_size": 4}
-    assert loaded["bundle_embedder"] == "mock"
+    assert "bundle_embedder" not in loaded

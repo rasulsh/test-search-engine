@@ -108,7 +108,7 @@ no upload of `release.zip` or any code, and no `FLUSHALL`.
 
 | Card | What it does | Takes effect |
 | --- | --- | --- |
-| **Reload the staged bundle** | Shows `data_incoming/` next to the live `data/`: build time, normalization version, count, model, dimension, the count change, how many product ids were added / removed (from `vectors.idx`), the staging table and `products.load.sql`. **Validate only** runs every check of a reload and changes nothing; **load and activate** is the reload itself (optionally loading `products.load.sql` into `products_new` first, the equivalent of `reload.php?load=1`). | at once; the previous version stays as `products_old` + `data_old` |
+| **Reload the staged bundle** | Shows `data_incoming/` next to the live `data/`: build time, normalization version, count, the count change, how many product ids were added / removed (staged `products_new` against the live `products` table, once the staging table is loaded), the staging table and `products.load.sql`. **Validate only** runs every check of a reload and changes nothing; **load and activate** is the reload itself (optionally loading `products.load.sql` into `products_new` first, the equivalent of `reload.php?load=1`). | at once; the previous version stays as `products_old` + `data_old` |
 | **Return to the previous version** | Swaps `products` / `products_old` and `data` / `data_old`. Disabled when either is missing. Refused when the previous bundle's model, dim or normalization version does not match the running code. A second press goes back. | at once |
 | **Result cache** | Shows the Redis state and how many keys sit under `redis.prefix`; **clear** deletes those keys only (`SCAN` + `DEL`, 5 s timeout), never `FLUSHDB` / `FLUSHALL`, so other data on the same Redis is safe. | at once |
 | **VPS** | Shows `/health` (count, model, built at) and **load the uploaded vectors** calls the VPS `POST /reload` with `vps.token` and `vps.reload_timeout_ms` (60 s). The `rsync` of the vector files stays outside the panel. | when the VPS finishes its own check |
@@ -187,3 +187,19 @@ by try/catch) and applied before first paint, so there is no flash of the wrong 
 
 LiteSpeed / LVE behaviour, the real host's session handling and file permissions, and the behaviour behind the
 production proxy (client address, `X-Forwarded-Proto`). Check them with [DEPLOY.md](DEPLOY.md#upgrading-to-m39).
+
+## Panel polish (M42)
+
+- **Layout.** The content fills the window next to the side navigation up to about 1600 px on every page; tables use the
+  full card width, numeric, date, percentage and short-code columns are centered (headers like their cells), free text
+  starts at the edge, long text wraps or is cut with the whole value as a tooltip. A wide table scrolls inside its card;
+  the page itself never scrolls sideways. The login box is centered in the viewport (theme switch stays in the corner).
+- **Aliases.** The groups table is paginated on the server: 25 / 50 / 100 / 200 per page (default 50), page links, the
+  total. The search covers every group and its result is paginated too. Page, size and search live in the query string
+  (`?p=aliases&q=...&per=25&page=2`) and come back after edit, save, delete and cancel, and with the browser's back button.
+- **Logs.** Click a column heading to sort the whole filtered result (time, query, normalized query, layer, vector,
+  results, latency, cache hit, ...; unknown names are ignored, only whitelisted columns reach the SQL). The search box
+  matches the raw and the normalized query (`%`, `_` and quotes are literal) and combines with the three views, the sort,
+  the page size and the page; everything is in the query string, so a view can be bookmarked. On a huge table the
+  search and unindexed sorts read the newest `logs.scan_limit` rows and the page says so; use `tools/logs-export.php` for
+  older data.

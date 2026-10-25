@@ -55,7 +55,6 @@ final class AdminOpsViews
         $live = $r['live'];
         $fields = [
             'built_at' => $t['built_at'], 'normalization_version' => $t['norm_version'], 'count' => $t['count'],
-            'model' => $t['model'], 'dim' => $t['dim'],
         ];
         $cell = static function (array $bundle, string $field): string {
             if (!$bundle['present'] || $bundle[$field] === null) {
@@ -66,17 +65,17 @@ final class AdminOpsViews
                 return AdminViews::ts($bundle[$field]);
             }
 
-            return in_array($field, ['count', 'dim', 'normalization_version'], true)
-                ? self::e(AdminViews::num($bundle[$field]))
-                : '<bdi class="ltr">' . self::e($bundle[$field]) . '</bdi>';
+            return self::e(AdminViews::num($bundle[$field]));
         };
-        $table = '<table class="cmp"><thead><tr><th></th><th>' . self::e($t['incoming']) . '</th><th>'
+        $table = '<table class="cmp"><thead><tr><th></th><th class="c">' . self::e($t['incoming'])
+            . '</th><th class="c">'
             . self::e($t['live'])
             . '</th></tr></thead><tbody>';
         foreach ($fields as $field => $label) {
             $differs = $in['present'] && $live['present'] && $in[$field] !== $live[$field];
-            $table .= '<tr' . ($differs ? ' class="diff"' : '') . '><th scope="row">' . self::e($label) . '</th><td>'
-                . $cell($in, $field) . '</td><td>' . $cell($live, $field) . '</td></tr>';
+            $table .= '<tr' . ($differs ? ' class="diff"' : '') . '><th scope="row">' . self::e($label)
+                . '</th><td class="c">'
+                . $cell($in, $field) . '</td><td class="c">' . $cell($live, $field) . '</td></tr>';
         }
         $table .= '</tbody></table>';
         if (!$in['present']) {
@@ -217,11 +216,11 @@ final class AdminOpsViews
         $body = '';
         foreach ($rows as $row) {
             [$kind, $message] = self::message($row);
-            $body .= '<tr><td>' . AdminViews::ts($row['ts']) . '</td><td>'
+            $body .= '<tr><td class="c">' . AdminViews::ts($row['ts']) . '</td><td>'
                 . self::e($labels[$row['action']] ?? $row['action'])
                 . '</td><td><span class="badge ' . ($kind === 'ok' ? 'ok' : 'bad') . '">'
                 . self::e($kind === 'ok' ? $t['ok'] : $t['failed'])
-                . '</span> ' . self::e($message) . '</td><td><bdi class="ltr">' . self::e($row['ip'])
+                . '</span> ' . self::e($message) . '</td><td class="c"><bdi class="ltr">' . self::e($row['ip'])
                 . '</bdi></td></tr>';
         }
         if ($body === '') {
@@ -229,9 +228,9 @@ final class AdminOpsViews
         }
 
         return '<section class="card recent"><h2>' . self::e($t['title'])
-            . '</h2><div class="scroll"><table><thead><tr><th>'
+            . '</h2><div class="scroll"><table><thead><tr><th class="c">'
             . self::e($t['time']) . '</th><th>' . self::e($t['action']) . '</th><th>' . self::e($t['result'])
-            . '</th><th>'
+            . '</th><th class="c">'
             . self::e($t['ip']) . '</th></tr></thead><tbody>' . $body . '</tbody></table></div></section>';
     }
 

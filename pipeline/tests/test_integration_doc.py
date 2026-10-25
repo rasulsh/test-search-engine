@@ -38,6 +38,6 @@ def test_every_endpoint_error_code_is_documented() -> None:
 
 def test_every_reload_reason_is_documented() -> None:
     reasons = _reload_reasons()
-    assert {"model_mismatch", "dim_mismatch", "count_mismatch", "staging_load_failed"} <= reasons
+    assert {"normalization_version_mismatch", "count_mismatch", "staging_load_failed"} <= reasons
     missing = sorted(reason for reason in reasons if f"`{reason}`" not in DOC)
     assert not missing, f"invalid_bundle reasons missing from INTEGRATION.md: {missing}"

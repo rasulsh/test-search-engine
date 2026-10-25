@@ -10,8 +10,6 @@ namespace App\Tests;
  */
 final class InstallEndpointTest extends DatabaseTestCase
 {
-    private const DIM = 4;
-
     private string $serverDir = '';
     /** @var resource|null */
     private $process = null;
@@ -135,7 +133,6 @@ final class InstallEndpointTest extends DatabaseTestCase
             'db_name' => $dsn['dbname'] ?? '',
             'db_user' => (string) getenv('SEARCH_TEST_DB_USER'),
             'db_password' => (string) getenv('SEARCH_TEST_DB_PASSWORD'),
-            'model_dim' => (string) self::DIM,
             'reload_token' => 'tok-' . str_repeat('9f', 20),
         ], $overrides));
     }
@@ -144,13 +141,9 @@ final class InstallEndpointTest extends DatabaseTestCase
     {
         $dir = $this->serverDir . '/data_incoming';
         mkdir($dir);
-        $bin = pack('g*', ...array_fill(0, 6 * self::DIM, 0.5));
-        file_put_contents($dir . '/vectors.bin', $bin);
-        file_put_contents($dir . '/vectors.idx', "2001\n2002\n2003\n2004\n2005\n2006\n");
         copy(self::repoRoot() . '/fixtures/products.load.sample.sql', $dir . '/products.load.sql');
         file_put_contents($dir . '/meta.json', (string) json_encode([
-            'model' => 'intfloat/multilingual-e5-small', 'dim' => self::DIM,
-            'normalization_version' => 2, 'count' => 6, 'checksum' => hash('sha256', $bin),
+            'normalization_version' => 2, 'count' => 6,
         ]));
     }
 
@@ -161,7 +154,8 @@ final class InstallEndpointTest extends DatabaseTestCase
         self::assertSame(200, $status);
         self::assertStringContainsString('<html lang="fa" dir="rtl">', $body);
         self::assertMatchesRegularExpression('/name="reload_token" value="[0-9a-f]{64}"/', $body);
-        self::assertStringContainsString('name="model_name" value="intfloat/multilingual-e5-small"', $body);
+        self::assertStringNotContainsString('name="model_name"', $body);
+        self::assertStringNotContainsString('name="model_dim"', $body);
         self::assertStringContainsString('name="semantic_min_score" value="0.4"', $body);
         self::assertStringContainsString('name="vps_timeout_ms" value="300"', $body);
         // Build-time only (release.py --desc-index-chars): not a server setting.
@@ -169,7 +163,7 @@ final class InstallEndpointTest extends DatabaseTestCase
         self::assertStringContainsString('type="password" id="db_password" name="db_password" value=""', $body);
         foreach (
             ['db_host', 'db_name', 'db_user', 'store_base', 'image_base', 'title_weight', 'desc_weight',
-            'spec_weight', 'phrase_bonus', 'model_dim', 'normalization_version', 'vps_url', 'vps_token'] as $field
+            'spec_weight', 'phrase_bonus', 'normalization_version', 'vps_url', 'vps_token'] as $field
         ) {
             self::assertStringContainsString('name="' . $field . '"', $body);
         }

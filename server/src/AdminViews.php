@@ -86,8 +86,7 @@ final class AdminViews
         if ($b['present']) {
             $cards .= '<dl class="kv">' . $row($t['built_at'], self::ts($b['built_at']))
                 . $row($t['norm_version'], self::e(self::num($b['normalization_version'])))
-                . $row($t['bundle_count'], self::e(self::num($b['count'])))
-                . $row($t['model'], $ltr($b['model'])) . '</dl>';
+                . $row($t['bundle_count'], self::e(self::num($b['count']))) . '</dl>';
         } else {
             $cards .= '<p>' . $badge('warn', $t['bundle_missing']) . '</p>';
         }
@@ -191,8 +190,9 @@ final class AdminViews
             }
             $fromFile = $row['source'] === 'file';
             $body .= '<tr data-changed="' . ($fromFile || $notes !== '' ? '1' : '0') . '"><td><bdi class="ltr">'
-                . self::e($row['key']) . '</bdi></td><td>' . $value . '</td><td>'
-                . self::e($fromFile ? $t['source_file'] : $t['source_default']) . '</td><td>' . $notes . '</td></tr>';
+                . self::e($row['key']) . '</bdi></td><td>' . $value . '</td><td class="c">'
+                . self::e($fromFile ? $t['source_file'] : $t['source_default']) . '</td><td class="wrap">' . $notes
+                . '</td></tr>';
         }
 
         return '<section class="card cfg"><h2>' . self::e($t['title']) . '</h2><p class="note">'
@@ -202,13 +202,13 @@ final class AdminViews
             . '"> <label><input type="checkbox" data-changed-only="cfg-table"> '
             . self::e($t['only_changed'])
             . '</label></div><div class="scroll tall"><table id="cfg-table"><thead><tr><th>'
-            . self::e($t['key']) . '</th><th>' . self::e($t['value']) . '</th><th>' . self::e($t['source'])
+            . self::e($t['key']) . '</th><th>' . self::e($t['value']) . '</th><th class="c">' . self::e($t['source'])
             . '</th><th>'
             . self::e($t['issues']) . '</th></tr></thead><tbody>' . $body . '</tbody></table></div></section>';
     }
 
     /**
-     * @param array{rows: list<array<string, mixed>>, total: int, page: int, pages: int} $data
+     * @param array{rows: list<array<string, mixed>>, total: int, page: int, pages: int, from: int, to: int} $data
      */
     public static function audit(array $data): string
     {
@@ -216,17 +216,18 @@ final class AdminViews
         $rows = '';
         foreach ($data['rows'] as $row) {
             $label = $t['actions'][$row['action']] ?? $row['action'];
-            $rows .= '<tr><td>' . self::ts($row['ts']) . '</td><td><bdi class="ltr">' . self::e($row['ip'])
-                . '</bdi></td><td>' . self::e($label) . '</td><td>' . self::auditDetail($row) . '</td></tr>';
+            $rows .= '<tr><td class="c">' . self::ts($row['ts']) . '</td><td class="c"><bdi class="ltr">'
+                . self::e($row['ip']) . '</bdi></td><td>' . self::e($label) . '</td><td class="wrap">'
+                . self::auditDetail($row) . '</td></tr>';
         }
         if ($rows === '') {
             $rows = '<tr><td colspan="4">' . self::e($t['empty']) . '</td></tr>';
         }
-        $pager = self::pager($t, $data, static fn (int $page): string => '?p=audit&amp;page=' . $page);
+        $pager = self::pager($data, static fn (int $page): string => '?p=audit&amp;page=' . $page);
 
         $head = '';
-        foreach (['time', 'ip', 'action', 'detail'] as $column) {
-            $head .= '<th>' . self::e($t[$column]) . '</th>';
+        foreach (['time' => 'c', 'ip' => 'c', 'action' => '', 'detail' => ''] as $column => $class) {
+            $head .= '<th' . ($class === '' ? '' : ' class="' . $class . '"') . '>' . self::e($t[$column]) . '</th>';
         }
 
         return self::helpBox($t['help']) . $pager . '<div class="scroll card"><table><thead><tr>' . $head
@@ -289,47 +290,134 @@ final class AdminViews
         return '<bdi dir="auto">' . self::e($raw) . '</bdi>';
     }
 
+    /** Columns centered in the logs table (numbers, dates, short codes); the rest start-aligned and may be cut. */
+    private const LOG_CUT = ['raw_q', 'normalized_q', 'did_you_mean', 'top_ids', 'customer_id'];
+    private const LOG_CENTERED = ['id', 'ts', 'tier', 'had_vector', 'result_count', 'top_ids', 'latency_ms',
+        'customer_id', 'cache_hit'];
+
     /**
-     * @param array{rows: list<array<string, mixed>>, total: int, page: int, pages: int, view: string} $data
+     * The logs page's address for one state, only the parts that differ from the defaults (a view with its
+     * own sort, a search, a page size, a page), so a bookmarked URL stays short. Escaped for an attribute.
+     *
+     * @param array<string, mixed> $s view, q, per, sort, dir, default_per
+     * @param array<string, mixed> $change keys of $s to replace (a null value drops the key)
+     */
+    public static function logsUrl(array $s, array $change = []): string
+    {
+        $s = array_replace($s, $change);
+        $query = ['p' => 'logs'];
+        if (($s['view'] ?? 'recent') !== 'recent') {
+            $query['view'] = $s['view'];
+        }
+        if (($s['q'] ?? '') !== '') {
+            $query['q'] = $s['q'];
+        }
+        if (($s['per'] ?? null) !== null && $s['per'] !== ($s['default_per'] ?? null)) {
+            $query['per'] = $s['per'];
+        }
+        if (($s['sort'] ?? '') !== '') {
+            $query['sort'] = $s['sort'];
+            $query['dir'] = $s['dir'];
+        }
+        if (($s['page'] ?? 1) > 1) {
+            $query['page'] = $s['page'];
+        }
+
+        return '?' . self::e(http_build_query($query));
+    }
+
+    /**
+     * @param array{rows: list<array<string, mixed>>, total: int, page: int, pages: int, view: string,
+     *        sort: string, dir: string, q: string, per: int, from: int, to: int, scan_limit: int|null,
+     *        default_per: int, sizes: list<int>} $data
      */
     public static function logs(array $data): string
     {
         $t = AdminStrings::fa()['logs'];
+        $ui = AdminStrings::fa()['ui'];
+        $state = ['view' => $data['view'], 'q' => $data['q'], 'per' => $data['per'],
+            'default_per' => $data['default_per'], 'sort' => $data['sort'], 'dir' => $data['dir']];
+
         $tabs = '';
         foreach ($t['views'] as $view => $label) {
             $current = $view === $data['view'] ? ' aria-current="page"' : '';
-            $tabs .= '<a href="?p=logs&amp;view=' . self::e($view) . '"' . $current . '>' . self::e($label) . '</a>';
+            $tabs .= '<a href="' . self::logsUrl($state, ['view' => $view, 'sort' => '', 'dir' => '']) . '"'
+                . $current . '>' . self::e($label) . '</a>';
         }
+
         $head = '';
-        foreach ($t['columns'] as $label) {
-            $head .= '<th>' . self::e($label) . '</th>';
+        foreach ($t['columns'] as $column => $label) {
+            $class = in_array($column, self::LOG_CENTERED, true) ? ' class="c"' : '';
+            if (!in_array($column, LogsPage::SORTS, true)) {
+                $head .= '<th' . $class . '>' . self::e($label) . '</th>';
+                continue;
+            }
+            $active = $data['sort'] === $column;
+            $next = $active ? ($data['dir'] === 'asc' ? 'desc' : 'asc')
+                : (in_array($column, LogsPage::TEXT, true) ? 'asc' : 'desc');
+            $aria = $active ? ($data['dir'] === 'asc' ? 'ascending' : 'descending') : 'none';
+            $hint = $active ? ' title="' . self::e($ui[$data['dir'] === 'asc' ? 'sort_asc' : 'sort_desc']) . '"' : '';
+            $head .= '<th' . $class . ' aria-sort="' . $aria . '"><a class="sort" href="'
+                . self::logsUrl($state, ['sort' => $column, 'dir' => $next, 'page' => 1]) . '"' . $hint . '>'
+                . self::e($label) . '</a></th>';
         }
+
         $body = '';
         foreach ($data['rows'] as $row) {
             $body .= '<tr>';
             foreach (array_keys($t['columns']) as $column) {
                 $value = $row[$column] ?? '';
+                $class = in_array($column, self::LOG_CENTERED, true) ? ' class="c"' : '';
                 if ($column === 'had_vector' || $column === 'cache_hit') {
-                    $value = ($row[$column] ?? 0) ? AdminStrings::fa()['ui']['yes'] : AdminStrings::fa()['ui']['no'];
+                    $body .= '<td class="c">' . self::e($ui[($row[$column] ?? 0) ? 'yes' : 'no']) . '</td>';
+                } elseif ($column === 'ts') {
+                    $body .= '<td class="c nw">' . self::ts($value) . '</td>';
+                } elseif (in_array($column, self::LOG_CUT, true)) {
+                    // A long value is cut with an ellipsis; the whole of it is the tooltip.
+                    $body .= '<td' . $class . ' dir="auto"><span class="trunc" title="' . self::e($value) . '">'
+                        . self::e($value) . '</span></td>';
+                } else {
+                    $body .= '<td' . $class . '>' . self::e($value) . '</td>';
                 }
-                $body .= $column === 'ts'
-                    ? '<td>' . self::ts($value) . '</td>'
-                    : '<td dir="auto">' . self::e($value) . '</td>';
             }
             $body .= '</tr>';
         }
         if ($body === '') {
-            $body = '<tr><td colspan="' . count($t['columns']) . '">' . self::e($t['empty']) . '</td></tr>';
+            $body = '<tr><td colspan="' . count($t['columns']) . '">'
+                . self::e($data['q'] === '' ? $t['empty'] : $t['no_match']) . '</td></tr>';
         }
-        $view = $data['view'];
+
+        $hidden = '';
+        foreach (
+            ['view' => $data['view'] === 'recent' ? '' : $data['view'], 'sort' => $data['sort'],
+            'dir' => $data['sort'] === '' ? '' : $data['dir'],
+            'per' => $data['per'] === $data['default_per'] ? '' : (string) $data['per']] as $name => $value
+        ) {
+            $hidden .= $value === ''
+                ? ''
+                : '<input type="hidden" name="' . $name . '" value="' . self::e($value) . '">';
+        }
+        $search = '<form method="get" class="controls"><input type="hidden" name="p" value="logs">' . $hidden
+            . '<input type="search" name="q" value="' . self::e($data['q']) . '" maxlength="' . LogsPage::MAX_TERM
+            . '" placeholder="' . self::e($t['search']) . '" aria-label="' . self::e($t['search'])
+            . '" dir="auto"> <button class="btn">' . self::e($t['search_go']) . '</button>'
+            . ($data['q'] === '' ? '' : ' <a class="btn" href="' . self::logsUrl($state, ['q' => '']) . '">'
+                . self::e($t['search_clear']) . '</a>') . '</form>';
+
+        $notice = $data['scan_limit'] === null ? ''
+            : '<p class="msg warn">' . self::e(AdminStrings::fill($t['scan_notice'], self::num($data['scan_limit'])))
+                . '</p>';
         $pager = self::pager(
-            $t,
             $data,
-            static fn (int $page): string => '?p=logs&amp;view=' . $view . '&amp;page=' . $page
+            static fn (int $page): string => self::logsUrl($state, ['page' => $page]),
+            self::perPage(['p' => 'logs'] + array_filter([
+                'view' => $data['view'] === 'recent' ? '' : $data['view'], 'q' => $data['q'],
+                'sort' => $data['sort'], 'dir' => $data['sort'] === '' ? '' : $data['dir'],
+            ], static fn (string $v): bool => $v !== ''), $data['per'], $data['sizes'])
         );
 
-        return self::helpBox($t['help']) . '<nav class="tabs">' . $tabs . '</nav>' . $pager
-            . '<div class="scroll card"><table><thead><tr>' . $head . '</tr></thead><tbody>' . $body
+        return self::helpBox($t['help']) . '<nav class="tabs">' . $tabs . '</nav>' . $search . $notice . $pager
+            . '<div class="scroll card"><table class="logs"><thead><tr>' . $head . '</tr></thead><tbody>' . $body
             . '</tbody></table></div>' . $pager;
     }
 
@@ -349,25 +437,71 @@ final class AdminViews
     }
 
     /**
-     * @param array<string, mixed> $t strings with `page`, `newer`, `older`
-     * @param array{page: int, pages: int, total: int} $data
-     * @param callable(int): string $link
+     * The range shown, the page links (first, last and a window around the current page) and, when given,
+     * the rows-per-page form. Links go through $link so each page keeps its own query string.
+     *
+     * @param array{page: int, pages: int, from: int, to: int, total: int} $data
+     * @param callable(int): string $link page number -> escaped href
+     * @param string $extra markup at the end of the bar (the page-size form)
      */
-    private static function pager(array $t, array $data, callable $link): string
+    public static function pager(array $data, callable $link, string $extra = ''): string
     {
-        $html = '<div class="pager"><span>' . self::e(AdminStrings::fill(
-            $t['page'],
-            self::num($data['page']),
-            self::num($data['pages']),
+        $ui = AdminStrings::fa()['ui'];
+        $range = $data['total'] === 0 ? $ui['range_none'] : AdminStrings::fill(
+            $ui['range'],
+            self::num($data['from']),
+            self::num($data['to']),
             self::num($data['total'])
-        )) . '</span>';
-        if ($data['page'] > 1) {
-            $html .= '<a href="' . $link($data['page'] - 1) . '">' . self::e($t['newer']) . '</a>';
-        }
-        if ($data['page'] < $data['pages']) {
-            $html .= '<a href="' . $link($data['page'] + 1) . '">' . self::e($t['older']) . '</a>';
+        );
+        $links = '';
+        if ($data['pages'] > 1) {
+            if ($data['page'] > 1) {
+                $links .= '<a href="' . $link($data['page'] - 1) . '" rel="prev">' . self::e($ui['prev']) . '</a>';
+            }
+            foreach (Paging::window($data['page'], $data['pages']) as $number) {
+                if ($number === null) {
+                    $links .= '<span class="gap">&hellip;</span>';
+                } elseif ($number === $data['page']) {
+                    $links .= '<span class="cur" aria-current="page">' . self::e(self::num($number)) . '</span>';
+                } else {
+                    $links .= '<a href="' . $link($number) . '" aria-label="'
+                        . self::e(AdminStrings::fill($ui['page_label'], self::num($number))) . '">'
+                        . self::e(self::num($number)) . '</a>';
+                }
+            }
+            if ($data['page'] < $data['pages']) {
+                $links .= '<a href="' . $link($data['page'] + 1) . '" rel="next">' . self::e($ui['next']) . '</a>';
+            }
         }
 
-        return $html . '</div>';
+        return '<div class="pager"><span class="range">' . self::e($range) . '</span>'
+            . ($links === ''
+                ? ''
+                : '<nav class="pages" aria-label="' . self::e($ui['pages_nav']) . '">' . $links . '</nav>')
+            . $extra . '</div>';
+    }
+
+    /**
+     * The rows-per-page choice: a GET form back to the same page that keeps $keep and starts from page 1.
+     *
+     * @param array<string, string> $keep the query parameters to carry (p and the page's own state)
+     * @param list<int> $sizes
+     */
+    public static function perPage(array $keep, int $current, array $sizes): string
+    {
+        $ui = AdminStrings::fa()['ui'];
+        $html = '<form method="get" class="perpage">';
+        foreach ($keep as $name => $value) {
+            $html .= '<input type="hidden" name="' . self::e($name) . '" value="' . self::e($value) . '">';
+        }
+        $options = '';
+        foreach ($sizes as $size) {
+            $options .= '<option value="' . $size . '"' . ($size === $current ? ' selected' : '') . '>' . $size
+                . '</option>';
+        }
+
+        return $html . '<label>' . self::e($ui['per_page']) . ' <select name="per" data-autosubmit>' . $options
+            . '</select></label><noscript> <button class="btn">' . self::e($ui['apply'])
+            . '</button></noscript></form>';
     }
 }

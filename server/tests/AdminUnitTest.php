@@ -206,7 +206,7 @@ final class AdminUnitTest extends DatabaseTestCase
         mkdir($data);
         $meta = [
             'built_at' => '2026-10-01T10:00:00Z', 'normalization_version' => 4,
-            'count' => 12, 'model' => 'm', 'dim' => 3,
+            'count' => 12,
         ];
         file_put_contents($data . '/meta.json', json_encode($meta));
         file_put_contents($data . '/aliases.json', '[["a","b"],["c","d"]]');
@@ -274,7 +274,7 @@ final class AdminUnitTest extends DatabaseTestCase
         $html = AdminViews::status([
             'database' => ['ok' => true, 'products' => 1234],
             'bundle' => ['present' => true, 'built_at' => '<b>x</b>', 'normalization_version' => 4,
-                'count' => 5, 'model' => 'm', 'dim' => 3],
+                'count' => 5],
             'groups' => ['aliases' => 2, 'synonyms' => null],
             'vps' => ['state' => 'unreachable'],
             'redis' => ['state' => 'off'],

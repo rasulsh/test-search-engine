@@ -163,10 +163,15 @@ Breaking any of these produces silently wrong results. Enforce each with a test.
    model, revision, pooling, prefixes, and L2-normalization. Vectors from
    different models are not comparable; the VPS `/reload` rejects mismatched
    vectors.
-3. **Bundle compatibility.** `meta.json` carries `{model, revision, dim,
-   normalization_version, count, built_at, checksum}`. `POST /reload` must
-   reject a bundle whose `model`, `dim`, or `normalization_version` does not
-   match `server/config.php`.
+3. **Bundle compatibility.** `meta.json` carries `{normalization_version,
+   count, built_at}` (since M42 the cPanel bundle has no vectors, so no model,
+   dim or checksum). `POST /reload` must reject a bundle whose
+   `normalization_version` does not match the deployed code
+   (`model.normalization_version`) or whose `count` differs from the rows
+   loaded into the staging table. A bundle of the old shape (with
+   `vectors.bin` / `vectors.idx`, accepted during the transition) is also
+   checked on its index lines, `vectors.bin` size (`count × meta.dim × 4`) and
+   checksum. The VPS vectors have their own `meta.json` (contract 2).
 
 ---
 
@@ -174,10 +179,6 @@ Breaking any of these produces silently wrong results. Enforce each with a test.
 
 `pipeline/build.py` outputs a directory the server consumes:
 
-- `vectors.bin` — little-endian float32, row-major, `count × dim`, each row
-  L2-normalized at build time.
-- `vectors.idx` — UTF-8 text, one `product_id` per line, line order == row order
-  in `vectors.bin`.
 - `products.load.sql` — INSERT/REPLACE rows for the `products` table (normalized
   title/desc/specs/tags + brand, category, model, price, stock, url, image,
   popularity, plus `normalized_collapsed` since M23). Tags (M21) are the store's `oc_tag` names via `oc_product_tag`
@@ -185,11 +186,15 @@ Breaking any of these produces silently wrong results. Enforce each with a test.
   with their own weights.
 - `synonyms.json`, `spellcheck.txt`, `keymap.json`, `intent_map.json`. The owner's aliases are not in the bundle since
   M41: they live in `server/storage/aliases.json`, edited in the admin panel.
-- `meta.json` — see contract 3.
+- `meta.json` — `{normalization_version, count, built_at}`, see contract 3.
 
-Since M18 cPanel's `/search` does not read the bundle's `vectors.bin` (the VPS
-serves Tier 2 from its own vectors, `build.py --vps-out`); `/reload` still
-validates it (contract 3).
+The cPanel bundle carries no vectors since M42: the VPS serves Tier 2 from its
+own vectors (`build.py --vps-out`, a different artifact: `vectors.bin` +
+`vectors.idx` + `meta.json` with the VPS model's `{model, revision, dim,
+pooling, prefixes, checksum}`, which the VPS `/reload` checks, contract 2).
+During the transition `/reload` still accepts a bundle that ships the old
+`vectors.bin` / `vectors.idx` and runs the old size / checksum / index checks
+on them.
 
 ---
 
@@ -254,8 +259,8 @@ because Tier 2 is unavailable.
   Persian-quality test and may change. The cosine floor
   (`search.semantic_min_score`, default 0.4 for bge-m3) needs real-catalog
   tuning; one-word precision comes from the keyword tier blended with the cosine (M20), not the
-  floor. The cPanel bundle's `meta.json` model (`SEARCH_MODEL`, default
-  `intfloat/multilingual-e5-small`, dim 384) is only checked on `/reload`.
+  floor. cPanel has no model since M42 (no `model.name` / `dim`
+  config): the bundle's `meta.json` carries the normalization version only.
   Never hardcode models, dims, or thresholds; read them from config.
 - Config: defaults live in `App\Config`, `config.php` holds only overrides (secrets from
   env inside it); commit `config.example.php` and `.env.example`. Never commit
@@ -417,7 +422,15 @@ wait for review before starting the next.
 - **M22 — Offline build speed + reliable export:** `pipeline/db_export.py`
   (direct DB -> CSV, replaces the phpMyAdmin export), GPU/fp16/batch-configured
   `RealEmbedder`, and a mock cPanel `vectors.bin` in `release.py` (unread since
-  M18; `/reload` checks meta, size and checksum only). Contracts unchanged.
+  M18; `/reload` checked meta, size and checksum only; removed in M42). Contracts unchanged.
+
+- **M42 — Drop the cPanel vectors + panel polish:** the cPanel bundle loses `vectors.bin` / `vectors.idx`
+  (release.zip 33 MB -> 5 MB on a 20k catalog); `/reload` checks `normalization_version` and `meta.count ==
+  staging rows` (old-shape bundles keep their old checks); `model.name` / `revision` / `dim` leave `App\Config`
+  (`Config::deprecated()`, `docs/CHANGELOG.md`); the status / ops / install pages lose the model and dimension rows.
+  Panel: full-width layout (max about 1600 px) and consistent tables, a centered login box, server-side pagination
+  and search over all alias groups, and the logs page with whitelisted server-side sorting, a rows-per-page selector
+  and a keyword search across raw and normalized query, all in the query string.
 
 **Definition of Done (per PR):** code + tests pass in CI; docs updated;
 KISS respected (no unused abstraction); PR description complete; no secrets or

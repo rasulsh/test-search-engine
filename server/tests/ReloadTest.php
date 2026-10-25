@@ -41,7 +41,7 @@ final class ReloadTest extends DatabaseTestCase
         return Config::merge([
             'paths' => ['data' => $dataDir, 'data_incoming' => $incomingDir],
             'model' => array_merge(
-                ['name' => 'intfloat/multilingual-e5-small', 'dim' => self::DIM, 'normalization_version' => 2],
+                ['normalization_version' => 2],
                 $model
             ),
         ]);
@@ -56,30 +56,30 @@ final class ReloadTest extends DatabaseTestCase
         return $dir;
     }
 
-    /** @param array<string, mixed> $metaOverrides */
-    private function makeIncoming(int $count, int $dim = self::DIM, array $metaOverrides = []): string
+    /**
+     * The bundle shape since M42 (meta.json and the data files, no vectors); $legacy adds the pre-M42
+     * vectors.bin / vectors.idx and the meta fields that described them.
+     *
+     * @param array<string, mixed> $metaOverrides
+     */
+    private function makeIncoming(int $count, array $metaOverrides = [], bool $legacy = false): string
     {
         $dir = $this->newTempDir('_in');
-        $floats = array_fill(0, $count * $dim, 0.5);
-        $bin = $count === 0 ? '' : pack('g*', ...$floats);
-        file_put_contents($dir . '/vectors.bin', $bin);
-
-        $idx = '';
-        for ($i = 0; $i < $count; $i++) {
-            $idx .= (3000 + $i) . "\n";
+        $meta = ['normalization_version' => 2, 'count' => $count, 'built_at' => '2026-01-01T00:00:00+00:00'];
+        if ($legacy) {
+            $bin = $count === 0 ? '' : pack('g*', ...array_fill(0, $count * self::DIM, 0.5));
+            file_put_contents($dir . '/vectors.bin', $bin);
+            $idx = '';
+            for ($i = 0; $i < $count; $i++) {
+                $idx .= (3000 + $i) . "\n";
+            }
+            file_put_contents($dir . '/vectors.idx', $idx);
+            $meta += [
+                'model' => 'intfloat/multilingual-e5-small', 'revision' => 'main', 'dim' => self::DIM,
+                'checksum' => hash('sha256', $bin),
+            ];
         }
-        file_put_contents($dir . '/vectors.idx', $idx);
-
-        $meta = array_merge([
-            'model' => 'intfloat/multilingual-e5-small',
-            'revision' => 'main',
-            'dim' => $dim,
-            'normalization_version' => 2,
-            'count' => $count,
-            'built_at' => '2026-01-01T00:00:00+00:00',
-            'checksum' => hash('sha256', $bin),
-        ], $metaOverrides);
-        file_put_contents($dir . '/meta.json', json_encode($meta));
+        file_put_contents($dir . '/meta.json', json_encode(array_merge($meta, $metaOverrides)));
 
         return $dir;
     }
@@ -182,7 +182,7 @@ final class ReloadTest extends DatabaseTestCase
         $cache = new \App\Cache($redis, 'search:cache:', 60);
         $cache->set('search:cache:a', ['a' => 1]);
         $this->createStaging(2);
-        $incomingDir = $this->makeIncoming(2, self::DIM, ['model' => 'other/model']);
+        $incomingDir = $this->makeIncoming(2, ['normalization_version' => 9]);
 
         try {
             (new Reload($this->pdo, $this->config($this->newTempDir('_data'), $incomingDir), $cache))->run();
@@ -373,18 +373,18 @@ final class ReloadTest extends DatabaseTestCase
         self::assertDirectoryExists($incomingDir); // staged bundle untouched
     }
 
-    public function testModelMismatchRejectedWithoutSwap(): void
+    public function testIncompatibleBundleRejectedWithoutSwap(): void
     {
         $this->insertProduct('products', 1);
         $this->createStaging(3);
         $dataDir = $this->newTempDir('_data');
-        $incomingDir = $this->makeIncoming(3, self::DIM, ['model' => 'other/model']);
+        $incomingDir = $this->makeIncoming(3, ['normalization_version' => 9]);
 
         try {
             (new Reload($this->pdo, $this->config($dataDir, $incomingDir)))->run();
             self::fail('expected ReloadException');
         } catch (ReloadException $e) {
-            self::assertSame('model_mismatch', $e->reason());
+            self::assertSame('normalization_version_mismatch', $e->reason());
         }
 
         // No swap: products untouched, staging intact, incoming still present.
@@ -393,31 +393,71 @@ final class ReloadTest extends DatabaseTestCase
         self::assertDirectoryExists($incomingDir);
     }
 
-    public function testDimMismatchRejected(): void
+    public function testAnOldBundleVectorsSizeMustMatchItsOwnDim(): void
     {
         $this->createStaging(3);
-        $incoming = $this->makeIncoming(3, self::DIM, ['dim' => 8]);
-        $this->expectReloadReason($incoming, 'dim_mismatch');
+        $incoming = $this->makeIncoming(3, ['dim' => 8], true); // vectors.bin is 3 x 4 floats
+        $this->expectReloadReason($incoming, 'vectors_size_mismatch');
+    }
+
+    public function testNoModelOrDimIsCheckedAnyMore(): void
+    {
+        $this->createStaging(2);
+        $dataDir = $this->newTempDir('_data');
+        $this->tempDirs[] = $dataDir . '_old';
+        $incoming = $this->makeIncoming(2, ['model' => 'any/model', 'dim' => 12345, 'revision' => 'x']);
+
+        self::assertSame(2, (new Reload($this->pdo, $this->config($dataDir, $incoming)))->run()['count']);
     }
 
     public function testNormalizationVersionMismatchRejected(): void
     {
         $this->createStaging(3);
-        $incoming = $this->makeIncoming(3, self::DIM, ['normalization_version' => 1]);
+        $incoming = $this->makeIncoming(3, ['normalization_version' => 1]);
         $this->expectReloadReason($incoming, 'normalization_version_mismatch');
     }
 
     public function testCountMismatchRejected(): void
     {
         $this->createStaging(3);              // staging has 3 rows
-        $incoming = $this->makeIncoming(2);   // meta.count and idx say 2
+        $incoming = $this->makeIncoming(2);   // meta.count says 2
         $this->expectReloadReason($incoming, 'count_mismatch');
+    }
+
+    public function testAnOldBundleIsStillAcceptedWithItsVectorsAndCheckedOnThem(): void
+    {
+        $this->createStaging(3);
+        $dataDir = $this->newTempDir('_data');
+        $this->tempDirs[] = $dataDir . '_old';
+        $incoming = $this->makeIncoming(3, [], true);
+
+        self::assertSame(3, (new Reload($this->pdo, $this->config($dataDir, $incoming)))->run()['count']);
+    }
+
+    public function testAnOldBundlesIndexMustAgreeWithMetaCount(): void
+    {
+        $this->createStaging(3);
+        $incoming = $this->makeIncoming(3, [], true);
+        file_put_contents($incoming . '/vectors.idx', "3000\n3001\n"); // 2 lines, meta + staging say 3
+        $this->expectReloadReason($incoming, 'count_mismatch');
+    }
+
+    public function testAnOldBundleMissingOneOfItsVectorFilesIsRefused(): void
+    {
+        $this->createStaging(3);
+        $noBin = $this->makeIncoming(3, [], true);
+        unlink($noBin . '/vectors.bin');
+        $this->expectReloadReason($noBin, 'missing_vectors');
+
+        $noIdx = $this->makeIncoming(3, [], true);
+        unlink($noIdx . '/vectors.idx');
+        $this->expectReloadReason($noIdx, 'missing_index');
     }
 
     public function testChecksumMismatchRejected(): void
     {
         $this->createStaging(3);
-        $incoming = $this->makeIncoming(3, self::DIM, ['checksum' => 'deadbeef']);
+        $incoming = $this->makeIncoming(3, ['checksum' => 'deadbeef'], true);
         $this->expectReloadReason($incoming, 'checksum_mismatch');
     }
 
@@ -584,12 +624,12 @@ final class ReloadTest extends DatabaseTestCase
         $incomingDir = $this->makeIncomingWithLoadFile();
         file_put_contents($incomingDir . '/meta.json', (string) json_encode(array_merge(
             json_decode((string) file_get_contents($incomingDir . '/meta.json'), true),
-            ['model' => 'other/model']
+            ['normalization_version' => 9]
         )));
 
         [$dataDir, $reason] = $this->runLoadExpectingFailure($incomingDir);
 
-        self::assertSame('model_mismatch', $reason);
+        self::assertSame('normalization_version_mismatch', $reason);
         self::assertFalse($this->stagingExists()); // the load never started
         $this->assertNothingSwapped($dataDir, $incomingDir);
     }
@@ -626,8 +666,7 @@ final class ReloadTest extends DatabaseTestCase
 
         $result = (new Reload($this->pdo, $this->config($dataDir, $incomingDir)))->validate();
 
-        self::assertSame(['ok' => true, 'count' => 3, 'model' => 'intfloat/multilingual-e5-small', 'dim' => self::DIM,
-            'staging' => 'loaded'], $result);
+        self::assertSame(['ok' => true, 'count' => 3, 'staging' => 'loaded'], $result);
         self::assertSame(1, $this->rowCount('products'), 'the live table is untouched');
         self::assertSame(3, $this->rowCount('products_new'));
         self::assertDirectoryExists($incomingDir);
@@ -640,9 +679,8 @@ final class ReloadTest extends DatabaseTestCase
         $dataDir = $this->newTempDir('_data');
 
         $cases = [
-            ['incoming' => $this->makeIncoming(3, self::DIM, ['model' => 'other/model']), 'reason' => 'model_mismatch'],
             [
-                'incoming' => $this->makeIncoming(3, self::DIM, ['normalization_version' => 9]),
+                'incoming' => $this->makeIncoming(3, ['normalization_version' => 9]),
                 'reason' => 'normalization_version_mismatch',
             ],
             ['incoming' => $this->makeIncoming(3), 'reason' => 'count_mismatch'],
@@ -692,8 +730,7 @@ final class ReloadTest extends DatabaseTestCase
         $this->createStaging(3);
         $dataDir = $this->newTempDir('_data');
         file_put_contents($dataDir . '/meta.json', json_encode([
-            'model' => 'intfloat/multilingual-e5-small', 'dim' => self::DIM, 'normalization_version' => 2,
-            'count' => 2, 'built_at' => 'old-build',
+            'normalization_version' => 2, 'count' => 2, 'built_at' => 'old-build',
         ]));
         $incomingDir = $this->makeIncoming(3);
         (new Reload($this->pdo, $this->config($dataDir, $incomingDir)))->run();
@@ -838,11 +875,10 @@ final class ReloadTest extends DatabaseTestCase
         $this->createStaging(3);
         $dataDir = $this->newTempDir('_data');
         file_put_contents($dataDir . '/meta.json', json_encode([
-            'model' => 'intfloat/multilingual-e5-small', 'dim' => self::DIM, 'normalization_version' => 2,
-            'count' => 2, 'built_at' => 'old-build',
+            'normalization_version' => 2, 'count' => 2, 'built_at' => 'old-build',
         ]));
-        file_put_contents($dataDir . '/vectors.idx', "3000\n9999\n");
-        $incomingDir = $this->makeIncoming(3); // ids 3000, 3001, 3002
+        $this->insertProduct('products', 9999); // live: 1, 9999; staged: 3000, 3001, 3002
+        $incomingDir = $this->makeIncoming(3);
         file_put_contents($incomingDir . '/products.load.sql', '-- staged');
 
         $d = (new Reload($this->pdo, $this->config($dataDir, $incomingDir)))->describe();
@@ -852,7 +888,7 @@ final class ReloadTest extends DatabaseTestCase
         self::assertSame(2, $d['live']['count']);
         self::assertSame(['built_at', 'count'], $d['diff']['changed']);
         self::assertSame(1, $d['diff']['count_delta']);
-        self::assertSame([2, 1], [$d['diff']['added'], $d['diff']['removed']]);
+        self::assertSame([3, 2], [$d['diff']['added'], $d['diff']['removed']]);
         self::assertSame(['exists' => true, 'rows' => 3], $d['staging']);
         self::assertTrue($d['load_sql']);
         self::assertFalse($d['rollback']['possible']);

@@ -29,9 +29,7 @@ Deriving it from **OpenCart 2.0.3.1** is step 1 of the
 escaping OpenCart stores in names and descriptions and strips the markup, so the
 export can be taken from the OpenCart tables as-is.
 
-**Bundle output** (`build.py --csv export.csv --out ./bundle`): `vectors.bin`
-(little-endian float32, `count × dim`, L2-normalized), `vectors.idx` (one
-`product_id` per line, row order), `products.load.sql` (drops and recreates the
+**Bundle output** (`build.py --csv export.csv --out ./bundle`): `products.load.sql` (drops and recreates the
 `products_new` staging table from the `products` definition in `db/schema.sql`,
 so schema changes such as the `sku` and `normalized_specs` columns reach the live table through the
 swap with no manual `ALTER`; then its rows, normalized columns from the canonical Normalizer,
@@ -39,20 +37,19 @@ split into statements of at most `SEARCH_LOAD_MAX_STATEMENT_BYTES`, 1 MB by
 default, so each fits a shared host's `max_allowed_packet`),
 `synonyms.json` (no `aliases.json` since M41: the owner's [aliases](SEARCH-BEHAVIOR.md#aliases) live on the server, [panel-edited](ADMIN.md#alias-manager-m41)), `intent_map.json` (the owner's [intent map](SEARCH-BEHAVIOR.md#intent-map), keys checked
 to be normalized), `spellcheck.txt`, `keymap.json`, and `meta.json`
-(`{model, revision, dim, normalization_version, count, built_at, checksum, embedder}`).
+(`{normalization_version, count, built_at}`). The bundle has carried no vectors
+since M42 (nothing on cPanel read them since M18), so building it runs no
+embedder; the semantic vectors are the separate `--vps-out` artifact below.
 M21 added the `normalized_tags`, `normalized_brand` and `normalized_category`
-columns to `products.load.sql`; `model`, `dim` and `normalization_version` in
-`meta.json` are unchanged, so both `/reload`s (cPanel and VPS) accept the new
-bundle and only `count` / `checksum` differ.
+columns to `products.load.sql`.
 
 **Embedding contract (model parity, contract 2).** The semantic tier's model
 is bge-m3 on the VPS: `build.py --vps-out` embeds products with
 `SEARCH_VPS_MODEL*` / `SEARCH_VPS_POOLING` / prefixes, and the VPS embeds
 queries with the same model, revision, pooling and prefix (`vps/README.md`,
 "Model parity"); its `/reload` refuses vectors whose `meta.json` differs. The
-cPanel bundle's own `vectors.bin` (e5, `"passage: "` prefix) is still built
-and validated on `/reload` (contract 3) but is no longer read by `/search`
-(M18). The passage is a bounded composed field, in priority order
+cPanel bundle has no vectors (M42); `/reload` there checks the normalization
+version and the count (contract 3). The passage is a bounded composed field, in priority order
 `title_fa title_en tags brand category model` (tags early since M21), the
 feature titles, the attribute values, then the truncated `desc` (at most
 `SEARCH_DESC_CHAR_LIMIT`), all within

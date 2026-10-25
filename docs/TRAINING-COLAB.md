@@ -8,7 +8,7 @@ The complete, self-contained runbook for rebuilding the search index and the sem
 
 | artifact | goes to | what it is |
 | --- | --- | --- |
-| `release.zip` | cPanel host | server code + the bundle (`products.load.sql`, `meta.json`, spellcheck, synonyms, aliases, a mock `vectors.bin`) |
+| `release.zip` | cPanel host | server code + the bundle (`products.load.sql`, `meta.json`, spellcheck, synonyms, intent map; no vectors since M42) |
 | `vps_vectors/` (downloaded as `vps_vectors.zip`) | the vector-service VM (the VPS) | the real bge-m3 product vectors |
 
 **When to rerun it:** after a catalog update, after editing `pipeline/aliases.json`, or after any schema/ranking change that adds a column to the load file (for example the M23 `normalized_collapsed` column). Keys mentioned below are defined in [CONFIGURATION.md](CONFIGURATION.md).

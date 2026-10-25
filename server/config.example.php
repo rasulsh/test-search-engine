@@ -66,7 +66,7 @@ return [
     'debug'  => ['token' => $setting('SEARCH_DEBUG_TOKEN', '')],  // "debug": 1 in /search
 
     // Only when pinning, add (see App\Config for the keys and defaults):
-    //   'model' => ['name' => ..., 'dim' => ..., 'normalization_version' => ...],
+    //   'model' => ['normalization_version' => ...],
     //   'paths' => ['data' => ..., 'data_incoming' => ...],
     // @installer:sections
 ];

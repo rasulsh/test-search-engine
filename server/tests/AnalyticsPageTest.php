@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Tests;
 
 use App\AnalyticsPage;
+use App\AnalyticsStrings;
 use PHPUnit\Framework\TestCase;
 
 final class AnalyticsPageTest extends TestCase
@@ -24,9 +25,9 @@ final class AnalyticsPageTest extends TestCase
         preg_match('#<script type="application/json" id="report">(.*?)</script>#s', $html, $m);
         self::assertSame(self::report($query), json_decode($m[1], true));
         self::assertSame(
-            2,
+            5,
             substr_count($html, '</script>'),
-            'the data block and the code block, nothing a query adds'
+            'theme bootstrap, three data blocks and the dashboard code, nothing a query adds'
         );
         self::assertStringNotContainsString('<script>alert', $html);
     }
@@ -36,7 +37,15 @@ final class AnalyticsPageTest extends TestCase
         $html = AnalyticsPage::render(self::report('x'), 'N0nce+/=');
 
         self::assertStringContainsString('<script nonce="N0nce+/=">', $html);
-        self::assertSame(1, substr_count($html, '<script nonce='));
+        self::assertSame(2, substr_count($html, '<script nonce='), 'the theme bootstrap and the dashboard');
+        self::assertSame(
+            substr_count($html, '<script nonce="N0nce+/=">'),
+            substr_count($html, '<script nonce='),
+            'every code block carries the response nonce'
+        );
+        self::assertStringNotContainsString('url(http', $html);
+        $fontUrls = preg_match_all('#url\(fonts/vazirmatn/Vazirmatn-\w+\.woff2\)#', $html);
+        self::assertSame(2, $fontUrls, 'self-hosted fonts only');
         foreach (['<link', ' src=', '@import', 'https://', 'cdn'] as $external) {
             self::assertStringNotContainsString($external, $html, $external);
         }
@@ -44,18 +53,55 @@ final class AnalyticsPageTest extends TestCase
         self::assertStringContainsString('http://www.w3.org/2000/svg', $html);
     }
 
-    public function testTheShellNamesTheDashboardSectionsAndDarkMode(): void
+    public function testTheShellIsPersianRtlAndCarriesThemeSupport(): void
     {
         $html = AnalyticsPage::render(self::report('x'), 'n');
 
         foreach (
-            ['Search analytics', 'Zero-result rate', 'Cache hit rate', 'Hybrid share', 'p95 latency', 'Busiest hours',
-            'Query length', 'Top brands', 'Top categories', 'Zero-result queries', 'Top queries',
-            'prefers-color-scheme:dark',
-            'Filter queries', 'format=json'] as $text
+            ['<html lang="fa" dir="rtl">', 'تحلیل جستجو', 'prefers-color-scheme:dark', 'data-theme="dark"',
+            'analytics-theme', 'id="strings"', 'نرخ جستجوی بی‌نتیجه', 'پرترددترین ساعت‌ها', 'format=json'] as $text
         ) {
             self::assertStringContainsString($text, $html, $text);
         }
+    }
+
+    public function testEveryPersianUiStringLivesInTheStringsFile(): void
+    {
+        $js = (string) file_get_contents(dirname(__DIR__) . '/src/AnalyticsPage.js');
+
+        // The help mark and the percent sign are the only Persian characters the script itself holds.
+        self::assertSame(0, preg_match('/[\x{0600}-\x{06FF}]/u', str_replace(['؟', '٪'], '', $js)));
+    }
+
+    public function testEveryCardHelpEntryIsComplete(): void
+    {
+        $fa = AnalyticsStrings::fa();
+
+        self::assertGreaterThanOrEqual(25, count($fa['help']));
+        foreach ($fa['help'] as $key => $entry) {
+            foreach (['what', 'calc', 'read', 'act'] as $part) {
+                self::assertNotSame('', trim($entry[$part] ?? ''), "help {$key}.{$part}");
+            }
+        }
+        foreach (['alias', 'tile_unique', 'tile_per_session'] as $key) {
+            self::assertStringContainsString('session_id', $fa['help'][$key]['needs']);
+        }
+        foreach (['silent', 'tile_ctr', 'tile_mrr'] as $key) {
+            self::assertStringContainsString('/events', $fa['help'][$key]['needs']);
+        }
+    }
+
+    public function testTheFontsAndTheirLicenceShipUnderPublic(): void
+    {
+        $dir = dirname(__DIR__) . '/public/fonts/vazirmatn';
+
+        foreach (['Regular', 'Bold'] as $weight) {
+            $file = "{$dir}/Vazirmatn-{$weight}.woff2";
+            self::assertFileExists($file);
+            self::assertSame('wOF2', substr((string) file_get_contents($file, false, null, 0, 4), 0, 4), $weight);
+        }
+        $licence = strtoupper((string) file_get_contents($dir . '/OFL.txt'));
+        self::assertStringContainsString('SIL OPEN FONT LICENSE', $licence);
     }
 
     public function testTheDashboardScriptIsValidJavaScript(): void

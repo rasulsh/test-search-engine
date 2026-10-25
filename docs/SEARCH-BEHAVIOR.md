@@ -81,7 +81,8 @@ equivalent terms:
   `search.synonyms_max_group_size` (default 4) are ignored as likely noise.
 - `aliases.json` — **maintained by the shop owner** in
   `pipeline/aliases.json` (or the file `SEARCH_ALIASES_FILE` /
-  `release.py --aliases FILE` names), normalized and shipped in the bundle.
+  `release.py --aliases FILE` names), normalized and shipped in the bundle. Groups that share a
+  term count as one group (M38), so listing `ps5` in two groups never strands a spelling.
 
 ```json
 [

@@ -123,14 +123,25 @@ Sample (abridged; the numbers are illustrative, the shape is real):
 }
 ```
 
-The HTML dashboard (M35, English) is a shell that draws the report client-side and
+The HTML dashboard (M35; Persian, right-to-left and Vazirmatn since M38) is a shell that draws the report client-side and
 **refreshes itself**: every `logs.refresh_seconds` (default 30; `0` turns it off) it
 re-fetches `?format=json` from the same origin and re-renders, with no server push.
 It makes **no third-party request**: the charts are hand-rolled inline SVG, the page
 runs one script under a per-response CSP nonce (`script-src 'nonce-…'`,
 `connect-src 'self'`), and the token is never written into the page (the script reuses
 the page's own query string, so open it as `analytics.php?token=…` or let the form do
-that). It shows
+that). Since M38 it is `lang="fa" dir="rtl"`: every UI string lives in one PHP array
+(`server/src/AnalyticsStrings.php`, edit the wording there, no logic), every card and tile has a "؟"
+help panel (what it measures, how it is calculated, how to read it, what to do, and the data the
+storefront must send) and a "راهنما" section explains the main metrics and the log v1 / v2 difference.
+Fonts are self-hosted (`public/fonts/vazirmatn/`, OFL, `font-src 'self'`); a header button toggles
+light / dark (default: the browser's choice, remembered in `localStorage`). Dates show the stored
+Gregorian value with its Jalali equivalent (`Intl`, no library), unshifted, beside the database
+clock's UTC offset (`search_logs.ts` is written by the database in its own session zone, which the app
+never sets). `?format=json` is untouched (`fixtures/analytics_report.golden.json` guards it).
+Reports that stay empty until the storefront sends `session_id` (unique searches, searches per
+session, alias candidates) or click events (click-through, MRR, cart rate, silent failures) say so.
+Screenshots: [light](img/analytics-fa-light.png), [dark](img/analytics-fa-dark.png). It shows
 
 - tiles: searches, zero-result rate, cache hit rate, hybrid share, average and p95
   latency, repeated-query share;

@@ -6,7 +6,7 @@
 (function () {
   'use strict';
   var SVG = 'http://www.w3.org/2000/svg';
-  var THEME_KEY = 'analytics-theme';
+  var THEME_KEY = 'admin-theme';
   var T = JSON.parse(document.getElementById('strings').textContent);
   var META = JSON.parse(document.getElementById('meta').textContent);
   var report = JSON.parse(document.getElementById('report').textContent);
@@ -454,7 +454,7 @@
     }
 
     var headerNote = (r.since ? t(T.ui.since, [dualText(r.since)]) : T.ui.all_time) + ' — ' + dbClockLabel();
-    var toolbar = el('div', { 'class': 'topbar' }, [el('h1', { text: T.title }), themeBtn]);
+    var toolbar = META.embedded ? el('div', {}) : el('div', { 'class': 'topbar' }, [el('h1', { text: T.title }), themeBtn]);
     root.replaceChildren(el('header', {}, [toolbar, el('p', { 'class': 'note', text: headerNote })]),
       controls, tiles, tileHelpHolder, grid, tables, el('div', { 'class': 'grid2' }, quality), guideCard());
     if (focus) { var again = document.getElementById(focus); if (again) { again.focus(); if (again.setSelectionRange && again.value) { again.setSelectionRange(again.value.length, again.value.length); } } }

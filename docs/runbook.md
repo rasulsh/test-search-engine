@@ -85,7 +85,7 @@ curl -sS -X POST "https://<DOMAIN>/search-api/search.php" \
      -H 'Content-Type: application/json' -d '{"q":"دوال شاک","limit":5}'
 ```
 
-Open `https://<DOMAIN>/search-api/analytics.php?token=<LOGS_TOKEN>` — the dashboard loads.
+Log in at `https://<DOMAIN>/search-api/admin.php` and open the analytics page: the dashboard loads.
 
 ---
 

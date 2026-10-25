@@ -55,7 +55,7 @@ abstract class DatabaseTestCase extends TestCase
 
     protected function resetSchema(): void
     {
-        $this->pdo->exec('DROP TABLE IF EXISTS products, search_logs, search_events');
+        $this->pdo->exec('DROP TABLE IF EXISTS products, search_logs, search_events, admin_audit');
         $this->pdo->exec($this->readSql('db/schema.sql'));
     }
 

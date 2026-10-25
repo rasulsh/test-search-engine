@@ -16,7 +16,49 @@ final class ConfigDoctorTest extends TestCase
         return [
             'db' => ['dsn' => 'mysql:host=h;dbname=d', 'user' => 'u', 'password' => 'pw'],
             'reload' => ['token' => 'a-long-random-reload-token'],
+            'admin' => TempConfig::admin(),
         ];
+    }
+
+    public function testAnUnsetAdminIsAWarningAndAHalfSetOneIsAnError(): void
+    {
+        $unset = self::clean();
+        unset($unset['admin']);
+        $report = ConfigDoctor::check($unset);
+        self::assertSame([], $report['errors']);
+        self::assertSame(['admin.username / admin.password_hash: not set, admin.php answers 503'], $report['warnings']);
+
+        $plain = self::clean();
+        $plain['admin']['password_hash'] = 'my-plaintext-password';
+        $report = ConfigDoctor::check($plain);
+        self::assertCount(1, $report['errors']);
+        self::assertStringStartsWith('admin.password_hash: not a password_hash() value', $report['errors'][0]);
+        self::assertStringNotContainsString('my-plaintext-password', (string) json_encode($report));
+
+        $noUser = self::clean();
+        $noUser['admin']['username'] = '';
+        self::assertSame(
+            ['admin.username: empty while admin.password_hash is set'],
+            ConfigDoctor::check($noUser)['errors']
+        );
+        $noHash = self::clean();
+        $noHash['admin']['password_hash'] = '';
+        self::assertSame(
+            ['admin.password_hash: empty while admin.username is set'],
+            ConfigDoctor::check($noHash)['errors']
+        );
+    }
+
+    public function testTheOldLogsTokenIsFlaggedAsUnused(): void
+    {
+        $overrides = self::clean();
+        $overrides['logs'] = ['token' => 'old-token-value'];
+        $report = ConfigDoctor::check($overrides);
+
+        self::assertSame(
+            ['logs.token: no longer used (M39), the pages sit behind the admin login; remove it'],
+            $report['warnings']
+        );
     }
 
     public function testACleanConfigHasNoErrorsOrWarnings(): void

@@ -9,6 +9,7 @@
 
 declare(strict_types=1);
 
+use App\Audit;
 use App\Db;
 use App\Reload;
 use App\ReloadException;
@@ -73,6 +74,16 @@ try {
     http_response_code(500);
     echo json_encode(['error' => 'internal_error'], JSON_UNESCAPED_UNICODE);
     return;
+}
+
+// The status page's "last reload" reads this row; a missing audit table must not fail a reload.
+try {
+    (new Audit(
+        $db->pdo(),
+        (string) $config['db']['admin_audit_table'],
+        (int) $config['admin']['audit_retention_days']
+    ))->write((string) ($_SERVER['REMOTE_ADDR'] ?? ''), Audit::RELOAD_API, 'count=' . (int) $result['count']);
+} catch (Throwable) {
 }
 
 http_response_code(200);

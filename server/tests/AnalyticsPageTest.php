@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Tests;
 
+use App\AdminPage;
 use App\AnalyticsPage;
 use App\AnalyticsStrings;
 use PHPUnit\Framework\TestCase;
@@ -20,49 +21,58 @@ final class AnalyticsPageTest extends TestCase
     {
         $query = '</script><script>alert(1)</script> <!-- "q" & \'x\' ' . "\u{0641}\u{0631}\u{0645}\u{0648}\u{0646}";
 
-        $html = AnalyticsPage::render(self::report($query), 'abc123');
+        $html = AnalyticsPage::body(self::report($query), 'abc123');
 
         preg_match('#<script type="application/json" id="report">(.*?)</script>#s', $html, $m);
         self::assertSame(self::report($query), json_decode($m[1], true));
         self::assertSame(
-            5,
+            4,
             substr_count($html, '</script>'),
-            'theme bootstrap, three data blocks and the dashboard code, nothing a query adds'
+            'three data blocks and the dashboard code, nothing a query adds'
         );
         self::assertStringNotContainsString('<script>alert', $html);
     }
 
     public function testOnlyTheNoncedBlockRunsAndNothingLoadsFromElsewhere(): void
     {
-        $html = AnalyticsPage::render(self::report('x'), 'N0nce+/=');
+        $html = AnalyticsPage::body(self::report('x'), 'N0nce+/=');
 
-        self::assertStringContainsString('<script nonce="N0nce+/=">', $html);
-        self::assertSame(2, substr_count($html, '<script nonce='), 'the theme bootstrap and the dashboard');
-        self::assertSame(
-            substr_count($html, '<script nonce="N0nce+/=">'),
-            substr_count($html, '<script nonce='),
-            'every code block carries the response nonce'
-        );
-        self::assertStringNotContainsString('url(http', $html);
-        $fontUrls = preg_match_all('#url\(fonts/vazirmatn/Vazirmatn-\w+\.woff2\)#', $html);
-        self::assertSame(2, $fontUrls, 'self-hosted fonts only');
-        foreach (['<link', ' src=', '@import', 'https://', 'cdn'] as $external) {
+        self::assertSame(1, substr_count($html, '<script nonce="N0nce+/=">'));
+        self::assertSame(1, substr_count($html, '<script nonce='), 'the only code block carries the response nonce');
+        foreach (['<link', ' src=', '@import', 'https://', 'cdn', 'url(http'] as $external) {
             self::assertStringNotContainsString($external, $html, $external);
         }
         self::assertSame(1, preg_match_all('#http://#', $html), 'only the SVG namespace URI');
         self::assertStringContainsString('http://www.w3.org/2000/svg', $html);
     }
 
-    public function testTheShellIsPersianRtlAndCarriesThemeSupport(): void
+    public function testTheBodyIsEmbeddedWithoutItsOwnTitleAndThemeSwitch(): void
     {
-        $html = AnalyticsPage::render(self::report('x'), 'n');
+        $html = AnalyticsPage::body(self::report('x'), 'n');
 
-        foreach (
-            ['<html lang="fa" dir="rtl">', 'تحلیل جستجو', 'prefers-color-scheme:dark', 'data-theme="dark"',
-            'analytics-theme', 'id="strings"', 'نرخ جستجوی بی‌نتیجه', 'پرترددترین ساعت‌ها', 'format=json'] as $text
-        ) {
+        self::assertStringContainsString('"embedded":true', $html);
+        self::assertStringContainsString('id="strings"', $html);
+        self::assertStringContainsString('format=json', $html);
+        self::assertStringContainsString("var THEME_KEY = 'admin-theme'", $html, 'one stored theme choice');
+        self::assertStringContainsString('prefers-color-scheme', AnalyticsPage::css() . $html);
+        self::assertStringNotContainsString('<html', $html);
+        foreach (['پرترددترین ساعت‌ها', 'نرخ جستجوی بی‌نتیجه'] as $text) {
             self::assertStringContainsString($text, $html, $text);
         }
+    }
+
+    public function testThePanelPageCarriesTheDashboardInPersianRtlWithSelfHostedFonts(): void
+    {
+        $page = AdminPage::shell('analytics', 'x', [
+            'nonce' => 'n', 'fonts' => 'fonts/vazirmatn/', 'csrf' => 'c', 'css' => AnalyticsPage::css(),
+            'tail' => AnalyticsPage::body(self::report('x'), 'n'),
+        ]);
+
+        self::assertStringContainsString('<html lang="fa" dir="rtl">', $page);
+        self::assertSame(2, preg_match_all('#url\(fonts/vazirmatn/Vazirmatn-\w+\.woff2\)#', $page));
+        self::assertStringContainsString('data-theme="dark"', $page);
+        self::assertStringContainsString('prefers-color-scheme:dark', $page);
+        self::assertStringNotContainsString('url(http', $page);
     }
 
     public function testEveryPersianUiStringLivesInTheStringsFile(): void

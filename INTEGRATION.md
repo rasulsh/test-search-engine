@@ -189,26 +189,11 @@ Result tracking (log v2). The page that received a `search_uuid` reports what th
 
 Answers `204` (recorded, or a repeat), `400` (malformed), `404` (unknown `search_uuid`), `405`. Send it with `navigator.sendBeacon(url, JSON.stringify(body))`: the body goes as `text/plain`, which a browser sends cross-origin without a preflight, and survives the page unloading. For a `fetch()` from another origin set `events.allowed_origin`. The table is `search_events` (`db/schema.sql`, `db/migrations/2026-10-24_search_logs_v2.sql`).
 
-### `GET /logs.php`
+### `GET /logs.php` and `GET /analytics.php`
 
-M21, operator tooling (not part of the storefront contract). A read-only HTML
-page (English) over `search_logs`: `?view=recent` (newest first, default),
-`?view=zero` (only searches that returned nothing, the gaps worth fixing) or
-`?view=slowest` (by `latency_ms`), paginated with `?page=N` (`logs.page_size`
-rows, default 50). Columns: id, time, query, normalized query, tier, vector,
-result count, top ids, ms, suggestion, customer.
-
-Auth: the configured `SEARCH_LOGS_TOKEN`, in the `X-Logs-Token` header or as
-`?token=` (a browser without the header gets a form). Prefer the header: a URL
-token reaches browser history and access logs.
-
-| status | body | meaning |
-| --- | --- | --- |
-| 200 | HTML | The page. `Cache-Control: no-store`, `X-Robots-Tag: noindex`, a restrictive CSP. |
-| 401 | HTML form | Missing or wrong token (nothing from the log is shown). |
-| 405 | HTML | Not a `GET`. |
-| 500 | HTML | Database error. |
-| 503 | HTML | No `SEARCH_LOGS_TOKEN` configured: the page is off. |
+Operator tooling, not part of the storefront contract. Since M39 both pages live in the admin panel
+(`admin.php?p=logs`, `admin.php?p=analytics`, login required, see [docs/ADMIN.md](docs/ADMIN.md)); the old
+URLs answer `302` to the panel and the token is gone. Nothing on the storefront side uses them.
 
 ### `GET /health`
 

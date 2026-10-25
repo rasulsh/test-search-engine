@@ -37,7 +37,8 @@ to be literally `public_html`.
     ├── data/  data_incoming/  data_old/
     ├── .htaccess                  safety net: Require all denied
     └── public/    <──────────── the document root points HERE
-        ├── index.php  search.php  health.php  reload.php  logs.php   analytics.php
+        ├── index.php  search.php  health.php  reload.php  admin.php
+        ├── logs.php  analytics.php    (redirects to admin.php since M39)
         ├── app_base.php  .htaccess  test.html (optional)
         └── install.php            first setup only: delete it right after
 ```
@@ -75,7 +76,7 @@ The `.htaccess` files in the release (LiteSpeed and Apache honour them) are a
 `server/data/.htaccess` and `server/data_incoming/.htaccess` deny everything, so a
 tree misplaced under the web root does not leak `config.php`, `src/` or the
 bundle; `public/.htaccess` re-opens `public/`, denies dotfiles, sets the same
-security headers `logs.php` sends and routes the extensionless endpoints. They
+security headers the admin panel sends and routes the extensionless endpoints. They
 are ignored by a host that does not read `.htaccess` (an nginx front), so verify
 with the checks in the [go-live checklist](#production-go-live-checklist).
 
@@ -352,9 +353,9 @@ ALTER TABLE search_logs
     ADD COLUMN tier VARCHAR(16) NOT NULL DEFAULT 'keyword_only';
 ```
 
-To use the new tooling add to `config.php` (or the environment) a
-`SEARCH_LOGS_TOKEN` and, for the score breakdown, a `SEARCH_DEBUG_TOKEN`: long
-random values, different from each other and from the reload token. New
+To use the new tooling set up the admin panel login (see [Upgrading to M39](#upgrading-to-m39); the
+old `SEARCH_LOGS_TOKEN` is gone) and, for the score breakdown, a `SEARCH_DEBUG_TOKEN`: a long
+random value, different from the reload token. New
 ranking keys (`tag_weight`, `brand_weight`, `category_weight`,
 `brand_match_boost`, `category_match_boost`, `tag_match_boost`,
 `tag_match_min_tokens`) default in code, so an older `config.php` keeps
@@ -421,11 +422,10 @@ the normalization rules (version 4), the code, the log schema and the storefront
    as the single source (this release seeds the zero-result fixes there) and use the server
    file only for an urgent, temporary edit.
 8. **Check.** `curl -s -X POST .../search -d '{"q":"مافیا"}'` returns the same ids as `mafia`;
-   `config-check.php` is clean; `analytics.php?format=json` shows `"log_v2":{"available":true,...}`.
+   `config-check.php` is clean; the panel's analytics JSON (`admin.php?p=analytics&format=json`, logged in) shows `"log_v2":{"available":true,...}`.
 
 <a id="upgrading-to-m31"></a>**Upgrading to M31 (search analytics).** Server code
-only (upload the new `server/`); the page `analytics.php` reuses `logs.token`, so an
-installation that already has a logs token needs no config edit. `/reload` never
+only (upload the new `server/`); the analytics page was token-protected then (`logs.token`); since M39 it is behind the panel login. `/reload` never
 touches `search_logs` (like the column back-fill in `Logger.php`), so add the one
 supporting index to the live table yourself, once. It is idempotent
 (MariaDB):
@@ -443,18 +443,46 @@ more rows on a large log. `db/schema.sql` carries the index for new installs.
 window-bounded and uses `idx_ts` / `idx_ts_result` (the zero-rate trend is covered by
 `idx_ts_result`). `logs.refresh_seconds` (default 30, `0` = off) is the only new setting. The
 latency trend needs window functions (MariaDB 10.2+). The page makes no request to
-any other host, so it works behind a restrictive network; reopen it as
-`analytics.php?token=…`. If you ever do need a further index, add it by hand like
+any other host, so it works behind a restrictive network; open it from the panel's navigation. If you ever do need a further index, add it by hand like
 the M31 one (`ALTER TABLE search_logs ADD INDEX IF NOT EXISTS ...`): `/reload` never
 touches `search_logs`.
 
 <a id="upgrading-to-m38"></a>**Upgrading to M38 (Persian analytics dashboard).** Server code only: upload the new
 `server/` (or `release.zip`), which now carries `src/AnalyticsStrings.php` and the font folder
 **`server/public/fonts/vazirmatn/`** (`Vazirmatn-Regular.woff2`, `Vazirmatn-Bold.woff2`, `OFL.txt`). Copy that
-folder next to `analytics.php` inside your document root (public/); nothing outside `public/` is
+folder next to `admin.php` inside your document root (public/); nothing outside `public/` is
 web-exposed. No schema or config change. The alias fix ships in the code too (`Synonyms` merges owner
 alias groups that share a term), so no bundle rebuild is needed for it, only the new code and a `/reload`
 (or any worker restart) so the cached alias map is rebuilt.
+
+<a id="upgrading-to-m39"></a>**Upgrading to M39 (admin panel: login, shell, status).**
+1. **Copy** the new `server/` (or `release.zip`; it carries the new files). The new files are:
+   `public/admin.php`, `src/Admin*.php`, `src/Audit.php`, `src/AdminPage.js`, `src/AdminPage.css`,
+   `tools/admin-password.php`; `public/analytics.php` and `public/logs.php` are now two-line redirects, and
+   `src/RedisClient.php`, `src/LogsPage.php`, `src/AnalyticsPage.*`, `src/Config.php`, `src/ConfigDoctor.php`,
+   `public/index.php`, `public/reload.php` changed.
+2. **Create the audit table** (idempotent, a separate `.down.sql` rolls it back; use your own table name if you
+   changed `db.admin_audit_table`): `mysql search_db < db/migrations/2026-10-25_admin_audit.sql`.
+   `db/schema.sql` carries it for new installs.
+3. **Make the password hash** on any machine with PHP, `php server/tools/admin-password.php` (it prompts, hides the
+   typing and prints a `password_hash()` value; at least 12 characters), and put it in `config.php`:
+   `'admin' => ['username' => 'owner', 'password_hash' => '$2y$...']`. Single-quote it: it contains `$`.
+   Without both keys the panel answers 503. Optional keys: `allowed_ips` (comma separated IPs / CIDR),
+   `idle_timeout_minutes` (30), `session_hours` (8), `ip_header` (see below), all in
+   [CONFIGURATION.md](CONFIGURATION.md#admin-panel-section-m39).
+4. **Merge the `.htaccess` rewrite by hand** if your production `public/.htaccess` is customized: the web-root
+   routing rule must name the new endpoint (`admin`), i.e. change
+   `RewriteRule ^(search|health|reload|logs|analytics)/?$ index.php [L]` to
+   `RewriteRule ^(search|health|reload|admin|logs|analytics)/?$ index.php [L]`. Direct requests to
+   `admin.php?p=...` need nothing. The panel sets its own security headers from PHP, so no header block is needed.
+5. **Check** `https://<site>/admin.php`: the login page opens, a wrong password shows the generic error, a right one
+   lands on the status page. `curl -I http://<site>/admin.php` (plain HTTP) must answer 403.
+6. **Behind a proxy or CDN** the client address is the proxy's unless you set `admin.ip_header` (for example
+   `HTTP_X_FORWARDED_FOR`; the last entry is used, so set it only when your proxy appends the real address).
+   If TLS ends at a proxy, set `admin.trust_forwarded_proto` so `X-Forwarded-Proto: https` counts as HTTPS.
+7. `logs.token` / `SEARCH_LOGS_TOKEN` is no longer used (the doctor warns while it is set): remove it. Bookmarks to
+   `analytics.php` / `logs.php` redirect to the panel. Scripts that read `analytics.php?format=json` with the token
+   must stop: the JSON now needs a panel session.
 
 **Log retention (optional, operator-run).** `search_logs` grows with traffic and
 nothing prunes it, on purpose: no daemon runs on the cPanel host. When the table
@@ -529,7 +557,7 @@ talks to it with an in-repo RESP client: no Composer package, no PHP extension.
 2. **Point cPanel at it** (environment or `config.php`, see [CONFIGURATION.md](CONFIGURATION.md#result-cache-redis-section-m26)):
    `SEARCH_REDIS_ENABLED=1`, `SEARCH_REDIS_HOST`, `SEARCH_REDIS_PORT`, `SEARCH_REDIS_AUTH`; for an older
    `config.php` add `'redis' => ['enabled' => true, 'host' => ..., 'port' => ..., 'auth' => ...]`.
-3. **Check** that it works: send the same `/search` twice and look at `logs.php`: the second row has
+3. **Check** that it works: send the same `/search` twice and look at the panel's logs page (`admin.php?p=logs`): the second row has
    `cache_hit = 1` (and a latency near 0).
 
 `POST /reload` empties the cache (every key under `redis.prefix`) after a successful swap and reports
@@ -588,7 +616,7 @@ M0–M5. Verify each item on the production host before wide rollout.
 - [ ] `php tools/config-check.php` reports no ERROR, and `GET /health` shows
   `config.ok` true.
 - [ ] **Rotate the tokens before go-live** (`reload.token`, `vps.token`,
-  `logs.token`, `debug.token`; `redis.auth` if the cache is on): any value that
+  `debug.token`; set a fresh admin password too; `redis.auth` if the cache is on): any value that
   was typed into a chat, a ticket or a shell history is burned. Use long random,
   different values. A new `vps.token` must be set on the VPS too
   (`VPS_TOKEN`); a new `reload.token` is what the deploy `curl` sends.

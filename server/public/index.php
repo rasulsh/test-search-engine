@@ -2,7 +2,8 @@
 
 /**
  * Front controller. Tiny by design: parse the path, dispatch to a handler.
- * Serves GET /health, POST /search, POST /events, POST /reload and GET /logs, GET /analytics (token-protected).
+ * Serves GET /health, POST /search, POST /events, POST /reload, the admin panel (/admin, M39) and the
+ * redirects of the old /logs and /analytics pages.
  */
 
 declare(strict_types=1);
@@ -39,6 +40,10 @@ switch ($route) {
     case 'analytics':
     case 'analytics.php':
         require __DIR__ . '/analytics.php';
+        break;
+    case 'admin':
+    case 'admin.php':
+        require __DIR__ . '/admin.php';
         break;
     default:
         header('Content-Type: application/json; charset=utf-8');

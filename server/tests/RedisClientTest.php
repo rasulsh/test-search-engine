@@ -122,4 +122,18 @@ final class RedisClientTest extends TestCase
 
         self::assertSame('v', $client->get('k'));
     }
+
+    public function testPingAndCountByPrefixOnlyCountThePrefix(): void
+    {
+        $this->startServer();
+        $client = new RedisClient('127.0.0.1', $this->port);
+        for ($i = 0; $i < 5; $i++) {
+            $client->set("search:cache:{$i}", 'v', 60);
+        }
+        $client->set('other:1', 'v', 60);
+
+        self::assertTrue($client->ping());
+        self::assertSame(5, $client->countByPrefix('search:cache:'), 'across several SCAN pages, nothing else');
+        self::assertSame(0, $client->countByPrefix('nothing:'));
+    }
 }

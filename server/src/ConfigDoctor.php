@@ -50,6 +50,16 @@ final class ConfigDoctor
             $warnings[] = 'reload.token: empty, POST /reload is disabled';
         }
 
+        foreach (AdminAuth::configProblems($config['admin']) as $problem) {
+            $errors[] = $problem;
+        }
+        if (!AdminAuth::configured($config['admin']) && AdminAuth::configProblems($config['admin']) === []) {
+            $warnings[] = 'admin.username / admin.password_hash: not set, admin.php answers 503';
+        }
+        if ($config['logs']['token'] !== '') {
+            $warnings[] = 'logs.token: no longer used (M39), the pages sit behind the admin login; remove it';
+        }
+
         foreach (array_keys($schema) as $path) {
             if (!array_key_exists($path, $given)) {
                 $info[] = "{$path}: code default";

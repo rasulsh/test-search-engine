@@ -57,6 +57,7 @@ final class EndpointTest extends TestCase
         $overrides = [
             'db' => ['dsn' => $dsn, 'user' => $user, 'password' => $password],
             'reload' => ['token' => 'test-secret'],
+            'admin' => TempConfig::admin(),
         ];
 
         // A bundle holding only the spellcheck dictionary. Its frequencies are

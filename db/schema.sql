@@ -113,3 +113,17 @@ CREATE TABLE IF NOT EXISTS search_events (
     KEY idx_search (search_uuid),
     KEY idx_ts (ts)
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_unicode_ci;
+
+-- Admin panel audit trail (M39): logins, failed logins and every write action.
+-- The failed-login throttle counts its rows. Rows older than admin.audit_retention_days
+-- are purged on write.
+CREATE TABLE IF NOT EXISTS admin_audit (
+    id     BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+    ts     DATETIME        NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    ip     VARCHAR(45)     NOT NULL DEFAULT '',
+    action VARCHAR(32)     NOT NULL,
+    detail VARCHAR(512)    NOT NULL DEFAULT '',
+    PRIMARY KEY (id),
+    KEY idx_ts (ts),
+    KEY idx_action_ip_ts (action, ip, ts)
+) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_unicode_ci;

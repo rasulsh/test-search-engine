@@ -37,6 +37,8 @@ class FakeRedis extends RedisClient
         $this->log[] = $name;
 
         switch ($name) {
+            case 'PING':
+                return 'PONG';
             case 'GET':
                 return $this->data[$arguments[1]] ?? null;
             case 'SET':

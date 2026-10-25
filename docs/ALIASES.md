@@ -121,5 +121,5 @@ The seed groups for the zero-result queries seen in the first real logs (`ماف
 `گادوار`, `رزیدنت اویل`, `مورتال`, `ردد`, `کالاف`, `شیفتر`, `فرمون`, `گوست`, `زلدا`, `ویچر`,
 `اساسین`, `ماینکرافت`, `آیینه`, `بازی اکانتی`, `پی اس فایو`, `جی تی ای شیش`, …) are in
 `pipeline/aliases.json`. They were **not** checked against the live catalog (not available
-here): confirm each with the zero-result list of `analytics.php` after a week, and prefer
+here): confirm each with the zero-result list of the panel's analytics page after a week, and prefer
 removing a group that pulls unrelated products over keeping it.

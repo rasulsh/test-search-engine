@@ -94,7 +94,50 @@ final class Synonyms
 
         $version = substr(sha1($key), 0, 12);
 
-        return self::$cache[$key] = new self(array_merge($synonyms, self::readGroups($aliasesPath) ?? []), $version);
+        $aliases = self::mergeOverlapping(self::readGroups($aliasesPath) ?? []);
+
+        return self::$cache[$key] = new self(array_merge($synonyms, $aliases), $version);
+    }
+
+    /**
+     * Owner groups that share a term are one group. Expansion swaps a term for the
+     * other terms of its own group only, so "ps5" listed in two groups would leave
+     * "پی اس فایو" (group A) unable to reach "پلی استیشن ۵" (group B).
+     *
+     * @param list<list<string>> $groups
+     * @return list<list<string>>
+     */
+    public static function mergeOverlapping(array $groups): array
+    {
+        $merged = [];
+        foreach ($groups as $group) {
+            $terms = [];
+            foreach ($group as $term) {
+                $tokens = Tokenizer::split(Normalizer::normalize($term));
+                if ($tokens !== []) {
+                    $terms[] = implode(' ', $tokens);
+                }
+            }
+            $terms = array_values(array_unique($terms));
+            $into = null;
+            foreach ($merged as $i => $existing) {
+                if (array_intersect($existing, $terms) === []) {
+                    continue;
+                }
+                if ($into === null) {
+                    $into = $i;
+                    $merged[$i] = array_values(array_unique(array_merge($existing, $terms)));
+                } else { // the group bridges two earlier ones
+                    $merged[$into] = array_values(array_unique(array_merge($merged[$into], $existing)));
+                    unset($merged[$i]);
+                }
+            }
+            if ($into === null) {
+                $merged[] = $terms;
+            }
+        }
+
+        return array_values($merged);
     }
 
     /** Short hash of the alias and synonym files this instance was built from ('' when built from groups). */

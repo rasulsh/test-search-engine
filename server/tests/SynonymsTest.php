@@ -207,4 +207,20 @@ final class SynonymsTest extends TestCase
 
         self::assertCount(3, Synonyms::fromDirectory($dir, 4)->variants(['gta'], 4));
     }
+
+    public function testOverlappingOwnerGroupsAreMerged(): void
+    {
+        $merged = Synonyms::mergeOverlapping([
+            ['ps5', 'ps 5'],
+            ['x', 'y'],
+            ['پی اس فایو', 'PS5'],
+            ['y', 'ps 5'], // bridges the first and second groups
+            ['lone', 'solo'],
+        ]);
+
+        self::assertCount(2, $merged);
+        sort($merged[0]);
+        self::assertSame(['ps 5', 'ps5', 'x', 'y', 'پی اس فایو'], $merged[0]);
+        self::assertSame(['lone', 'solo'], $merged[1]);
+    }
 }

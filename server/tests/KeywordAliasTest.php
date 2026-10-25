@@ -116,6 +116,14 @@ final class KeywordAliasTest extends DatabaseTestCase
         }
     }
 
+    public function testSpokenPersianPs5AliasReachesEveryPs5Title(): void
+    {
+        // M38: "پی اس فایو" is seeded in the ps5 group; production still returned 0.
+        $ids = $this->ids('پی اس فایو');
+        self::assertContains(self::PS5_EN, $ids);
+        self::assertContains(self::PS5_FA, $ids);
+    }
+
     public function testGeneratedCatalogSynonymsAreUsed(): void
     {
         self::assertSame([], $this->ids('laptop', $this->keyword(false)));

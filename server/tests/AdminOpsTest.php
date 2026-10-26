@@ -239,7 +239,7 @@ final class AdminOpsTest extends DatabaseTestCase
         self::assertSame('ok', $kind);
         self::assertStringContainsString('24,000', $text);
         self::assertStringContainsString('12.3', $text);
-        self::assertStringContainsString('حافظهٔ نهان', $text);
+        self::assertStringContainsString('کش', $text);
 
         [$kind, $text] = AdminOpsViews::message($row('cache_flush', ['ok' => true, 'removed' => 5, 's' => 0.1]));
         self::assertSame(['ok', true], [$kind, str_contains($text, '5 کلید')]);

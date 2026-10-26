@@ -194,7 +194,7 @@ final class AdminAliasPanelTest extends TestCase
 
         $first = $this->post('p=aliases', $form);
         self::assertSame(200, $first['status']);
-        self::assertStringContainsString('کمتر از 3 نویسه', $first['body']);
+        self::assertStringContainsString('کمتر از 3 کاراکتر', $first['body']);
         self::assertStringContainsString('name="confirm" value="1"', $first['body']);
         self::assertCount(1, $this->stored()['groups'], 'nothing saved yet');
 
@@ -427,7 +427,7 @@ final class AdminAliasPanelTest extends TestCase
         self::assertStringContainsString('notebook', $page);
 
         $lookup = $this->get('p=synonyms&term=' . rawurlencode('لپ تاپ'))['body'];
-        self::assertStringContainsString('گروه‌های مترادف کاتالوگ', $lookup);
+        self::assertStringContainsString('گروه‌های مترادف خودکار', $lookup);
         self::assertStringContainsString('edit=new&amp;prefill=', $lookup);
 
         $none = $this->get('p=synonyms&term=zzzz')['body'];
@@ -444,7 +444,7 @@ final class AdminAliasPanelTest extends TestCase
         self::assertSame(0, (int) self::$pdo->query('SELECT COUNT(*) FROM search_logs')->fetchColumn());
 
         $empty = $this->get('p=tester&q=')['body'];
-        self::assertStringContainsString('عبارتی را بنویسید', $empty);
+        self::assertStringContainsString('یک عبارت بنویسید', $empty);
     }
 
     public function testEveryPageCarriesTheThemeSwitchIncludingTheOnesWithoutTheSidebar(): void

@@ -164,7 +164,7 @@ final class AdminOpsPanelTest extends TestCase
         self::assertSame(200, $page['status']);
         $html = $page['body'];
         $needles = ['2026-10-01 00:00', '2026-09-01 00:00', 'تغییر تعداد: +1',
-            'محصول افزوده‌شده: 1، حذف‌شده: 0', 'مشخصات متفاوت: built_at, count', 'products_new', '3 ردیف',
+            'محصولات اضافه‌شده: 1، حذف‌شده: 0', 'مشخصات متفاوت: built_at, count', 'products_new', '3 ردیف',
             'name="action" value="validate"', 'name="action" value="apply"',
             'name="action" value="rollback" disabled', 'راهنمای این صفحه'];
         foreach ($needles as $needle) {
@@ -182,7 +182,7 @@ final class AdminOpsPanelTest extends TestCase
     {
         $page = $this->act('validate');
 
-        self::assertStringContainsString('بسته معتبر است و آمادهٔ بارگذاری است: 3 محصول.', self::banner($page['body']));
+        self::assertStringContainsString('بسته معتبر و آمادهٔ بارگذاری است: 3 محصول.', self::banner($page['body']));
         self::assertMatchesRegularExpression('/\(مدت: [\d.]+ ثانیه\)/u', self::banner($page['body']));
         self::assertSame(2, $this->rows('products'));
         self::assertDirectoryExists(self::$root . '/data_incoming');
@@ -260,7 +260,7 @@ final class AdminOpsPanelTest extends TestCase
 
         $page = $this->act('flush_cache');
 
-        self::assertStringContainsString('3 کلید از حافظهٔ نهان نتایج پاک شد.', self::banner($page['body']));
+        self::assertStringContainsString('3 کلید از کش نتایج پاک شد.', self::banner($page['body']));
         self::assertNull($redis->get('search:cache:a'));
         self::assertSame('v', $redis->get('unrelated:key'), 'a neighbour on the same Redis survives');
         self::assertSame(['cache_flush'], $this->auditActions());

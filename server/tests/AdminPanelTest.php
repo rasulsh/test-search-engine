@@ -204,7 +204,7 @@ final class AdminPanelTest extends TestCase
         self::assertSame([401, 401], [$a['status'], $b['status']]);
         $strip = static fn (string $html): string => (string) preg_replace('/(nonce|value)="[^"]+"/', '', $html);
         self::assertSame($strip($a['body']), $strip($b['body']), 'nothing tells which half was wrong');
-        self::assertStringContainsString('نام کاربری یا گذرواژه درست نیست', $a['body']);
+        self::assertStringContainsString('نام کاربری یا رمز عبور اشتباه است', $a['body']);
         self::assertSame(303, self::client()->request('GET', '/admin.php?p=status')['status']);
     }
 
@@ -304,7 +304,7 @@ final class AdminPanelTest extends TestCase
         $wrong = $client->request('POST', '/admin.php?p=login', ['csrf' => str_repeat('a', 64)] + $credentials);
 
         self::assertSame([403, 403], [$missing['status'], $wrong['status']]);
-        self::assertStringContainsString('نشانهٔ امنیتی', $wrong['body']);
+        self::assertStringContainsString('توکن امنیتی', $wrong['body']);
         self::assertSame([], self::audit(), 'a forged request never reaches the password check');
         self::assertSame(303, $client->request('GET', '/admin.php?p=status')['status']);
     }
@@ -340,7 +340,7 @@ final class AdminPanelTest extends TestCase
         self::assertSame(303, $response['status']);
         self::assertSame('?p=login&r=idle&next=help', $response['headers']['location']);
         $login = $client->request('GET', '/admin.php?p=login&r=idle');
-        self::assertStringContainsString('بی‌فعالیتی', $login['body']);
+        self::assertStringContainsString('عدم فعالیت', $login['body']);
         self::assertSame(303, $client->request('GET', '/admin.php?p=help')['status'], 'the old session is dead');
     }
 
@@ -456,7 +456,7 @@ final class AdminPanelTest extends TestCase
         $status = $client->request('GET', '/admin.php?p=status')['body'];
 
         self::assertStringContainsString('ورود موفق', $audit);
-        self::assertStringContainsString('بارگذاری بسته (از راه API)', $audit);
+        self::assertStringContainsString('بارگذاری بسته (از طریق API)', $audit);
         self::assertStringContainsString('203.0.113.9', $audit);
         self::assertStringNotContainsString('ثبت نشده است', $status, 'last reload found');
     }

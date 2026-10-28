@@ -476,6 +476,23 @@ web-exposed. No schema or config change. The alias fix ships in the code too (`S
 alias groups that share a term), so no bundle rebuild is needed for it, only the new code and a `/reload`
 (or any worker restart) so the cached alias map is rebuilt.
 
+<a id="upgrading-to-m44"></a>**Upgrading to M44 (query understanding).** Server code first, then the bundle:
+
+1. Upload the new `release.zip` over the service directory (`unzip -o`). `config.php` needs no edit: the new keys
+   (`search.generic_df_ratio`, `search.stopwords`, `search.entities_enabled`, `search.entity_boost`,
+   `search.entity_demote`) default in `App\Config` ([CHANGELOG.md](CHANGELOG.md)).
+2. **Rebuild and upload the bundle** (`release.py`, [TRAINING-COLAB.md](TRAINING-COLAB.md)): it adds `token_df.json` and
+   `entities.json`. The old bundle still loads and searches (short tokens are whole words either way), but without
+   the two files no word is generic except the stopwords, and no brand or platform is recognized.
+3. `POST /reload` (or the panel's operations page). A present but invalid `token_df.json` / `entities.json` is refused
+   with `invalid_token_df` / `invalid_entities`.
+4. **Flush the result cache** (operations page): the cache key does not carry the new settings, so answers computed
+   before the upgrade would otherwise live out their TTL.
+5. Add the `brand_unmatched` column to `search_logs`: `mysql DB < db/migrations/2026-10-28_search_logs_brand_unmatched.sql`
+   (idempotent; the logger also adds it itself on its first write when its database user may ALTER).
+6. Open the status page's effective configuration: the five keys appear with their source. Misspelled brands that matter
+   (`شیامی`) still need an alias in the alias manager.
+
 <a id="upgrading-to-m42"></a>**Upgrading to M42 (no vectors on cPanel, panel polish).** Server code only on the
 cPanel side; nothing to migrate and no `.htaccess` change:
 

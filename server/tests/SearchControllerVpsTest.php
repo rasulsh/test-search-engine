@@ -122,13 +122,26 @@ final class SearchControllerVpsTest extends DatabaseTestCase
         self::assertSame([1007, 1011], $result['product_ids']);
         self::assertSame([0.8, 1.0], $result['cosine_scores']);
         self::assertSame(1, (int) $this->lastLog()['had_vector']);
-        // What cPanel sent: the raw query text, K and the floor, to /search-vectors.
+        // What cPanel sent: the query text, K and the floor, to /search-vectors.
         self::assertCount(1, $calls);
         self::assertSame('http://vps.test/search-vectors', $calls[0]['url']);
         self::assertSame('macbook', $calls[0]['q']); // trimmed, like every stage's query
         self::assertSame(50, $calls[0]['limit']);
         self::assertSame(0.5, $calls[0]['min_score']);
         self::assertArrayNotHasKey('customer_id', $calls[0]);
+    }
+
+    public function testVpsReceivesTheNormalizedQueryWhateverTheRawSpelling(): void
+    {
+        $calls = [];
+        $controller = $this->controller($this->vps([1011 => [1.0, 0.0, 0.0, 0.0]], $calls), 0.5);
+
+        $controller->search(['q' => 'MacBook']);
+        $controller->search(['q' => '  MACBOOK  ']);
+
+        self::assertCount(2, $calls);
+        self::assertSame('macbook', $calls[0]['q']);
+        self::assertSame($calls[0]['q'], $calls[1]['q']);
     }
 
     /** @return iterable<string, array{0: array<string, mixed>, 1: string, 2?: string}> */

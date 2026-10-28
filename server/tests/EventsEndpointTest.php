@@ -108,7 +108,7 @@ final class EventsEndpointTest extends TestCase
         self::assertSame($answer['product_ids'][0], (int) $row['product_id']);
     }
 
-    public function testServerSideCartAndOrderAsApplicationJsonAreRecorded(): void
+    public function testCartAndOrderAreRefusedAsApplicationJson(): void
     {
         [, $body] = $this->call('POST', '/search', '{"q":"sony"}', 'application/json');
         $answer = json_decode($body, true);
@@ -118,10 +118,9 @@ final class EventsEndpointTest extends TestCase
                 'search_uuid' => $answer['search_uuid'], 'product_id' => $answer['product_ids'][0],
                 'position' => 1, 'action' => $action,
             ]), 'application/json');
-            self::assertSame(204, $status, $action);
+            self::assertSame(400, $status, $action);
         }
-        $actions = $this->pdo?->query('SELECT action FROM search_events ORDER BY id')->fetchAll(PDO::FETCH_COLUMN);
-        self::assertSame(['cart', 'order'], $actions);
+        self::assertSame(0, (int) $this->pdo?->query('SELECT COUNT(*) FROM search_events')->fetchColumn());
     }
 
     public function testTheOriginOfTheCallerIsNeverChecked(): void

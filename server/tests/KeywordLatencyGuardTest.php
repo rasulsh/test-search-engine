@@ -70,6 +70,12 @@ use ReflectionMethod;
  */
 final class KeywordLatencyGuardTest extends DatabaseTestCase
 {
+    /**
+     * The CI regression bar, fixed on purpose: `search.latency_budget_ms` is the production target (800 ms
+     * since M43), and tying the guard to it would loosen it from 200 ms without anyone noticing.
+     */
+    private const BUDGET_MS = 200.0;
+
     private const PRODUCTS = 20000;
     private const DESC_WORDS = 300;
     /** Descriptions of the M21 shapes (see the class docblock). */
@@ -100,7 +106,7 @@ final class KeywordLatencyGuardTest extends DatabaseTestCase
     public function testBroadQueryStaysWithinBudget(int $descIndexChars, bool $withSpecs, ?array $aliases): void
     {
         $config = Config::defaults();
-        $budgetMs = (float) $config['search']['latency_budget_ms'];
+        $budgetMs = self::BUDGET_MS;
         $maxVariants = (int) $config['search']['alias_max_variants'];
         $this->seedCatalog($descIndexChars, $withSpecs);
 
@@ -147,7 +153,7 @@ final class KeywordLatencyGuardTest extends DatabaseTestCase
     public function testAnyTermsFallbackStaysWithinBudget(): void
     {
         $config = Config::defaults();
-        $budgetMs = (float) $config['search']['latency_budget_ms'];
+        $budgetMs = self::BUDGET_MS;
         $this->seedCatalog(self::DESC_INDEX_CHARS, true);
         $keyword = new Keyword($this->pdo, 'products', 3, 20, null, 10.0, 1.0, 5.0, 4, 6.0, softAndMinResults: 0);
         $query = 'دسته بازی ناموجود';
@@ -202,7 +208,7 @@ final class KeywordLatencyGuardTest extends DatabaseTestCase
     public function testSoftAndTopUpStaysWithinBudget(array $groups, bool $broad): void
     {
         $config = Config::defaults();
-        $budgetMs = (float) $config['search']['latency_budget_ms'];
+        $budgetMs = self::BUDGET_MS;
         $maxVariants = (int) $config['search']['alias_max_variants'];
         $this->seedCatalog(self::DESC_INDEX_CHARS, true);
         // The strict query finds nothing ("ناموجود" is nowhere): the top-up is the whole
@@ -261,7 +267,7 @@ final class KeywordLatencyGuardTest extends DatabaseTestCase
     public function testCollapsedQueryStaysWithinBudget(): void
     {
         $config = Config::defaults();
-        $budgetMs = (float) $config['search']['latency_budget_ms'];
+        $budgetMs = self::BUDGET_MS;
         $this->seedCatalog(self::DESC_INDEX_CHARS, true);
         $on = new Keyword($this->pdo, 'products', 3, 20);
         $off = new Keyword($this->pdo, 'products', 3, 20, collapseWeight: 0.0);
@@ -308,7 +314,7 @@ final class KeywordLatencyGuardTest extends DatabaseTestCase
     public function testHybridSearchWithVpsNeighboursStaysWithinBudget(): void
     {
         $config = Config::defaults();
-        $budgetMs = (float) $config['search']['latency_budget_ms'];
+        $budgetMs = self::BUDGET_MS;
         $topK = (int) $config['search']['semantic_top_k'];
         $this->seedCatalog(self::DESC_INDEX_CHARS, true);
         $neighbours = [];
@@ -351,7 +357,7 @@ final class KeywordLatencyGuardTest extends DatabaseTestCase
     public function testStructuredFieldsBroadQueryStaysWithinBudget(): void
     {
         $config = Config::defaults();
-        $budgetMs = (float) $config['search']['latency_budget_ms'];
+        $budgetMs = self::BUDGET_MS;
         $this->seedCatalog(self::DESC_INDEX_CHARS, true, true);
         $keyword = new Keyword($this->pdo, 'products', 3, 20, null, 10.0, 1.0, 5.0, 4, 6.0);
         $query = 'دسته بازی';
@@ -382,7 +388,7 @@ final class KeywordLatencyGuardTest extends DatabaseTestCase
     public function testStructuredFieldsHybridSearchStaysWithinBudget(): void
     {
         $config = Config::defaults();
-        $budgetMs = (float) $config['search']['latency_budget_ms'];
+        $budgetMs = self::BUDGET_MS;
         $topK = (int) $config['search']['semantic_top_k'];
         $this->seedCatalog(self::DESC_INDEX_CHARS, true, true);
         $neighbours = [];

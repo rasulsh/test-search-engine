@@ -935,7 +935,8 @@ final class Keyword
         $length = mb_strlen($collapsed);
         if (
             !$this->collapsedColumn || $this->collapseWeight <= 0.0
-            || $length < $this->collapseMinLength || $length > self::COLLAPSED_QUERY_MAX
+            || ($length < $this->collapseMinLength && preg_match(Synonyms::LETTER_DIGIT, $collapsed) !== 1)
+            || $length > self::COLLAPSED_QUERY_MAX
         ) {
             return [];
         }

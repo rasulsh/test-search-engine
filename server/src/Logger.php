@@ -17,6 +17,11 @@ use PDOException;
  * the database user may not alter, that write and the following ones fall back
  * to the columns the table has. The caller treats any exception as a failed log
  * write, never a failed search.
+ *
+ * Privacy (M43): a query that looks like personal data is stored masked, never as typed: a run of
+ * {@see MASK_DIGITS} or more digits (a phone or ID number) becomes "#", and a query longer than
+ * {@see MASK_LONG_QUERY} characters (a pasted paragraph) is replaced by a placeholder. Flagged
+ * probes are kept verbatim: they are not shopper input and the panel lists them for review.
  */
 final class Logger
 {
@@ -27,6 +32,12 @@ final class Logger
     public const LOG_VERSION = 2;
 
     private const DUPLICATE_SECONDS = 30;
+
+    /** A run of this many digits (any script) is phone / ID-like. */
+    public const MASK_DIGITS = 7;
+    /** A raw query longer than this is not a product search. */
+    public const MASK_LONG_QUERY = 80;
+    public const LONG_PLACEHOLDER = '[long query]';
 
     /** Longest values the VARCHAR columns hold; longer text is cut, not rejected. */
     private const TEXT_LIMIT = 512;
@@ -73,10 +84,20 @@ final class Logger
             $topIds = implode(',', $topIds);
         }
         $didYouMean = $entry['did_you_mean'] ?? null;
+        $expanded = $entry['expanded_q'] ?? null;
+        $rawQ = $entry['raw_q'];
+        $normalizedQ = $entry['normalized_q'] ?? '';
+        if (!($entry['is_suspicious'] ?? false)) {
+            $long = mb_strlen($rawQ) > self::MASK_LONG_QUERY;
+            $rawQ = $long ? self::LONG_PLACEHOLDER : self::maskDigits($rawQ);
+            $normalizedQ = $long ? self::LONG_PLACEHOLDER : self::maskDigits($normalizedQ);
+            $didYouMean = $didYouMean === null ? null : self::maskDigits($didYouMean);
+            $expanded = $expanded === null ? null : self::maskDigits($expanded);
+        }
 
         $values = [
-            'raw_q'        => mb_substr($entry['raw_q'], 0, self::TEXT_LIMIT),
-            'normalized_q' => mb_substr($entry['normalized_q'] ?? '', 0, self::TEXT_LIMIT),
+            'raw_q'        => mb_substr($rawQ, 0, self::TEXT_LIMIT),
+            'normalized_q' => mb_substr($normalizedQ, 0, self::TEXT_LIMIT),
             'had_vector'   => ($entry['had_vector'] ?? false) ? 1 : 0,
             'result_count' => $entry['result_count'] ?? 0,
             'top_ids'      => $topIds,
@@ -91,7 +112,6 @@ final class Logger
 
         $session = $entry['session_id'] ?? null;
         $page = max(1, min(255, (int) ($entry['page'] ?? 1)));
-        $expanded = $entry['expanded_q'] ?? null;
         $v2 = [
             'log_version'    => self::LOG_VERSION,
             'search_uuid'    => $entry['search_uuid'] ?? '',
@@ -131,6 +151,12 @@ final class Logger
                 }
             }
         }
+    }
+
+    /** Every run of {@see MASK_DIGITS} or more digits (Latin, Persian or Arabic-Indic) becomes "#". */
+    public static function maskDigits(string $text): string
+    {
+        return (string) preg_replace('/\p{Nd}{' . self::MASK_DIGITS . ',}/u', '#', $text);
     }
 
     /**

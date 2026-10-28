@@ -135,6 +135,21 @@ final class SearchControllerStorageAliasTest extends DatabaseTestCase
         self::assertSame(1, $counts->cap());
     }
 
+    public function testTheSynonymBlocklistReachesTheRuntimeAndChangesTheCacheVersion(): void
+    {
+        file_put_contents($this->root . '/data/synonyms.json', '[["mouse", "موس"]]');
+        file_put_contents($this->root . '/data/aliases.json', '[]');
+        $config = $this->config();
+        $before = SearchController::synonymsFromConfig($config);
+
+        $config['search']['synonym_blocklist'] = 'mouse';
+        $after = SearchController::synonymsFromConfig($config);
+
+        self::assertSame([['mouse'], ['موس']], $before->variants(['mouse'], 5));
+        self::assertSame([['mouse']], $after->variants(['mouse'], 5));
+        self::assertNotSame($before->version(), $after->version());
+    }
+
     public function testSynonymsFromConfigUsesTheStorageFileWhenItExists(): void
     {
         file_put_contents($this->root . '/data/aliases.json', '[["a", "b"]]');

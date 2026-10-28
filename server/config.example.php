@@ -33,7 +33,7 @@ return [
         'url'   => $setting('SEARCH_VPS_URL', ''),
         // The VPS's VPS_TOKEN; required by the VPS, so set it with the url.
         'token' => $setting('SEARCH_VPS_TOKEN', ''),
-        // @installer:vps (tune the call budget here: 'timeout_ms' => 300)
+        // @installer:vps (tune the call budget here: 'timeout_ms' => 600)
     ],
 
     // Result cache on the VPS (docs/CONFIGURATION.md). Off until enabled.

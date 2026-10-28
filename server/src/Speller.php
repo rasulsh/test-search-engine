@@ -46,6 +46,9 @@ final class Speller
     private const MIN_CORRECTED = 4;
     // Up to this length a typo rarely hits the first letter, so a candidate must share it.
     private const FIRST_LETTER_UP_TO = 6;
+    // A long Latin word (a brand or model name) may take two edits when the first letter holds; on any
+    // other token a second edit is a jump to an unrelated word unless the configured distance allows it.
+    private const LATIN_TWO_EDITS_FROM = 8;
 
     /**
      * Parsed dictionaries for this process, keyed by {@see cacheKey}.
@@ -93,7 +96,7 @@ final class Speller
      */
     public function __construct(
         array $vocabulary,
-        int $maxDistance = 2,
+        int $maxDistance = 1,
         ?array $index = null,
         int $minFrequency = 1
     ) {
@@ -154,7 +157,7 @@ final class Speller
     public static function fromDictionary(
         string $path,
         ?bool $useApcu = null,
-        int $maxDistance = 2,
+        int $maxDistance = 1,
         int $minFrequency = 1
     ): ?self {
         $key = self::cacheKey($path);
@@ -215,7 +218,7 @@ final class Speller
     public static function reloadDictionary(
         string $path,
         ?bool $useApcu = null,
-        int $maxDistance = 2,
+        int $maxDistance = 1,
         int $minFrequency = 1
     ): ?self {
         self::$processCache = [];
@@ -237,7 +240,7 @@ final class Speller
     public static function fromProducts(
         PDO $pdo,
         string $productsTable,
-        int $maxDistance = 2,
+        int $maxDistance = 1,
         int $minFrequency = 1
     ): self {
         $texts = [];
@@ -369,6 +372,9 @@ final class Speller
         $length = count($chars);
         // Be stricter on short tokens: two edits on four letters is a different word.
         $threshold = $length <= self::SHORT_TOKEN ? 1 : $this->maxDistance;
+        $twoEdits = $threshold < 2 && $length >= self::LATIN_TWO_EDITS_FROM
+            && preg_match('/^[a-z0-9]+$/', $token) === 1;
+        $reach = $twoEdits ? 2 : $threshold;
 
         $encoded = '';
         foreach ($chars as $char) {
@@ -386,13 +392,14 @@ final class Speller
         $bestDistance = PHP_INT_MAX;
         $bestFrequency = -1;
 
-        for ($termLength = max(1, $length - $threshold); $termLength <= $length + $threshold; $termLength++) {
+        for ($termLength = max(1, $length - $reach); $termLength <= $length + $reach; $termLength++) {
             foreach ($this->byLength[$termLength] ?? [] as [$term, $termEncoded, $frequency]) {
                 $distance = $termEncoded !== null
                     ? levenshtein($encoded, $termEncoded)
                     : self::distance($token, $term);
                 if (
-                    $distance > $threshold || $frequency < $this->minFrequency
+                    $distance > $reach || $frequency < $this->minFrequency
+                    || ($distance > $threshold && mb_substr($term, 0, 1) !== $chars[0])
                     || !$this->plausible($token, $chars, $term)
                 ) {
                     continue;

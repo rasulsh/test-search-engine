@@ -162,7 +162,8 @@
   }
 
   /* Time series: bars (volume) or lines (trends). Time runs left to right. series = [{name, cls, values}] */
-  function timeChart(title, labels, series, kind, fmt, axisFmt) {
+  /* extra(i) may add tooltip lines; a series may set faint, hollow[i] (open dots) and partialLast (dashed last segment). */
+  function timeChart(title, labels, series, kind, fmt, axisFmt, extra) {
     var W = 640, H = 206, L = 44, R = 8, T0 = 10, B = 40;
     var top = max([].concat.apply([], series.map(function (s) { return s.values; }))) || 1;
     var n = labels.length;
@@ -188,11 +189,19 @@
             rx: Math.min(4, w / 2), 'class': ser.cls }));
         });
       } else {
-        var d = ser.values.map(function (v, i) { return (i ? 'L' : 'M') + x(i) + ' ' + y(v); }).join(' ');
-        s.appendChild(svg('path', { d: d, 'class': 'line ' + ser.cls }));
+        var cls = ser.cls + (ser.faint ? ' faint' : '');
+        var dashed = ser.partialLast && n > 1;
+        var solid = dashed ? ser.values.slice(0, n - 1) : ser.values;
+        var d = solid.map(function (v, i) { return (i ? 'L' : 'M') + x(i) + ' ' + y(v); }).join(' ');
+        s.appendChild(svg('path', { d: d, 'class': 'line ' + cls }));
+        if (dashed) {
+          s.appendChild(svg('path', { d: 'M' + x(n - 2) + ' ' + y(ser.values[n - 2]) + ' L' + x(n - 1) + ' ' + y(ser.values[n - 1]),
+            'class': 'line dashed ' + cls }));
+        }
         if (n <= 40) {
           ser.values.forEach(function (v, i) {
-            s.appendChild(svg('circle', { cx: x(i), cy: y(v), r: 3, 'class': 'dot ' + ser.cls }));
+            var open = ser.hollow && ser.hollow[i];
+            s.appendChild(svg('circle', { cx: x(i), cy: y(v), r: ser.faint ? 2.5 : 3, 'class': 'dot ' + cls + (open ? ' hollow' : '') }));
           });
         }
       }
@@ -205,7 +214,8 @@
       var px = (e.clientX - box.left) * (W / box.width);
       var i = Math.max(0, Math.min(n - 1, Math.floor((px - L) / step)));
       guide.setAttribute('x1', x(i)); guide.setAttribute('x2', x(i)); guide.setAttribute('visibility', 'visible');
-      showTip(e, [dualText(labels[i])].concat(series.map(function (ser) { return ser.name + ': ' + fmt(ser.values[i]); })));
+      showTip(e, [dualText(labels[i])].concat(series.map(function (ser) { return ser.name + ': ' + fmt(ser.values[i]); }),
+        extra ? extra(i) : []));
     });
     hit.addEventListener('mouseleave', function () { guide.setAttribute('visibility', 'hidden'); hideTip(); });
     s.appendChild(hit);
@@ -406,8 +416,15 @@
     var grid = el('div', { 'class': 'grid2' }, empty0 ? [card(C.searches, [empty()])] : [
       card(C.volume, [timeChart(T.chart.volume, buckets,
         [{ name: S.searches, cls: 's1', values: r.volume.map(function (v) { return v.searches; }) }], 'bar', fmt.n)], null, 'volume'),
-      card(C.zero_rate, [timeChart(T.chart.zero_rate, zeroTrend.map(function (v) { return v.bucket; }),
-        [{ name: S.zero_rate, cls: 's2', values: zeroTrend.map(function (v) { return v.zero_rate; }) }], 'line', fmt.pct)], null, 'zero_rate'),
+      card(C.zero_rate, [timeChart(T.chart.zero_rate, zeroTrend.map(function (v) { return v.bucket; }), [
+        { name: S.zero_rate_raw, cls: 's2', faint: true, values: zeroTrend.map(function (v) { return v.zero_rate; }),
+          hollow: zeroTrend.map(function (v) { return v.low_confidence; }) },
+        { name: S.zero_rate_ma, cls: 's2', partialLast: zeroTrend.length > 0 && zeroTrend[zeroTrend.length - 1].partial,
+          values: zeroTrend.map(function (v) { return v.zero_rate_ma; }) }], 'line', fmt.pct, null, function (i) {
+          var v = zeroTrend[i];
+          return [S.unique_n + ': ' + fmt.n(v.n)].concat(v.low_confidence ? [T.ui.low_confidence] : [], v.partial ? [T.ui.partial] : []);
+        }),
+      legend([[S.zero_rate_ma, 's2'], [S.zero_rate_raw, 's2 faint']]), note(T.notes.zero_rate_chart)], null, 'zero_rate'),
       card(C.latency, [timeChart(T.chart.latency, lat.map(function (v) { return v.bucket; }), [
         { name: S.avg, cls: 's1', values: lat.map(function (v) { return v.avg; }) },
         { name: S.p95, cls: 's2', values: lat.map(function (v) { return v.p95; }) }], 'line', fmt.ms, function (v) { return fmt.n(Math.round(v)); }),
@@ -438,7 +455,6 @@
         tile(T.tiles.zero_unique, P(r.zero_result.rate), 'tile_zero_unique'), tile(T.tiles.cold_p95, M(c.p95), 'tile_cold_p95'),
         tile(T.tiles.capped, P(r.capped_share.share), 'tile_capped')];
       if (e.tracking) {
-        // Cart and order rates stay in the JSON report; the storefront's own analytics owns those figures.
         extra.push(tile(T.tiles.ctr, P(e.ctr), 'tile_ctr'), tile(T.tiles.mrr, fmt.d2(e.mrr), 'tile_mrr'));
       }
       tiles.append.apply(tiles, extra);

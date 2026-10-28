@@ -384,6 +384,7 @@ final class AdminStrings
                 'effective' => 'گروه نهایی (پس از ادغام با نام‌های مستعار)',
                 'none_found' => 'این واژه در هیچ گروهی نیست.',
                 'copy' => 'کپی به نام‌های مستعار',
+                'blocklist_note' => 'برای حذف یک گروه ساخته‌شده، عبارت آن را در search.synonym_blocklist در config.php بنویسید.',
                 'missing' => 'فایل synonyms.json در بستهٔ فعلی وجود ندارد یا قابل خواندن نیست.',
                 'empty' => 'گروهی وجود ندارد.',
                 'filter' => 'فیلتر واژه',

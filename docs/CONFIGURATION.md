@@ -63,7 +63,7 @@ It prints key paths only, never values, and exits non-zero on any ERROR, so a de
 | `db.user`, `db.password` | none (user required), empty | credentials (secret; the password may be empty) |
 | `db.products_table` | `products` | live table (the load file stages into `<table>_new`) |
 | `db.search_logs_table` | `search_logs` | log table |
-| `db.search_events_table` | `search_events` | click / cart / order events table (`POST /events`) |
+| `db.search_events_table` | `search_events` | click / suggestion-click events table (`POST /events`) |
 | `events.allowed_origin` | empty | storefront origin for a `fetch()`-based events call (CORS); `sendBeacon` needs none |
 | `paths.data` | `server/data` | active bundle (spellcheck, synonyms, aliases, keymap) |
 | `paths.data_incoming` | `server/data_incoming` | staging directory for the atomic reload swap |
@@ -100,8 +100,9 @@ The cPanel bundle carries no vectors and no model since M42 (the semantic tier's
 | `search.collapse_min_length` | 5 | shortest collapsed query tried |
 | `search.suggest_min_results` | 3 | "did you mean" runs below this many keyword hits |
 | `search.suggest_min_frequency` | 2 | a candidate must occur in this many products |
-| `search.suggest_max_distance` | 2 | maximum edits (1 for tokens of 4 characters or fewer) |
+| `search.suggest_max_distance` | 1 | maximum edits of a "did you mean" (M43; was 2). Two edits are still allowed for a Latin token of 8+ characters whose first letter is kept (`kaybourd` → `keyboard`); on any other token a second edit jumped between unrelated words. Setting 2 here restores the old behaviour for every token over 4 characters |
 | `search.suggest_blocklist` | `کالا,عدد,باب,…` | comma-separated generic words never offered as "did you mean" |
+| `search.synonym_blocklist` | empty | M43: comma-separated terms (normalized like the file); a **build-derived** synonym group (`synonyms.json`) holding one is dropped at runtime, which is how a bad generated group is removed without editing build output (a rebuild would bring it back). The owner's aliases are never filtered. Part of the result-cache version, so a change invalidates cached answers |
 | `search.query_max_chars` | 100 | longer queries are cut before the keyword, spell and VPS stages |
 | `search.query_max_tokens` | 8 | likewise, in words |
 | `search.result_cap` | 300 | a result list this long is logged with `is_capped = 1` |
@@ -110,14 +111,15 @@ The cPanel bundle carries no vectors and no model since M42 (the semantic tier's
 
 | key | default | meaning |
 | --- | --- | --- |
-| `search.semantic_top_k` | 300 | neighbours asked of the VPS (its cap is `VPS_MAX_LIMIT`, 500) |
+| `search.semantic_top_k` | 100 | neighbours asked of the VPS (M43; was 300; its cap is `VPS_MAX_LIMIT`, 500) |
+| `search.tail_cap` | 40 | M43: in a hybrid answer every solid keyword row is kept, but only this many of the other rows (semantic-only neighbours, weak keyword hits) follow, best first, before the `limit` slice (0 = no cap) |
 | `search.semantic_min_score` | 0.4 | cosine floor on bge-m3's scale (sent as `min_score`, re-applied); needs tuning on the real catalog |
 | `search.keyword_weight` / `search.semantic_weight` / `search.min_relevance` | 0.4 / 0.6 / 0.45 | blended relevance and its floor (M20) |
 | `search.stock_boost` / `search.popularity_boost` | 0.1 / 0.1 | light boosts after the floor |
 | `search.brand_match_boost` / `search.category_match_boost` / `search.tag_match_boost` | 0.15 / 0.1 / 0.1 | M21 match boosts (0 disables one) |
 | `search.intent_max_terms` | `4` | most intent-map keys applied to one query ([intent map](SEARCH-BEHAVIOR.md#intent-map), M34). The mapped categories / tags use the two boosts above; there is no separate knob |
 | `search.tag_match_min_tokens` | 2 | shortest query that phrase-matches tags |
-| `search.latency_budget_ms` | 200 | the budget the latency-guard tests assert against |
+| `search.latency_budget_ms` | 800 | the documented server-side latency target per request (M43; was 200). **The runtime never enforces it**: nothing is cut or timed out at this number; it is a target for the go-live measurements and a reference value, not a limit. The CI latency guards keep their own fixed 200 ms bar |
 
 ### VPS client (`vps` section)
 
@@ -126,7 +128,7 @@ The cPanel bundle carries no vectors and no model since M42 (the semantic tier's
 | `vps.url` | empty | base URL (the client appends `/search-vectors`); empty = keyword-only |
 | `vps.token` | empty | the VPS's `VPS_TOKEN` (secret) |
 | `vps.reload_timeout_ms` | 60000 | timeout of the admin panel's "load the uploaded vectors" call (`POST {vps.url}/reload`), which loads and checks a whole catalog |
-| `vps.timeout_ms` | 300 | whole-call budget, connect included. A slow or unreachable VPS means keyword-only results for that request, never an error. The default is sized for an external VPS; on the final LAN VM it is a safety net, keep it sane |
+| `vps.timeout_ms` | 600 | whole-call budget (M43; was 300, which left too little for a loaded VPS; 600 leaves room for the keyword stage and the database inside the 800 ms target), connect included. A slow or unreachable VPS means keyword-only results for that request, never an error. The default is sized for an external VPS; on the final LAN VM it is a safety net, keep it sane |
 
 ### Result cache (`redis` section, M26)
 

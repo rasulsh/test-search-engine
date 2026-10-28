@@ -64,7 +64,7 @@ plain cPanel hosting (no proxy in front), leave it empty.
 | `status` | Read-only: database and product count, the live bundle's `meta.json` (built at, normalization version, counts), alias and synonym group counts, VPS `/health`, Redis ping and the number of keys under `redis.prefix`, the config doctor result, last reload time. The VPS and Redis probes time out at `admin.probe_timeout_ms` (1 s) and show "unreachable". |
 | `ops` | The operations page (M40), below. |
 | `aliases` | The alias manager (M41), below. |
-| `synonyms` | Read-only `synonyms.json`; "which groups hold term X" across alias and synonym groups with the merged result; "copy to aliases". Hand edits of `synonyms.json` are lost on the next build. |
+| `synonyms` | Read-only `synonyms.json`; "which groups hold term X" across alias and synonym groups with the merged result; "copy to aliases". Hand edits of `synonyms.json` are lost on the next build; to drop a bad generated group, put a term of it in `search.synonym_blocklist` in `config.php` (owner aliases are never filtered). |
 | `tester` | A search without a log row and without the result cache: tier, did-you-mean, the top 10 titles with match type. |
 | `analytics` | The M35/M38 dashboard. `?p=analytics&format=json` is the same JSON as before (byte-identical, covered by `AnalyticsJsonCompatTest`), now needing a session: 401 `{"error":"unauthorized"}` without one. |
 | `logs` | Recent / zero-result / slowest `search_logs` rows, paginated. |

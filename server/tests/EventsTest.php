@@ -46,15 +46,23 @@ final class EventsTest extends DatabaseTestCase
 
     public function testEveryActionIsAccepted(): void
     {
-        foreach (['click', 'cart', 'order'] as $i => $action) {
-            self::assertSame('ok', $this->events->record(
-                ['search_uuid' => self::UUID, 'product_id' => 7 + $i, 'position' => 1, 'action' => $action]
-            ));
-        }
+        self::assertSame('ok', $this->events->record(
+            ['search_uuid' => self::UUID, 'product_id' => 7, 'position' => 1, 'action' => 'click']
+        ));
         self::assertSame('ok', $this->events->record(
             ['search_uuid' => self::UUID, 'product_id' => 0, 'position' => 0, 'action' => 'dym_click']
         ));
-        self::assertSame(4, $this->eventCount());
+        self::assertSame(2, $this->eventCount());
+    }
+
+    public function testCartAndOrderAreNoLongerAccepted(): void
+    {
+        foreach (['cart', 'order'] as $action) {
+            self::assertSame('invalid', $this->events->record(
+                ['search_uuid' => self::UUID, 'product_id' => 7, 'position' => 1, 'action' => $action]
+            ), $action);
+        }
+        self::assertSame(0, $this->eventCount());
     }
 
     public function testRejectsWhatIsNotAnEvent(): void
@@ -94,7 +102,7 @@ final class EventsTest extends DatabaseTestCase
         self::assertSame('ok', $this->events->record($click));
         self::assertSame('duplicate', $this->events->record($click));
         self::assertSame('ok', $this->events->record(['product_id' => 6] + $click));
-        self::assertSame('ok', $this->events->record(['action' => 'cart'] + $click));
+        self::assertSame('ok', $this->events->record(['action' => 'dym_click', 'product_id' => 0] + $click));
         self::assertSame(3, $this->eventCount());
     }
 }

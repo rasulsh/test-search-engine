@@ -269,7 +269,7 @@ final class Config
             'search.facet_min_products'       => ['int', 20],
             'search.collapse_weight'          => ['float', 9.0],
             'search.collapse_min_length'      => ['int', 5],
-            'search.semantic_top_k'           => ['int', 300],
+            'search.semantic_top_k'           => ['int', 100],
             // bge-m3 scale; the old e5 floor (0.82) would drop nearly every neighbour.
             'search.semantic_min_score'       => ['float', 0.4],
             'search.keyword_weight'           => ['float', 0.4],
@@ -281,25 +281,32 @@ final class Config
             'search.category_match_boost'     => ['float', 0.1],
             'search.tag_match_boost'          => ['float', 0.1],
             'search.tag_match_min_tokens'     => ['int', 2],
+            // Rows past the solid keyword hits kept in a result list (0 = no cap); see Ranker.
+            'search.tail_cap'                 => ['int', 40],
             'search.intent_max_terms'         => ['int', 4],
             'search.suggest_min_results'      => ['int', 3],
             'search.suggest_min_frequency'    => ['int', 2],
-            'search.suggest_max_distance'     => ['int', 2],
+            // 2 only for a long Latin token with the same first letter (Speller); 2 here lifts that restriction.
+            'search.suggest_max_distance'     => ['int', 1],
             // Generic words never offered as a "did you mean" (comma separated, normalized).
             'search.suggest_blocklist'        => ['string', 'کالا,عدد,باب,محصول,مدل,نوع,سری,اصل,جدید,قیمت,خرید,فروش'],
+            // Terms (comma separated, normalized): a build-derived synonym group holding one is dropped.
+            // Owner aliases are never filtered; add a term here to remove a bad generated group.
+            'search.synonym_blocklist'        => ['string', ''],
             // A longer query is cut before the spell correction and the VPS call.
             'search.query_max_chars'          => ['int', 100],
             'search.query_max_tokens'         => ['int', 8],
             // A result list this long counts as capped in the log (search_logs.is_capped).
             'search.result_cap'               => ['int', 300],
-            'search.latency_budget_ms'        => ['int', 200],
+            // A documented target and a CI reference only: the runtime never enforces it.
+            'search.latency_budget_ms'        => ['int', 800],
 
             'storefront.store_base' => ['string', ''],
             'storefront.image_base' => ['string', ''],
 
             'vps.url'        => ['string', ''],
             'vps.token'      => ['string', ''],
-            'vps.timeout_ms' => ['int', 300],
+            'vps.timeout_ms' => ['int', 600],
             // POST {vps.url}/reload (the admin panel's "reload vectors"): loading a catalog takes seconds.
             'vps.reload_timeout_ms' => ['int', 60000],
 

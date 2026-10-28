@@ -45,6 +45,14 @@ final class ConfigReportTest extends TestCase
         return $rows;
     }
 
+    public function testTheSynonymBlocklistShowsOnTheStatusPageList(): void
+    {
+        $rows = self::byKey(['search' => ['synonym_blocklist' => 'mouse']]);
+
+        self::assertArrayHasKey('search.synonym_blocklist', $rows);
+        self::assertSame('mouse', $rows['search.synonym_blocklist']['value']);
+    }
+
     public function testEveryKnownKeyHasARowWithItsEffectiveValueAndSource(): void
     {
         $rows = self::byKey(self::overrides());

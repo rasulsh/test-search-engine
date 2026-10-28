@@ -9,7 +9,7 @@ use PDOException;
 
 /**
  * The log-v2 metrics of public/analytics.php, beside the older ones in Analytics:
- * unique searches and sessions, zero-result rate, engagement (clicks, cart, order
+ * unique searches and sessions, zero-result rate, engagement (clicks
  * from search_events), cold-path latency per stage, the hybrid-share timeline,
  * suggestion quality, alias candidates, silent failures, demand gaps, trending
  * queries and flagged probes.
@@ -176,22 +176,21 @@ final class AnalyticsInsights
     /**
      * What shoppers did with the answers, over unique searches that had results:
      * click-through, no-click rate, mean click position, mean reciprocal rank of the
-     * first click, and the shares that ended in a cart / an order.
+     * first click.
      *
      * @return array{tracking: bool, searches: int, ctr: float, no_click_rate: float, mean_click_position: float,
-     *     mrr: float, cart_rate: float, order_rate: float}
+     *     mrr: float}
      */
     public function engagement(?string $from, ?string $to): array
     {
         $empty = [
             'tracking' => false, 'searches' => 0, 'ctr' => 0.0, 'no_click_rate' => 0.0,
-            'mean_click_position' => 0.0, 'mrr' => 0.0, 'cart_rate' => 0.0, 'order_rate' => 0.0,
+            'mean_click_position' => 0.0, 'mrr' => 0.0,
         ];
         try {
             [$where, $params] = $this->v2($from, $to, ['l.is_duplicate = 0', 'l.result_count > 0'], 'l.');
             $stmt = $this->pdo->prepare(
                 'SELECT COUNT(*) AS n, COALESCE(SUM(e.clicks > 0), 0) AS clicked,'
-                . ' COALESCE(SUM(e.carts > 0), 0) AS carted, COALESCE(SUM(e.orders > 0), 0) AS ordered,'
                 . ' COALESCE(SUM(CASE WHEN e.clicks > 0 THEN 1 / e.first_pos END), 0) AS rr'
                 . " FROM {$this->logs} l LEFT JOIN (" . $this->eventSummary($from) . ')'
                 . ' e ON e.search_uuid = l.search_uuid'
@@ -220,8 +219,6 @@ final class AnalyticsInsights
             'no_click_rate' => $n === 0 ? 0.0 : round(100 - self::pct($clicked, $n), 1),
             'mean_click_position' => round((float) $clicks['pos'], 2),
             'mrr' => $n === 0 ? 0.0 : round((float) $row['rr'] / $n, 4),
-            'cart_rate' => self::pct((int) $row['carted'], $n),
-            'order_rate' => self::pct((int) $row['ordered'], $n),
         ];
     }
 
@@ -541,15 +538,16 @@ final class AnalyticsInsights
     }
 
     /**
-     * Per search: how many clicks / carts / orders it got and the position of its first click.
-     * The events table is scanned from the range start on only.
+     * Per search: how many clicks it got and the position of its first click. Only click and
+     * dym_click rows count: older cart / order rows (no longer written) are ignored. The events
+     * table is scanned from the range start on only.
      */
     private function eventSummary(?string $from): string
     {
-        return "SELECT search_uuid, SUM(action = 'click') AS clicks, SUM(action = 'cart') AS carts,"
-            . " SUM(action = 'order') AS orders,"
+        return "SELECT search_uuid, SUM(action = 'click') AS clicks,"
             . " MIN(CASE WHEN action = 'click' THEN GREATEST(position, 1) END) AS first_pos FROM {$this->events}"
-            . ($from === null ? '' : ' WHERE ts >= :efrom') . ' GROUP BY search_uuid';
+            . " WHERE action IN ('click', 'dym_click')" . ($from === null ? '' : ' AND ts >= :efrom')
+            . ' GROUP BY search_uuid';
     }
 
     /** @return array<string, string> */

@@ -1,5 +1,5 @@
 -- Search log v2: per-search id, session, source, stage latencies, flags, and the
--- search_events table (click / cart / order / dym_click tracking).
+-- search_events table (click / dym_click tracking; cart and order were dropped in M43).
 --
 -- Target: MariaDB 10.4+ (ADD COLUMN / ADD INDEX IF NOT EXISTS). Safe to run any
 -- number of times. Rows written before it keep log_version = 1; the app writes 2.
@@ -40,7 +40,7 @@ CREATE TABLE IF NOT EXISTS search_events (
   search_uuid CHAR(36) NOT NULL,
   product_id  INT UNSIGNED NOT NULL,
   position    SMALLINT UNSIGNED NOT NULL,
-  action      VARCHAR(12) NOT NULL DEFAULT 'click',  -- click|cart|order|dym_click
+  action      VARCHAR(12) NOT NULL DEFAULT 'click',  -- click|dym_click
   ts          DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   KEY idx_search (search_uuid),
   KEY idx_ts (ts)

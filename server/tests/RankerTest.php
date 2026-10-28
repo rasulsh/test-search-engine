@@ -179,6 +179,35 @@ final class RankerTest extends TestCase
         self::assertCount(5, $out);
     }
 
+    public function testTailCapKeepsEverySolidRowAndCutsTheRestInOrder(): void
+    {
+        $ranker = new Ranker(0.0, 0.0, 0.4, 0.6, 0.0, 0.0, 0.0, 0.0, 2, 3);
+        // 1..4 solid keyword hits (low cosines, ranked below the neighbours); 11..18 pure semantic, best first.
+        $solid = [1 => 10.0, 2 => 9.0, 3 => 8.0, 4 => 7.0];
+        $cosines = [];
+        foreach (range(11, 18) as $i => $id) {
+            $cosines[$id] = 0.9 - $i * 0.05;
+        }
+
+        $out = self::ids($ranker->blend($solid, $cosines, [], 100, [1, 2, 3, 4], 0.1));
+
+        self::assertSame([1, 2, 3, 4], array_values(array_intersect($out, [1, 2, 3, 4])), 'no solid row is cut');
+        $tail = array_values(array_diff($out, [1, 2, 3, 4]));
+        self::assertSame([11, 12, 13], $tail, 'the best three of the tail, in ranked order');
+        self::assertCount(7, $out);
+    }
+
+    public function testTailCapOffKeepsTheWholeTailAndTheLimitStillApplies(): void
+    {
+        $off = new Ranker(0.0, 0.0, 0.4, 0.6, 0.0, 0.0, 0.0, 0.0, 2, 0);
+        $cosines = array_fill_keys(range(1, 60), 0.5);
+
+        self::assertCount(60, $off->blend([], $cosines, [], 100));
+        $capped = new Ranker(0.0, 0.0, 0.4, 0.6, 0.0, 0.0, 0.0, 0.0, 2, 40);
+        self::assertCount(40, $capped->blend([], $cosines, [], 100));
+        self::assertCount(5, $capped->blend([], $cosines, [], 5), 'the limit slice runs after the cap');
+    }
+
     public function testTiesBreakByProductId(): void
     {
         $ranker = new Ranker(0.0, 0.0, 0.4, 0.6, 0.0);
@@ -419,13 +448,13 @@ final class RankerTest extends TestCase
 
     public function testSettingsExposeTheKnobsForTheDebugBreakdown(): void
     {
-        $settings = (new Ranker(0.1, 0.2, 0.4, 0.6, 0.45, 0.15, 0.1, 0.05, 3))->settings();
+        $settings = (new Ranker(0.1, 0.2, 0.4, 0.6, 0.45, 0.15, 0.1, 0.05, 3, 40))->settings();
 
         self::assertSame(
             [
                 'keyword_weight' => 0.4, 'semantic_weight' => 0.6, 'min_relevance' => 0.45, 'stock_boost' => 0.1,
                 'popularity_boost' => 0.2, 'brand_match_boost' => 0.15, 'category_match_boost' => 0.1,
-                'tag_match_boost' => 0.05, 'tag_match_min_tokens' => 3,
+                'tag_match_boost' => 0.05, 'tag_match_min_tokens' => 3, 'tail_cap' => 40,
             ],
             $settings
         );

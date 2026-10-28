@@ -23,6 +23,12 @@ use App\Speller;
  */
 final class SpellerLatencyGuardTest extends DatabaseTestCase
 {
+    /**
+     * The CI regression bar, fixed on purpose: `search.latency_budget_ms` is the production target (800 ms
+     * since M43), and tying the guard to it would loosen it from 200 ms without anyone noticing.
+     */
+    private const BUDGET_MS = 200.0;
+
     private const PRODUCTS = 20000;
     private const WORD_POOL = 12000;
     private const RUNS = 5;
@@ -41,7 +47,7 @@ final class SpellerLatencyGuardTest extends DatabaseTestCase
     public function testNoKeywordMatchQueryStaysWithinBudgetOnWarmPath(): void
     {
         $config = Config::defaults();
-        $budgetMs = (float) $config['search']['latency_budget_ms'];
+        $budgetMs = self::BUDGET_MS;
 
         $words = $this->wordPool();
         $texts = $this->seedCatalog($words);

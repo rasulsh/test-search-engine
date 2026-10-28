@@ -9,7 +9,7 @@ The full request path behind `POST /search`: [RUNTIME-FLOW.md](RUNTIME-FLOW.md).
 | endpoint | purpose |
 | --- | --- |
 | `POST /search` | `{q, customer_id?, session_id?, source?, page?, limit?, with_details?, debug?}`, returns a `search_uuid`, ordered `product_ids` + `did_you_mean` / `did_you_mean_applied` (plus `cosine_scores` on hybrid responses, and `products` display fields only with `"with_details": true`). Keyword tier always; hybrid when the configured VPS answers in time. |
-| `POST /events` | Log v2 result tracking: `{search_uuid, product_id, position, action}` with `action` `click` / `cart` / `order` / `dym_click`; `204` on success. Feeds the engagement figures of the analytics page. See [INTEGRATION.md](../INTEGRATION.md#post-events). |
+| `POST /events` | Log v2 result tracking: `{search_uuid, product_id, position, action}` with `action` `click` / `dym_click` (cart and order were dropped in M43); `204` on success. Feeds the engagement figures of the analytics page. See [INTEGRATION.md](../INTEGRATION.md#post-events). |
 | `GET /health` | Database reachability + live product count, for monitoring. |
 | `GET /logs.php` | Moved into the admin panel in M39: redirects to `admin.php?p=logs` (login required). See [ADMIN.md](ADMIN.md) and [Search logs and ranking debug](#search-logs-and-ranking-debug). |
 | `POST /reload` | Token-protected (`X-Reload-Token`). Validates the staged bundle and swaps it in atomically (then flushes the result cache when one is configured, reporting `cache_flushed`). With `?load=1` it first loads `data_incoming/products.load.sql` into the staging table itself. Only one reload or rollback runs at a time (`409 reload_busy` for a second, M40); the admin panel's operations page uses the same code and lock ([ADMIN.md](ADMIN.md)). |
@@ -79,7 +79,7 @@ columns) the report carries `log_v2: {available: false}` and none of the keys be
 | `log_v2` | `{available, rows}` |
 | `unique` | `{searches, sessions, searches_per_session}` |
 | `zero_result` | `{rate, queries[]}`: rate on unique searches, top zero-result queries by normalized form |
-| `engagement` | `{tracking, searches, ctr, no_click_rate, mean_click_position, mrr, cart_rate, order_rate}` over unique searches with results; `tracking` is false until a click is recorded |
+| `engagement` | `{tracking, searches, ctr, no_click_rate, mean_click_position, mrr}` over unique searches with results; `tracking` is false until a click is recorded. Old `cart` / `order` rows in `search_events` are ignored (M43) |
 | `latency_cold` | cache misses only: `{count, p50, p95, max, stages_p95: {keyword, vector, spell}, slowest[]}` (top 20) |
 | `tier_timeline` | `{hours: [{bucket, searches, hybrid, hybrid_share}], outages[]}`: hybrid share per hour, and runs of busy hours with only keyword-only answers (a vector outage) |
 | `capped_share` | `{searches, capped, share}`: lists that reached `search.result_cap` |
@@ -101,7 +101,7 @@ Sample (abridged; the numbers are illustrative, the shape is real):
   "unique": {"searches": 7410, "sessions": 3120, "searches_per_session": 2.31},
   "zero_result": {"rate": 8.4, "queries": [{"query": "beamng.drive", "searches": 9, "last_seen": "2026-10-23 21:02:11"}]},
   "engagement": {"tracking": true, "searches": 6790, "ctr": 61.3, "no_click_rate": 38.7, "mean_click_position": 3.42,
-                 "mrr": 0.4127, "cart_rate": 7.8, "order_rate": 2.1},
+                 "mrr": 0.4127},
   "latency_cold": {"count": 2210, "p50": 38, "p95": 410, "max": 12840,
                    "stages_p95": {"keyword": 120, "vector": 280, "spell": 45},
                    "slowest": [{"query": "very long pasted text ...", "max_ms": 12840, "searches": 1}]},
@@ -137,7 +137,7 @@ Gregorian value with its Jalali equivalent (`Intl`, no library), unshifted, besi
 clock's UTC offset (`search_logs.ts` is written by the database in its own session zone, which the app
 never sets). `?format=json` is untouched (`fixtures/analytics_report.golden.json` guards it).
 Reports that stay empty until the storefront sends `session_id` (unique searches, searches per
-session, alias candidates) or click events (click-through, MRR, cart rate, silent failures) say so.
+session, alias candidates) or click events (click-through, MRR, silent failures) say so.
 Screenshots: [light](img/analytics-fa-light.png), [dark](img/analytics-fa-dark.png). It shows
 
 - tiles: searches, zero-result rate, cache hit rate, hybrid share, average and p95
@@ -161,6 +161,12 @@ Trends are per day (per hour for `24h`) and read at most 366 daily buckets, so
   means a regression or a catalog change; a slow drift up means new product words
   the aliases do not cover. Pair it with the *Zero-result queries* table, the gap
   list, and close gaps with [aliases or the intent map](SEARCH-BEHAVIOR.md#intent-map).
+  The trend counts **unique first-page searches only** (not repeated submits, not paging requests): each bucket
+  carries its sample size `n`, `low_confidence` (fewer than 30 searches), `partial` (the still-running last bucket) and
+  `zero_rate_ma`, the rate pooled over the last 7 buckets. The chart draws the moving average as the main line, the
+  raw values faint, low-confidence points hollow and the partial bucket dashed. Off-topic queries (the store sells
+  gaming products only) are **expected** zero results, not engine failures
+  ([SEARCH-BEHAVIOR.md](SEARCH-BEHAVIOR.md#off-topic)).
 - **Latency** is average (blue) and p95 (orange) per period: a p95 that climbs while
   the average stays flat is the VPS timing out for some searches (check the
   hybrid share and the cache hit rate next to it).
@@ -189,7 +195,8 @@ Trends are per day (per hour for `24h`) and read at most 366 daily buckets, so
   "top_queries": [{"query": "far cry", "searches": 41, "last_seen": "2026-10-05 21:40:02"}],
   "zero_result_queries": [{"query": "فارکرای ۶", "searches": 5, "last_seen": "2026-10-05 18:12:44"}],
   "volume": [{"bucket": "2026-10-04", "searches": 118}],
-  "zero_rate_trend": [{"bucket": "2026-10-04", "searches": 118, "zero_results": 5, "zero_rate": 4.2}],
+  "zero_rate_trend": [{"bucket": "2026-10-04", "n": 118, "zero_results": 5, "zero_rate": 4.2, "zero_rate_ma": 5.1,
+                       "low_confidence": false, "partial": false}],
   "latency_trend": [{"bucket": "2026-10-04", "searches": 118, "avg": 58.1, "p95": 131}],
   "hourly_heatmap": [{"weekday": 0, "hour": 21, "searches": 33}],
   "query_length": [{"tokens": 1, "searches": 301}, {"tokens": 2, "searches": 402}, {"tokens": 3, "searches": 70},
@@ -224,7 +231,8 @@ signal: two rows for one product means an alias is missing.
 - *Zero-result rate rising*, or a frequent query in the zero-result list: shoppers
   ask for something the catalog or the matching does not cover. Add an alias or
   tag for a name variant, check the catalog for a missing product, and re-read
-  the list after the next reload. A one-off typo is noise; repeats are the gap.
+  the list after the next reload. A one-off typo is noise; repeats are the gap. A query about something the
+  store does not sell at all (medicine, clothing) is an expected zero result, not a gap.
 - *Cache hit rate low* (with the cache on): queries rarely repeat inside the TTL
   (`redis.ttl`), the prefix keeps being flushed, or Redis is failing (look for
   `error_log` lines); a near-zero rate with Redis off is normal. Latency is read
@@ -233,7 +241,7 @@ signal: two rows for one product means an alias is missing.
 - *Hybrid share low*: the VPS is slow, down or not configured (every miss of the
   semantic tier is a keyword-only answer); compare `vector_share` and the VPS's
   own health.
-- *p95 latency near the 200 ms budget*: look at the Slowest view of the logs page
+- *p95 latency near the 800 ms target*: look at the Slowest view of the logs page
   for the queries behind it.
 - *Did-you-mean share high*: many typos; check the suggestions are accepted
   (the storefront applies them) and that the spellcheck dictionary is current.

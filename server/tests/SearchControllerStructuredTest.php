@@ -272,13 +272,15 @@ final class SearchControllerStructuredTest extends DatabaseTestCase
         }
     }
 
-    public function testOverLongQueryIsTruncatedNotDropped(): void
+    public function testOverLongQueryIsSearchedButLoggedAsAPlaceholder(): void
     {
         $long = str_repeat('گ', 600);
 
-        $this->controller([], false)->search(['q' => $long]);
+        $result = $this->controller([], false)->search(['q' => $long]);
 
-        self::assertSame(512, mb_strlen((string) $this->lastLog()['raw_q']));
+        self::assertSame($long, $result['query']['raw']); // the caller still gets its own text back
+        self::assertSame(Logger::LONG_PLACEHOLDER, $this->lastLog()['raw_q']);
+        self::assertSame(Logger::LONG_PLACEHOLDER, $this->lastLog()['normalized_q']);
     }
 
     public function testALogFailureNeverFailsTheSearch(): void

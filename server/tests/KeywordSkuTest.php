@@ -155,7 +155,7 @@ final class KeywordSkuTest extends DatabaseTestCase
             static fn (): Speller => Speller::fromProducts($pdo, 'products'),
             null,
             10,
-            FakeVps::client(['products' => $vectors, 'queries' => ['AB-1234' => [1.0, 0.0, 0.0, 0.0]]]),
+            FakeVps::client(['products' => $vectors, 'queries' => ['ab1234' => [1.0, 0.0, 0.0, 0.0]]]),
             new Ranker(0.1, 0.1),
             $signals,
             100,

@@ -29,7 +29,8 @@ dl.help[hidden]{display:none}
 .axis.jal{font-size:9px}
 .s1{fill:var(--s1);stroke:var(--s1);background:var(--s1)}.s2{fill:var(--s2);stroke:var(--s2);background:var(--s2)}
 rect.s1,rect.s2,.dot{stroke:none}.line{fill:none;stroke-width:2}.line.s1,.line.s2{background:none}
-.dot{stroke:var(--card);stroke-width:2}.guide{stroke:var(--ink2);stroke-width:1;stroke-dasharray:3 3}
+.dot{stroke:var(--card);stroke-width:2}.line.faint,.dot.faint,.sw.faint{opacity:.35}.line.dashed{stroke-dasharray:5 4}
+.dot.hollow{fill:var(--card);stroke:var(--s2);stroke-width:1.5;opacity:1}.guide{stroke:var(--ink2);stroke-width:1;stroke-dasharray:3 3}
 .cell{fill:var(--heat)}
 .legend{display:flex;flex-wrap:wrap;gap:12px;margin:6px 0;color:var(--ink2);font-size:12px}
 .sw{display:inline-block;width:10px;height:10px;border-radius:3px;margin-inline-end:6px}

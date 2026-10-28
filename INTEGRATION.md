@@ -174,7 +174,7 @@ snippet below.
 
 ### `POST /events`
 
-Result tracking (log v2). The page that received a `search_uuid` reports what the shopper did, one small call per event; the numbers feed `analytics.php` (click-through, MRR, cart and order rates, silent failures, alias candidates). No token: the unguessable `search_uuid` is the capability, and the endpoint refuses unknown ids, unknown actions and a repeat of the same event within 5 seconds.
+Result tracking (log v2). The page that received a `search_uuid` reports what the shopper did, one small call per event; the numbers feed the admin analytics page (click-through, MRR, silent failures, alias candidates). No token: the unguessable `search_uuid` is the capability, and the endpoint refuses unknown ids, unknown actions and a repeat of the same event within 5 seconds.
 
 ```json
 { "search_uuid": "0b6a1d3e-5c52-4f7a-9d77-1c2f3a4b5c6d", "product_id": 43, "position": 3, "action": "click" }
@@ -185,7 +185,7 @@ Result tracking (log v2). The page that received a `search_uuid` reports what th
 | `search_uuid` | from the `/search` response (required) |
 | `product_id` | the product (required, at least 1; send `0` for `dym_click`) |
 | `position` | 1-based place in the results (0-65535), for the mean click position and MRR |
-| `action` | `click` (default), `cart`, `order` or `dym_click` (the "did you mean" link) |
+| `action` | `click` (default) or `dym_click` (the "did you mean" link). Cart and order were dropped in M43: they are refused with `400` |
 
 Answers `204` (recorded, or a repeat), `400` (malformed), `404` (unknown `search_uuid`), `405`. Send it with `navigator.sendBeacon(url, JSON.stringify(body))`: the body goes as `text/plain`, which a browser sends cross-origin without a preflight, and survives the page unloading. For a `fetch()` from another origin set `events.allowed_origin`. The table is `search_events` (`db/schema.sql`, `db/migrations/2026-10-24_search_logs_v2.sql`).
 
@@ -320,9 +320,9 @@ Content-Type: application/json
 | --- | --- | --- |
 | `SEARCH_VPS_URL` | empty | Base URL of the VPS service (`https://vsearch.example.com`, the URL `vps/setup.sh --domain` prints). Empty = keyword-only search, nothing is called. |
 | `SEARCH_VPS_TOKEN` | empty | The VPS's `VPS_TOKEN`. A secret: keep it in the environment or `config.php` (install.php asks for it). |
-| `vps.timeout_ms` | `300` | Budget for the whole call, connect included. A slower VPS means a keyword-only answer for that search. |
+| `vps.timeout_ms` | `600` | Budget for the whole call, connect included. A slower VPS means a keyword-only answer for that search. |
 | `search.semantic_min_score` | `0.4` | The cosine floor, sent as `min_score` and re-applied on cPanel. See below. |
-| `search.semantic_top_k` | `300` | How many neighbours are asked for. |
+| `search.semantic_top_k` | `100` | How many neighbours are asked for. |
 
 - **Fallback.** Unreachable, timed out, any non-`200` (`401` wrong token,
   `503` no vectors loaded, …) or a malformed body: the search is answered
@@ -332,8 +332,8 @@ Content-Type: application/json
   (`<reason>` is `timeout`, `unreachable: …`, `http_<status>` or
   `malformed_response`), and its `search_logs` row has `had_vector = 0`.
 - **Latency.** Keyword search plus the VPS round trip; a dead VPS costs at
-  most `vps.timeout_ms`. Keep the timeout well under the 200 ms budget
-  plus network time on the real hosts (measure there).
+  most `vps.timeout_ms`. Keep the timeout well inside the 800 ms
+  target plus network time on the real hosts (measure there).
 - **The floor.** bge-m3 cosines sit far lower than e5's: the old 0.82 would
   drop nearly every bge-m3 neighbour. 0.4 is a starting point and **needs
   tuning on the real catalog** (eval harness, search logs). No floor separates
@@ -385,7 +385,6 @@ What the storefront does per search:
    ```
 
    The "did you mean" link sends `{search_uuid, product_id: 0, position: 0, action: 'dym_click'}` the same way.
-3. *Cart and order.* Put `&search_uuid=…&search_pos=…` on the product link; the OpenCart `product/product` controller keeps `$this->session->data['search_hits'][$product_id] = [uuid, pos]`. The add-to-cart handler (and the cart button on the results page itself) reports `cart` for that product, and `checkout/success` reports `order` for every ordered product found in `search_hits`. Both are one server-side `file_get_contents` / curl `POST` of the JSON above with a 1-second timeout and the error ignored: tracking must never delay a page.
 
 The snippet expects a form with a text input and two output elements. The
 OpenCart module prints the logged-in customer id (or nothing) into

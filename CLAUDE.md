@@ -40,7 +40,8 @@ problem is just a cache miss.
   M26, the optional Redis result cache are on a separate host, not part of the
   cPanel deployment; cPanel only holds the PHP client code, no extension or
   Composer package.)
-- Search latency budget: **under 200 ms** server-side per request.
+- Search latency target: **under 800 ms** server-side per request (a documented target; the runtime does
+  not enforce it, and the CI guards keep their own 200 ms regression bar).
 - The server runs **plain PHP, no framework** (no Laravel/Symfony). A tiny
   front controller only. Runtime must have **zero Composer runtime
   dependencies**; Composer is dev-only (tests, lint).
@@ -98,7 +99,7 @@ abstraction layers.
 │   │   ├── search.php            # POST /search
 │   │   ├── health.php            # GET /health
 │   │   ├── reload.php            # POST /reload (token-protected, atomic swap)
-│   │   ├── events.php            # POST /events (M37: click / cart / order / dym_click by search_uuid)
+│   │   ├── events.php            # POST /events (M37: click / dym_click by search_uuid; cart and order dropped in M43)
 │   │   ├── admin.php             # the admin panel (M39): login, status, analytics, logs, audit, help (?p=)
 │   │   ├── logs.php              # redirect to admin.php?p=logs (M39; was the token page of M21)
 │   │   └── analytics.php         # redirect to admin.php?p=analytics (M39; was the token page of M31)
@@ -253,7 +254,7 @@ because Tier 2 is unavailable.
   worker under systemd on a 2–4 GB VPS (`vps/README.md`). It embeds queries
   and runs the cosine top-K. No model runs in the browser.
 - cPanel reaches the VPS with PHP curl: `SEARCH_VPS_URL`, `SEARCH_VPS_TOKEN`,
-  `vps.timeout_ms` (small, default 300). Empty URL = keyword-only.
+  `vps.timeout_ms` (small, default 600). Empty URL = keyword-only.
 - Semantic model: `BAAI/bge-m3` (dim 1024), configured in `pipeline/config.py`
   (`SEARCH_VPS_MODEL*`) and on the VPS (`VPS_MODEL*`); it is pending a
   Persian-quality test and may change. The cosine floor
@@ -431,6 +432,15 @@ wait for review before starting the next.
   Panel: full-width layout (max about 1600 px) and consistent tables, a centered login box, server-side pagination
   and search over all alias groups, and the logs page with whitelisted server-side sorting, a rows-per-page selector
   and a keyword search across raw and normalized query, all in the query string.
+
+- **M43 — Off-topic hygiene and tweaks:** the VPS call carries the normalized query; cart / order event tracking
+  removed (`POST /events`: `click`, `dym_click`; old rows ignored, no migration); "did you mean" distance 1 (2 only for
+  Latin tokens of 8+ characters with the same first letter); `search.tail_cap` (40) and `semantic_top_k` 100; latency
+  target 800 ms (documented, not enforced; CI guards keep a fixed 200 ms bar), `vps.timeout_ms` 600; zero-rate trend over
+  unique first-page searches with a moving average and low-confidence / partial marks; `search.synonym_blocklist`
+  (drops build-derived groups, never owner aliases); letter + digit variants (`gta6` / `gta 6`); personal-data queries
+  masked in `search_logs`; `docs/ALIASES.md` rewritten for the alias manager. Off-topic queries (the store sells gaming
+  products only) are expected to return zero results and no suggestion.
 
 **Definition of Done (per PR):** code + tests pass in CI; docs updated;
 KISS respected (no unused abstraction); PR description complete; no secrets or

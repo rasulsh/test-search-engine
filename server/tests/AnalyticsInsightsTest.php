@@ -109,7 +109,7 @@ final class AnalyticsInsightsTest extends DatabaseTestCase
         self::assertSame(3, $report['log_v2']['rows'], 'v2 rows exclude the legacy one and the probe');
     }
 
-    public function testEngagementFromClicksCartsAndOrders(): void
+    public function testEngagementFromClicksIgnoringOldCartAndOrderRows(): void
     {
         $this->log('s1', 'mafia', 5);
         $this->log('s2', 'ps5', 5, ['session_id' => 's2']);
@@ -117,9 +117,10 @@ final class AnalyticsInsightsTest extends DatabaseTestCase
         $this->log('s4', 'nothing', 0, ['session_id' => 's4']);
         $this->event('s1', 'click', 1);
         $this->event('s1', 'click', 4, 8);
-        $this->event('s1', 'cart');
+        $this->event('s1', 'cart');   // rows from before M43 stay in the table and are ignored
         $this->event('s2', 'click', 2);
         $this->event('s2', 'order');
+        $this->event('s3', 'order');
 
         $e = $this->report()['engagement'];
 
@@ -129,8 +130,8 @@ final class AnalyticsInsightsTest extends DatabaseTestCase
         self::assertSame(33.3, $e['no_click_rate']);
         self::assertSame(2.33, $e['mean_click_position']);   // (1 + 4 + 2) / 3
         self::assertSame(0.5, $e['mrr']);                      // (1/1 + 1/2 + 0) / 3
-        self::assertSame(33.3, $e['cart_rate']);
-        self::assertSame(33.3, $e['order_rate']);
+        self::assertArrayNotHasKey('cart_rate', $e);
+        self::assertArrayNotHasKey('order_rate', $e);
     }
 
     public function testColdLatencyIgnoresCacheHitsAndNamesTheSlowQueries(): void

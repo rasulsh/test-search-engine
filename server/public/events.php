@@ -3,7 +3,7 @@
 /**
  * POST /events. The storefront reports what a shopper did with a search's results:
  * `{"search_uuid": "...", "product_id": 123, "position": 4, "action": "click"}`
- * (action: click | cart | order | dym_click, default click; a dym_click names no
+ * (action: click | dym_click, default click; a dym_click names no
  * product, send product_id 0). Sent with navigator.sendBeacon as text/plain, so
  * the cross-origin request needs no preflight; the body is JSON either way.
  * Answers 204 on success (and on a repeat), 400 / 404 otherwise; never details.

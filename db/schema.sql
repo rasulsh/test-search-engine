@@ -100,14 +100,15 @@ CREATE TABLE IF NOT EXISTS search_logs (
     KEY idx_uuid (search_uuid)
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_unicode_ci;
 
--- Result clicks, add-to-carts, orders and suggestion clicks, keyed by the
--- search_uuid /search returned (public/events.php writes it).
+-- Result clicks and suggestion clicks, keyed by the search_uuid /search returned
+-- (public/events.php writes it). Rows with another action (cart, order: tracked
+-- before M43) may remain; every report ignores them.
 CREATE TABLE IF NOT EXISTS search_events (
     id          BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
     search_uuid CHAR(36)        NOT NULL,
     product_id  INT UNSIGNED    NOT NULL,
     position    SMALLINT UNSIGNED NOT NULL,
-    action      VARCHAR(12)     NOT NULL DEFAULT 'click',  -- click|cart|order|dym_click
+    action      VARCHAR(12)     NOT NULL DEFAULT 'click',  -- click|dym_click
     ts          DATETIME        NOT NULL DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (id),
     KEY idx_search (search_uuid),

@@ -40,6 +40,10 @@ namespace App;
  * apply after the floor and multiply the relevance, a boost can reorder close
  * candidates but never let a brand or category flood the results with items the
  * relevance rejected.
+ *
+ * Tail cap (M43): after the sort, every solid row is kept but only the first `tail_cap` of the
+ * other rows (semantic-only neighbours and weak keyword hits), so a broad query does not trail
+ * off into hundreds of loosely related products. 0 turns the cap off.
  */
 final class Ranker
 {
@@ -52,6 +56,7 @@ final class Ranker
     private float $categoryMatchBoost;
     private float $tagMatchBoost;
     private int $tagMatchMinTokens;
+    private int $tailCap;
 
     public function __construct(
         float $stockBoost = 0.1,
@@ -62,7 +67,8 @@ final class Ranker
         float $brandMatchBoost = 0.0,
         float $categoryMatchBoost = 0.0,
         float $tagMatchBoost = 0.0,
-        int $tagMatchMinTokens = 2
+        int $tagMatchMinTokens = 2,
+        int $tailCap = 0
     ) {
         $this->stockBoost = max(0.0, $stockBoost);
         $this->popularityBoost = max(0.0, $popularityBoost);
@@ -73,6 +79,7 @@ final class Ranker
         $this->categoryMatchBoost = max(0.0, $categoryMatchBoost);
         $this->tagMatchBoost = max(0.0, $tagMatchBoost);
         $this->tagMatchMinTokens = max(1, $tagMatchMinTokens);
+        $this->tailCap = max(0, $tailCap);
     }
 
     /** @return array<string, float|int> the knobs, for the debug breakdown */
@@ -88,6 +95,7 @@ final class Ranker
             'category_match_boost' => $this->categoryMatchBoost,
             'tag_match_boost'     => $this->tagMatchBoost,
             'tag_match_min_tokens' => $this->tagMatchMinTokens,
+            'tail_cap'            => $this->tailCap,
         ];
     }
 
@@ -183,6 +191,17 @@ final class Ranker
             static fn (array $a, array $b): int =>
                 ($b['score'] <=> $a['score']) ?: ($a['product_id'] <=> $b['product_id'])
         );
+
+        if ($this->tailCap > 0) {
+            $tail = 0;
+            $kept = [];
+            foreach ($rows as $row) {
+                if (isset($exempt[$row['product_id']]) || $tail++ < $this->tailCap) {
+                    $kept[] = $row;
+                }
+            }
+            $rows = $kept;
+        }
 
         return array_slice($rows, 0, max(1, $limit));
     }

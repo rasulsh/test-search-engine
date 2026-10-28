@@ -27,6 +27,18 @@ final class ConfigTest extends TestCase
         self::assertSame(dirname(__DIR__) . '/data', $defaults['paths']['data']);
     }
 
+    public function testM43Defaults(): void
+    {
+        $search = Config::defaults()['search'];
+
+        self::assertSame(1, $search['suggest_max_distance']);
+        self::assertSame(40, $search['tail_cap']);
+        self::assertSame(100, $search['semantic_top_k']);
+        self::assertSame(800, $search['latency_budget_ms']);
+        self::assertSame('', $search['synonym_blocklist']);
+        self::assertSame(600, Config::defaults()['vps']['timeout_ms']);
+    }
+
     public function testEveryDefaultHasItsSchemaType(): void
     {
         $flat = Config::flatten(Config::defaults());
@@ -56,7 +68,7 @@ final class ConfigTest extends TestCase
         self::assertSame(12.0, $config['search']['title_weight'], 'cast to float');
         self::assertSame(1.0, $config['search']['desc_weight']);
         self::assertSame('https://vps.example.com', $config['vps']['url']);
-        self::assertSame(300, $config['vps']['timeout_ms']);
+        self::assertSame(600, $config['vps']['timeout_ms']);
         self::assertSame(Config::defaults()['redis'], $config['redis']);
     }
 

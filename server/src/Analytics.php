@@ -36,6 +36,9 @@ final class Analytics
 
     /** Trend charts read at most this many daily buckets, so "all" never scans years of logs. */
     private const TREND_DAYS = 366;
+    // Fewer unique searches than this in a bucket and its rate is mostly noise.
+    private const LOW_CONFIDENCE_N = 30;
+    private const MOVING_AVERAGE_BUCKETS = 7;
 
     private PDO $pdo;
     private string $table;
@@ -46,7 +49,7 @@ final class Analytics
 
     /**
      * @param string|null $productsTable the catalog table topBrandsCategories() reads; null = no brand figures
-     * @param string $searchEventsTable the click / cart / order events the engagement figures read
+     * @param string $searchEventsTable the click / dym_click events the engagement figures read
      */
     public function __construct(
         PDO $pdo,
@@ -213,28 +216,60 @@ final class Analytics
     }
 
     /**
-     * Zero-result rate per bucket, oldest first (the trend line).
+     * Zero-result rate per bucket, oldest first (the trend line). Only unique searches count
+     * (not repeated submits, not paging requests): duplicates and bursts of the same gibberish
+     * query made the line jump. `n` is the bucket's sample size, `low_confidence` marks fewer
+     * than LOW_CONFIDENCE_N of them, `partial` the still-running last bucket, and `zero_rate_ma`
+     * the rate pooled over the last MOVING_AVERAGE_BUCKETS buckets (zero results / searches, so
+     * a busy bucket weighs more than a quiet one).
      *
-     * @return list<array{bucket: string, searches: int, zero_results: int, zero_rate: float}>
+     * @return list<array{bucket: string, n: int, zero_results: int, zero_rate: float, zero_rate_ma: float,
+     *     low_confidence: bool, partial: bool}>
      */
     public function zeroRateTrend(?string $since, string $bucket = 'day'): array
     {
         $format = self::bucketFormat($bucket);
-        [$where, $params] = $this->trendBound($since, $bucket);
+        $unique = array_filter([
+            $this->hasColumn('is_duplicate') ? 'is_duplicate = 0' : '',
+            $this->hasColumn('page') ? 'page = 1' : '',
+        ]);
+        [$where, $params] = $this->bound(
+            $since,
+            implode(' AND ', array_filter([
+                $bucket === 'day' ? 'ts >= NOW() - INTERVAL ' . self::TREND_DAYS . ' DAY' : '',
+                ...$unique,
+            ]))
+        );
         $stmt = $this->pdo->prepare(
-            "SELECT DATE_FORMAT(ts, '{$format}') AS bucket, COUNT(*) AS searches,"
+            "SELECT DATE_FORMAT(ts, '{$format}') AS bucket, COUNT(*) AS n,"
             . " COALESCE(SUM(result_count = 0), 0) AS zero FROM {$this->table}{$where}"
             . ' GROUP BY bucket ORDER BY bucket DESC LIMIT ' . self::TREND_DAYS
         );
         $stmt->execute($params);
+        $rows = array_reverse($stmt->fetchAll(PDO::FETCH_ASSOC));
+        if ($rows === []) {
+            return [];
+        }
+        $current = (string) $this->pdo->query("SELECT DATE_FORMAT(NOW(), '{$format}')")->fetchColumn();
 
-        return array_reverse(array_map(
-            static fn (array $r): array => [
-                'bucket' => (string) $r['bucket'], 'searches' => (int) $r['searches'],
-                'zero_results' => (int) $r['zero'], 'zero_rate' => self::pct((int) $r['zero'], (int) $r['searches']),
-            ],
-            $stmt->fetchAll(PDO::FETCH_ASSOC)
-        ));
+        $trend = [];
+        foreach ($rows as $i => $r) {
+            $n = (int) $r['n'];
+            $zero = (int) $r['zero'];
+            $first = max(0, $i - self::MOVING_AVERAGE_BUCKETS + 1);
+            $window = array_slice($rows, $first, $i - $first + 1);
+            $windowZero = (int) array_sum(array_column($window, 'zero'));
+            $windowN = (int) array_sum(array_column($window, 'n'));
+            $trend[] = [
+                'bucket' => (string) $r['bucket'], 'n' => $n, 'zero_results' => $zero,
+                'zero_rate' => self::pct($zero, $n),
+                'zero_rate_ma' => self::pct($windowZero, $windowN),
+                'low_confidence' => $n < self::LOW_CONFIDENCE_N,
+                'partial' => $i === count($rows) - 1 && (string) $r['bucket'] === $current,
+            ];
+        }
+
+        return $trend;
     }
 
     /**

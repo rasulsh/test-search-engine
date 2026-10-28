@@ -434,7 +434,7 @@ final class AdminAliasViews
     public static function synonyms(array $d): string
     {
         $t = AdminStrings::fa()['synonyms'];
-        $html = AdminViews::helpBox($t['help']);
+        $html = AdminViews::helpBox($t['help']) . '<p class="note">' . self::e($t['blocklist_note']) . '</p>';
         $term = trim((string) ($d['term'] ?? ''));
         $html .= self::searchForm('synonyms', 'term', $term, $t['term_label'], $t['term_go']);
 

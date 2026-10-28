@@ -7,15 +7,15 @@ namespace App;
 use PDO;
 
 /**
- * What shoppers do with a search's results (click, add to cart, order, a clicked
- * suggestion), keyed by the `search_uuid` /search returned. The id is a random
+ * What shoppers do with a search's results (a click, a clicked suggestion), keyed by the
+ * `search_uuid` /search returned. The id is a random
  * v4 UUID known only to the page that received the answer, so the endpoint needs
  * no secret; it still refuses unknown ids, odd actions and repeats of the same
  * event within a few seconds (a double click, a retried beacon).
  */
 final class Events
 {
-    public const ACTIONS = ['click', 'cart', 'order', 'dym_click'];
+    public const ACTIONS = ['click', 'dym_click'];
 
     private const UUID = '/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/';
     private const REPEAT_SECONDS = 5;
@@ -45,7 +45,7 @@ final class Events
             preg_match(self::UUID, $uuid) !== 1
             || !is_string($action) || !in_array($action, self::ACTIONS, true)
             || !self::isCount($productId, 4294967295)
-            // dym_click names no product; every other action names one.
+            // dym_click names no product; a click names one.
             || ($action !== 'dym_click' && (int) $productId < 1)
             || !self::isCount($position, 65535)
         ) {

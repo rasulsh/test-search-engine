@@ -90,6 +90,30 @@ final class SpellerTest extends TestCase
         self::assertSame('camera', (new Speller(['camera' => 5], 1))->suggest('camrea'));
     }
 
+    public function testADistanceTwoJumpToAnUnrelatedWordIsRejectedByDefault(): void
+    {
+        // Two edits from each other, but different words: a wrong "did you mean" is worse than none.
+        $speller = new Speller(['اسپیکر' => 9, 'میکروفن' => 9, 'headset' => 9]);
+
+        self::assertNull($speller->suggest('اسپکیرر'));   // one swap away would be fine; here two substitutions
+        self::assertNull($speller->suggest('headdat'));    // 2 edits on a 7-letter Latin word: below the long-word rule
+        self::assertNull((new Speller(['camera' => 5]))->suggest('cumara'));
+        // The same pair is still reachable when the owner raises the distance explicitly.
+        self::assertSame('camera', (new Speller(['camera' => 5], 2))->suggest('cumara'));
+    }
+
+    public function testALongLatinTypoStillTakesTwoEditsWhenTheFirstLetterHolds(): void
+    {
+        $speller = new Speller(['playstation' => 9, 'keyboard' => 9]);
+
+        self::assertSame('playstation', $speller->suggest('plastatian'));  // 2 edits
+        self::assertSame('keyboard', $speller->suggest('kaybourd'));       // 8 letters, 2 edits, same first letter
+        self::assertNull($speller->suggest('blaystatian'));                // first letter differs: no jump
+        self::assertNull($speller->suggest('keyboa'));                     // dropped letters: never a correction
+        // Persian never takes the long-word exception.
+        self::assertNull((new Speller(['کیبوردگیمینگ' => 9]))->suggest('کیبرداگیمینگ'));
+    }
+
     public function testASwappedPairBeatsAnEquallyDistantWord(): void
     {
         // Plain Levenshtein ties "battle" and "battery" at 2 and picks the frequent one.

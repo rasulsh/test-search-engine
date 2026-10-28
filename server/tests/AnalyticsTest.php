@@ -252,13 +252,14 @@ final class AnalyticsTest extends DatabaseTestCase
      */
     private function logAt(string $query, int $daysAgo, int $hour, array $row = []): void
     {
-        $row += ['normalized_q' => $query, 'result_count' => 3, 'latency_ms' => 10];
+        $row += ['normalized_q' => $query, 'result_count' => 3, 'latency_ms' => 10, 'is_duplicate' => 0, 'page' => 1];
         $this->pdo->prepare(
-            'INSERT INTO search_logs (ts, raw_q, normalized_q, result_count, latency_ms) VALUES'
-            . ' (DATE(NOW()) - INTERVAL :d DAY + INTERVAL :h HOUR, :raw, :norm, :res, :lat)'
+            'INSERT INTO search_logs (ts, raw_q, normalized_q, result_count, latency_ms, is_duplicate, page) VALUES'
+            . ' (DATE(NOW()) - INTERVAL :d DAY + INTERVAL :h HOUR, :raw, :norm, :res, :lat, :dup, :page)'
         )->execute([
             'd' => $daysAgo, 'h' => $hour, 'raw' => $query, 'norm' => $row['normalized_q'],
-            'res' => $row['result_count'], 'lat' => $row['latency_ms'],
+            'res' => $row['result_count'], 'lat' => $row['latency_ms'], 'dup' => $row['is_duplicate'],
+            'page' => $row['page'],
         ]);
     }
 
@@ -284,9 +285,55 @@ final class AnalyticsTest extends DatabaseTestCase
         $trend = $this->analytics->zeroRateTrend($this->analytics->since('7d'), 'day');
 
         self::assertSame([
-            ['bucket' => $this->day(3), 'searches' => 4, 'zero_results' => 1, 'zero_rate' => 25.0],
-            ['bucket' => $this->day(1), 'searches' => 1, 'zero_results' => 1, 'zero_rate' => 100.0],
+            ['bucket' => $this->day(3), 'n' => 4, 'zero_results' => 1, 'zero_rate' => 25.0, 'zero_rate_ma' => 25.0,
+                'low_confidence' => true, 'partial' => false],
+            ['bucket' => $this->day(1), 'n' => 1, 'zero_results' => 1, 'zero_rate' => 100.0, 'zero_rate_ma' => 40.0,
+                'low_confidence' => true, 'partial' => false],
         ], $trend);
+    }
+
+    public function testZeroRateTrendCountsOnlyUniqueFirstPageSearches(): void
+    {
+        $this->logAt('real', 2, 10);
+        $this->logAt('real again', 2, 11, ['result_count' => 0, 'is_duplicate' => 1]);
+        $this->logAt('real, page 2', 2, 12, ['result_count' => 0, 'page' => 2]);
+        $this->logAt('gibberish', 2, 13, ['result_count' => 0]);
+
+        $trend = $this->analytics->zeroRateTrend($this->analytics->since('7d'), 'day');
+
+        self::assertSame(2, $trend[0]['n'], 'a repeated submit and a paging request are not searches');
+        self::assertSame(50.0, $trend[0]['zero_rate']);
+    }
+
+    public function testZeroRateTrendMarksSmallAndRunningBucketsAndAveragesSevenBuckets(): void
+    {
+        // Days 9..3 ago: 40 searches each, 4 without results (10 %); day 2 ago: 40 with 40 without (100 %);
+        // today: 5 searches, still running.
+        foreach (range(9, 3) as $ago) {
+            foreach (range(1, 40) as $i) {
+                $this->logAt("q{$ago}-{$i}", $ago, 10, ['result_count' => $i <= 4 ? 0 : 3]);
+            }
+        }
+        foreach (range(1, 40) as $i) {
+            $this->logAt("spike-{$i}", 2, 10, ['result_count' => 0]);
+        }
+        foreach (range(1, 5) as $i) {
+            $this->logAt("today-{$i}", 0, 0);
+        }
+
+        $trend = $this->analytics->zeroRateTrend(null, 'day');
+        $byBucket = array_column($trend, null, 'bucket');
+
+        self::assertFalse($byBucket[$this->day(5)]['low_confidence']);
+        self::assertSame(40, $byBucket[$this->day(5)]['n']);
+        self::assertTrue($byBucket[$this->day(0)]['low_confidence'], 'under 30 searches');
+        self::assertTrue($byBucket[$this->day(0)]['partial']);
+        self::assertSame([false], array_unique(array_column(array_slice($trend, 0, -1), 'partial')));
+        // The spike alone is 100 %, but the window ending at day 2 pools days 8..2: (6 * 4 + 40) / (7 * 40).
+        self::assertSame(100.0, $byBucket[$this->day(2)]['zero_rate']);
+        self::assertSame(round(100 * (6 * 4 + 40) / (7 * 40), 1), $byBucket[$this->day(2)]['zero_rate_ma']);
+        // The oldest bucket's window is just itself.
+        self::assertSame(10.0, $byBucket[$this->day(9)]['zero_rate_ma']);
     }
 
     public function testTrendsRespectTheWindowAndTheDailyCap(): void
@@ -490,7 +537,7 @@ final class AnalyticsTest extends DatabaseTestCase
         ) {
             self::assertArrayHasKey($key, $report);
         }
-        self::assertSame(8, array_sum(array_column($report['zero_rate_trend'], 'searches')));
+        self::assertSame(8, array_sum(array_column($report['zero_rate_trend'], 'n')));
         self::assertSame(8, array_sum(array_column($report['hourly_heatmap'], 'searches')));
         self::assertSame(
             ['window', 'since', 'summary', 'cache', 'tier', 'latency', 'did_you_mean', 'top_queries',

@@ -157,7 +157,7 @@ final class InstallEndpointTest extends DatabaseTestCase
         self::assertStringNotContainsString('name="model_name"', $body);
         self::assertStringNotContainsString('name="model_dim"', $body);
         self::assertStringContainsString('name="semantic_min_score" value="0.4"', $body);
-        self::assertStringContainsString('name="vps_timeout_ms" value="300"', $body);
+        self::assertStringContainsString('name="vps_timeout_ms" value="600"', $body);
         // Build-time only (release.py --desc-index-chars): not a server setting.
         self::assertStringNotContainsString('desc_index_chars', $body);
         self::assertStringContainsString('type="password" id="db_password" name="db_password" value=""', $body);

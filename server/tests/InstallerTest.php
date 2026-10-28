@@ -219,7 +219,7 @@ final class InstallerTest extends TestCase
         // Keyword-only until a VPS is entered.
         self::assertSame('', $first['vps_url']);
         self::assertSame('', $first['vps_token']);
-        self::assertSame('300', $first['vps_timeout_ms']);
+        self::assertSame('600', $first['vps_timeout_ms']);
         self::assertSame('10.0', $first['title_weight']);
         self::assertSame('1.0', $first['desc_weight']);
         self::assertSame('6.0', $first['spec_weight']);

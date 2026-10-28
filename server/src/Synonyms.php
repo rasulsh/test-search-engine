@@ -14,7 +14,9 @@ namespace App;
  *    ("gta" = "grand theft auto" = "جی تی ای"), shipped with the bundle.
  *
  * A term may be a phrase. Terms are matched against the query as whole token
- * sequences, never as substrings, so "gta" never rewrites "gtax". Each match
+ * sequences, never as substrings, so "gta" never rewrites "gtax". The one exception (M43) is a
+ * letter-digit model name: "gta6" also meets an alias term written "gta 6", and "gta 6" one written
+ * "gta6", so the owner lists either spelling once. Each match
  * yields a variant query with that span replaced by another term of its group;
  * {@see Keyword} searches every variant and merges the hits. Terms are
  * normalized here too (idempotent on the pipeline's output), so an entry edited
@@ -24,11 +26,17 @@ namespace App;
  * that joins many labels is more likely noise (a shared junk model code) than a
  * real synonym, and would pull in unrelated products. Owner aliases are
  * explicit and never capped.
+ *
+ * A generated group holding a term of `search.synonym_blocklist` is dropped (M43): the way to remove a
+ * bad group the build derived, since a rebuild would bring back an edited synonyms.json. Owner aliases
+ * are never filtered.
  */
 final class Synonyms
 {
     public const SYNONYMS_FILE = 'synonyms.json';
     public const ALIASES_FILE = 'aliases.json';
+    /** A letter-digit model name ("gta6", "rtx4060"): the only shape that also meets its spaced spelling (M43). */
+    public const LETTER_DIGIT = '/^([a-z]{2,5})(\d{1,4})$/';
 
     /** @var array<string, self> keyed by the files' content hashes and the group cap */
     private static array $cache = [];
@@ -79,16 +87,24 @@ final class Synonyms
      *
      * The owner's aliases come from $aliasesPath (the server's storage file, M41); the default
      * stays the bundle's own `aliases.json` for an install that has not been seeded yet.
+     *
+     * @param string $blocklist `search.synonym_blocklist`: comma separated terms; a generated group
+     *        holding one of them (normalized) is dropped
      */
-    public static function fromDirectory(string $dataDir, int $maxSynonymGroupSize, ?string $aliasesPath = null): self
-    {
+    public static function fromDirectory(
+        string $dataDir,
+        int $maxSynonymGroupSize,
+        ?string $aliasesPath = null,
+        string $blocklist = ''
+    ): self {
         $synonymsPath = $dataDir . '/' . self::SYNONYMS_FILE;
         $aliasesPath ??= $dataDir . '/' . self::ALIASES_FILE;
         // Content hashes, not stat identities: the key is also part of the result-cache
         // key, so it must change exactly when an answer could, an edit that keeps the size
         // and lands in the same mtime tick included. Both files are small next to a query.
+        $blocked = self::blockedPhrases($blocklist);
         $key = (string) @sha1_file($synonymsPath) . '|' . (string) @sha1_file($aliasesPath)
-            . '|' . $maxSynonymGroupSize;
+            . '|' . $maxSynonymGroupSize . '|' . implode(',', $blocked);
         if (isset(self::$cache[$key])) {
             return self::$cache[$key];
         }
@@ -96,6 +112,7 @@ final class Synonyms
         $synonyms = array_values(array_filter(
             self::readGroups($synonymsPath) ?? [],
             static fn (array $group): bool => count($group) <= $maxSynonymGroupSize
+                && ($blocked === [] || array_intersect(self::phrases($group), $blocked) === [])
         ));
         self::$cache = []; // only the live bundle's entry is worth keeping
 
@@ -116,6 +133,34 @@ final class Synonyms
             $version,
             array_map('strval', array_keys($tokens))
         );
+    }
+
+    /**
+     * @return list<string> the blocklisted phrases, normalized, sorted and de-duplicated
+     */
+    public static function blockedPhrases(string $blocklist): array
+    {
+        $phrases = array_unique(self::phrases(explode(',', $blocklist)));
+        sort($phrases);
+
+        return $phrases;
+    }
+
+    /**
+     * @param list<string> $terms
+     * @return list<string> the terms as normalized token phrases, empty ones left out
+     */
+    private static function phrases(array $terms): array
+    {
+        $phrases = [];
+        foreach ($terms as $term) {
+            $phrase = implode(' ', Tokenizer::split(Normalizer::normalize((string) $term)));
+            if ($phrase !== '') {
+                $phrases[] = $phrase;
+            }
+        }
+
+        return $phrases;
     }
 
     /**
@@ -239,7 +284,14 @@ final class Synonyms
                 }
             }
             if ($length === 0) {
-                $start++;
+                $spelling = $this->otherSpelling($tokens, $start);
+                if ($spelling === null) {
+                    $start++;
+                    continue;
+                }
+                [$length, $alternatives] = $spelling;
+                $spans[] = [$start, $length, $alternatives];
+                $start += $length;
                 continue;
             }
             $spans[] = [$start, $length, $this->alternatives[$phrase]];
@@ -277,6 +329,36 @@ final class Synonyms
         }
 
         return $variants;
+    }
+
+    /**
+     * The alias group a letter-digit name belongs to under its other spelling: the token "gta6" when
+     * the groups list "gta 6", or the tokens "gta" "6" when they list "gta6". The span's replacements
+     * are that spelling and the group's other terms.
+     *
+     * @param list<string> $tokens
+     * @return array{0: int, 1: list<list<string>>}|null [span length, replacements]
+     */
+    private function otherSpelling(array $tokens, int $start): ?array
+    {
+        if (preg_match(self::LETTER_DIGIT, $tokens[$start], $m) === 1) {
+            $other = $m[1] . ' ' . $m[2];
+            $length = 1;
+        } elseif (
+            isset($tokens[$start + 1])
+            && preg_match('/^[a-z]{2,5}$/', $tokens[$start]) === 1
+            && preg_match('/^\d{1,4}$/', $tokens[$start + 1]) === 1
+        ) {
+            $other = $tokens[$start] . $tokens[$start + 1];
+            $length = 2;
+        } else {
+            return null;
+        }
+        if (!isset($this->alternatives[$other])) {
+            return null;
+        }
+
+        return [$length, array_merge([explode(' ', $other)], $this->alternatives[$other])];
     }
 
     /**

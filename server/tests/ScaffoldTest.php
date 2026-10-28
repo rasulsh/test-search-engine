@@ -108,13 +108,13 @@ final class ScaffoldTest extends TestCase
         $this->assertSame(0.45, $search['min_relevance']);
         $this->assertSame(3, $search['suggest_min_results']);
         $this->assertSame(2, $search['suggest_min_frequency']);
-        $this->assertSame(2, $search['suggest_max_distance']);
+        $this->assertSame(1, $search['suggest_max_distance']);
     }
 
     public function testVpsIsConfigDrivenAndOffByDefault(): void
     {
         $this->assertSame(
-            ['url' => '', 'token' => '', 'timeout_ms' => 300, 'reload_timeout_ms' => 60000],
+            ['url' => '', 'token' => '', 'timeout_ms' => 600, 'reload_timeout_ms' => 60000],
             $this->loadExampleConfig()['vps']
         );
 
@@ -128,7 +128,7 @@ final class ScaffoldTest extends TestCase
         }
 
         $this->assertSame(
-            ['url' => 'https://vps.example.com:8600', 'token' => 'secret-from-env-0123', 'timeout_ms' => 300,
+            ['url' => 'https://vps.example.com:8600', 'token' => 'secret-from-env-0123', 'timeout_ms' => 600,
                 'reload_timeout_ms' => 60000],
             $vps
         );

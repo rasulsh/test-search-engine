@@ -10,6 +10,34 @@ holds overrides). A **renamed** key keeps working for two releases (its value is
 config doctor / status page warn with the new name. A **removed** key is ignored; the doctor says why and that the
 line can be deleted. `php server/tools/config-check.php` lists all of it.
 
+## M43: off-topic hygiene, tracking and ranking tweaks
+
+- **Added**:
+  - `search.tail_cap` = `40`: in a hybrid answer every solid keyword row is kept but only this many of the other rows
+    (semantic-only neighbours, weak keyword hits) follow, before the `limit` slice. `0` = no cap.
+  - `search.synonym_blocklist` = `''` (comma-separated normalized terms, like `search.suggest_blocklist`): a
+    **build-derived** synonym group holding one is dropped at runtime; owner aliases are never filtered. It is part of
+    the result-cache version, so changing it invalidates cached answers on its own.
+- **Changed defaults** (an override in `config.php` still wins; delete it to take the new value):
+  - `search.suggest_max_distance` `2` -> `1`. Two edits remain possible only for a Latin token of 8+ characters that keeps
+    its first letter.
+  - `search.semantic_top_k` `300` -> `100`.
+  - `search.latency_budget_ms` `200` -> `800`. A documented target only: the runtime never enforces it, and the CI latency
+    guards use their own fixed 200 ms bar.
+  - `vps.timeout_ms` `300` -> `600` (room for the keyword stage and the database inside the 800 ms target).
+- **Removed / renamed**: none.
+- **Behaviour** (no key):
+  - `/search` sends the VPS the **normalized** query, not the raw text (same results for spellings that normalize alike).
+  - Cart and order tracking are gone: `POST /events` accepts only `click` and `dym_click` (cart / order -> `400`), the
+    analytics JSON loses `engagement.cart_rate` and `engagement.order_rate`, and the zero-rate trend now counts only unique
+    first-page searches and carries `n` (replaces `searches`), `zero_rate_ma`, `low_confidence` and `partial`. No migration:
+    old `cart` / `order` rows may stay in `search_events`, every query filters on `action IN ('click','dym_click')`.
+  - Letter + digit names (`gta6` / `gta 6`, `fc27`, `rtx4060`) meet their other spelling; no normalization change.
+  - `search_logs` stores a masked form of queries that look like personal data (7+ digits in a row become `#`; a query over
+    80 characters becomes `[long query]`); flagged probes stay verbatim.
+- **After deploying**: clear the result cache (admin panel, operations page) and check the effective configuration on the
+  status page.
+
 ## M42: no vectors on cPanel, panel polish
 
 - **Added**: `logs.scan_limit` = 200000. The logs page's keyword search and its sorts on columns without an index read at most this

@@ -134,7 +134,7 @@ the form. No config file editing, no separate model upload, no SSH needed.
      them, `with_details` results carry absolute product links and images;
      leave them empty to keep the exported values as they are;
    - the VPS URL and token (the VPS's `VPS_TOKEN`) and its timeout in ms
-     (default 300): leave the URL empty for keyword-only search until the
+     (default 600): leave the URL empty for keyword-only search until the
      VPS is up;
    - the tuning knobs (`semantic_min_score`, title / description / spec
      weights, `phrase_bonus`), pre-filled with the current defaults. The
@@ -274,7 +274,7 @@ the matching `SEARCH_VPS_*` environment variables):
     'vps' => [
         'url'        => 'https://vsearch.example.com',
         'token'      => '<the VPS_TOKEN from /etc/search-vectors.env>',
-        'timeout_ms' => 300,
+        'timeout_ms' => 600,
     ],
 ```
 
@@ -437,12 +437,11 @@ the normalization rules (version 4), the code, the log schema and the storefront
    [INTEGRATION.md](../INTEGRATION.md#storefront-reference) ("Result tracking"): the search
    controller sends `session_id` (hashed) and renders the returned `search_uuid`; the results
    template gets the click listener and the `data-search-*` link attributes; the product
-   controller, the add-to-cart handler and `checkout/success` report `cart` / `order`. The
+   controller reports nothing more (cart and order tracking were dropped in M43). The
    storefront works unchanged without any of it (no tracking, the engagement figures stay empty).
-7. **Aliases.** `server/data/aliases.json` is replaced by the bundle's on every reload, so an
-   alias you edit **on the server** is lost at the next catalog update. Keep `pipeline/aliases.json`
-   as the single source (this release seeds the zero-result fixes there) and use the server
-   file only for an urgent, temporary edit.
+7. **Aliases.** Since M41 the live list is `server/storage/aliases.json`, edited in the admin panel
+   (`?p=aliases`); it survives every reload. `pipeline/aliases.json` only seeds a new install
+   ([ALIASES.md](ALIASES.md)).
 8. **Check.** `curl -s -X POST .../search -d '{"q":"مافیا"}'` returns the same ids as `mafia`;
    `config-check.php` is clean; the panel's analytics JSON (`admin.php?p=analytics&format=json`, logged in) shows `"log_v2":{"available":true,...}`.
 
@@ -718,7 +717,7 @@ M0–M5. Verify each item on the production host before wide rollout.
   and joined / separated cases) and the `debug` breakdown. Confirm after the
   rebuild + reload that `normalized_collapsed` is populated, and measure latency
   of a zero-hit multi-word query that has alias variants of very common words
-  (the one soft-AND shape that exceeded the 200 ms budget in the CI-like guard).
+  (the one soft-AND shape that exceeded the 200 ms CI guard bar).
 - [ ] Keyboard-layout recovery covers the common US→Persian keys only (M2), and
   synonyms and spelling are untuned. Review `search_logs` zero-result queries
   after launch; name variants found there go into `pipeline/aliases.json`.
@@ -730,7 +729,7 @@ M0–M5. Verify each item on the production host before wide rollout.
 **Blocking: host capacity and latency**
 - [ ] **Real latency on cPanel** for keyword-only and hybrid requests, measured
   with `latency_ms` in `search_logs` and end-to-end from the storefront, against
-  the 200 ms budget. Hybrid now adds one cPanel→VPS round trip (network +
+  the 800 ms target (`search.latency_budget_ms`; documented, not enforced by the runtime). Hybrid now adds one cPanel→VPS round trip (network +
   bge-m3 query embedding, ~50–100 ms end to end on a dev VM, never measured
   between the real hosts). Pick `vps.timeout_ms` from the measured p95:
   too low turns slow VPS answers into keyword-only results (watch for

@@ -215,7 +215,8 @@ final class SearchController
                 (float) $search['brand_match_boost'],
                 (float) $search['category_match_boost'],
                 (float) $search['tag_match_boost'],
-                (int) $search['tag_match_min_tokens']
+                (int) $search['tag_match_min_tokens'],
+                (int) $search['tail_cap']
             ),
             $signalsProvider,
             (int) $search['semantic_top_k'],
@@ -243,7 +244,8 @@ final class SearchController
         return Synonyms::fromDirectory(
             $config['paths']['data'],
             (int) $config['search']['synonyms_max_group_size'],
-            AliasStore::fromConfig($config)->runtimePath()
+            AliasStore::fromConfig($config)->runtimePath(),
+            (string) $config['search']['synonym_blocklist']
         );
     }
 
@@ -393,7 +395,7 @@ final class SearchController
         // Tier 2 is additive: only reshuffle when the VPS answered. Otherwise the
         // keyword ordering above stands.
         $stage = microtime(true);
-        $semantic = $this->semantic($query, $normalized);
+        $semantic = $this->semantic($normalized);
         $timing['vector'] = $semanticOn && $normalized !== '' ? self::elapsedMs($stage) : null;
         if ($semantic !== null) {
             [$productIds, $cosineScores, $explanation] = $this->hybrid(
@@ -599,12 +601,13 @@ final class SearchController
      *
      * @return list<array{product_id: int, score: float}>|null
      */
-    private function semantic(string $raw, string $normalized): ?array
+    private function semantic(string $normalized): ?array
     {
+        // The normalized text, not the raw one: spellings that normalize alike must embed (and cache) alike.
         if (!$this->semanticEnabled() || $normalized === '') {
             return null;
         }
-        $semantic = $this->vps->search($raw, $this->semanticTopK, $this->semanticMinScore);
+        $semantic = $this->vps->search($normalized, $this->semanticTopK, $this->semanticMinScore);
         if ($semantic === null) {
             error_log('search: semantic tier unavailable (' . $this->vps->failure() . '); served keyword-only results');
         }

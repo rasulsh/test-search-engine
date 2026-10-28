@@ -219,6 +219,66 @@ final class SynonymsTest extends TestCase
         self::assertCount(5, $synonyms->variants(['x1'], 10));
     }
 
+    public function testABlocklistedTermDropsABuildDerivedGroupButNeverAnOwnerGroup(): void
+    {
+        $dir = $this->dataDir(
+            '[["laptop", "لپ تاپ"], ["mouse", "موس", "ماوس"]]',
+            '[["mouse", "موش کامپیوتر"]]'
+        );
+
+        $plain = Synonyms::fromDirectory($dir, 4);
+        $blocked = Synonyms::fromDirectory($dir, 4, null, ' Mouse , ,  ');
+
+        self::assertSame([['laptop'], ['لپ', 'تاپ']], $blocked->variants(['laptop'], 10), 'other groups are kept');
+        // The generated mouse group is gone; the owner's group with the same term still expands.
+        self::assertSame([['mouse'], ['موش', 'کامپیوتر']], $blocked->variants(['mouse'], 10));
+        self::assertSame([], array_values(array_filter(
+            $blocked->variants(['موس'], 10),
+            static fn (array $v): bool => $v !== ['موس']
+        )));
+        self::assertGreaterThan(2, count($plain->variants(['mouse'], 10)));
+    }
+
+    public function testTheBlocklistIsPartOfTheVersionSoTheResultCacheKeyChanges(): void
+    {
+        $dir = $this->dataDir('[["mouse", "موس"]]', '[]');
+
+        $none = Synonyms::fromDirectory($dir, 4)->version();
+        $a = Synonyms::fromDirectory($dir, 4, null, 'mouse')->version();
+        $b = Synonyms::fromDirectory($dir, 4, null, 'mouse,keyboard')->version();
+
+        self::assertNotSame($none, $a);
+        self::assertNotSame($a, $b);
+        // Order, case and blanks do not matter.
+        self::assertSame($b, Synonyms::fromDirectory($dir, 4, null, ' Keyboard,, mouse ')->version());
+    }
+
+    public function testALetterDigitNameMeetsItsOtherSpellingInAnAliasGroup(): void
+    {
+        $spaced = new Synonyms([['gta 6', 'جی تی ای 6']]);
+        $joined = new Synonyms([['fc27', 'اف سی 27']]);
+
+        // "gta6" joined in the query, "gta 6" in the group, and the reverse.
+        self::assertSame([['gta6'], ['gta', '6'], ['جی', 'تی', 'ای', '6']], $spaced->variants(['gta6'], 10));
+        self::assertSame([['fc', '27'], ['fc27'], ['اف', 'سی', '27']], $joined->variants(['fc', '27'], 10));
+        // Inside a longer query only the name is swapped.
+        self::assertContains(['buy', 'gta', '6'], $spaced->variants(['buy', 'gta6'], 10));
+    }
+
+    public function testLetterDigitVariantsNeedTheShapeAndAnAliasThatHoldsTheOtherSpelling(): void
+    {
+        $synonyms = new Synonyms([['rtx 4060', 'آر تی ایکس 4060'], ['ps 5', 'پلی استیشن 5']]);
+
+        self::assertSame(
+            [['rtx4060'], ['rtx', '4060'], ['ار', 'تی', 'ایکس', '4060']],
+            $synonyms->variants(['rtx4060'], 10)
+        );
+        self::assertSame([['gta6']], $synonyms->variants(['gta6'], 10), 'no alias holds "gta 6"');
+        self::assertSame([['abcdefg1']], $synonyms->variants(['abcdefg1'], 10), 'over five letters is not the shape');
+        self::assertSame([['a1']], $synonyms->variants(['a1'], 10), 'one letter is not the shape');
+        self::assertSame([['rtx', '12345']], $synonyms->variants(['rtx', '12345'], 10), 'five digits is not the shape');
+    }
+
     public function testMissingOrMalformedFilesExpandNothing(): void
     {
         self::assertSame([['gta']], Synonyms::fromDirectory($this->dataDir(null, null), 4)->variants(['gta'], 4));

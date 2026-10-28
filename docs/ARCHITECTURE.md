@@ -29,7 +29,7 @@ keyword search, one bounded HTTP call to the VPS, and the merge.
 the cPanel-to-VPS call is framed around a short timeout. The final target is a
 self-hosted VM on the owner's own ESXi server on the LAN, well-resourced, so
 that call is expected to be fast and reliable there. The safety net stays
-regardless: `vps.timeout_ms` (default 300) bounds the call and any
+regardless: `vps.timeout_ms` (default 600) bounds the call and any
 failure serves keyword-only results.
 
 ## Repository layout
@@ -78,7 +78,7 @@ cross-language recall; ~8 ms for 20k × 1024 there) and returns the neighbours
 at or above the floor, best first. cPanel re-applies the floor, drops ids the
 `products` table does not hold, and fuses the rest with the keyword hits
 (`server/src/Ranker.php`). The whole call is bounded by
-`vps.timeout_ms` (default 300, connect included). Unreachable, timed
+`vps.timeout_ms` (default 600, connect included). Unreachable, timed
 out, non-`200` or malformed: the request is answered keyword-only, logs
 `search: semantic tier unavailable (<reason>); served keyword-only results` to
 the PHP error log, and writes `had_vector = 0` in `search_logs`. Nothing about
@@ -190,3 +190,4 @@ See `CLAUDE.md` §9–§11 for the full workflow and coding standards.
 - [ ] **M37** — Search fixes round: normalization version 4 (ZWNJ is a space, bidi marks stripped, `v` / `x` never numerals, `ii`-`ix` only after a word); `QueryPrep` (entity decode, query cap, SQL-probe refusal); the result-cache key carries the alias / synonym content hash and empty answers live `redis.ttl_zero`; "did you mean" quality (transposition first, blocklist, first-letter and dropped-letter rules, title / brand / tag + alias dictionary, owner spacing aliases first); the keyboard-layout fix only for plain words with a title match; `search_logs` v2 (`db/migrations/2026-10-24_search_logs_v2.sql`: uuid, session, source, stage latencies, alias / suggestion / cap / probe / repeat flags) and `search_events` (`POST /events`); `AnalyticsInsights` (unique, engagement, cold latency, tier timeline, alias candidates, silent failures, demand gap, trending, `compare=1`) beside the older analytics keys.
 - [ ] **M32** — `docs/RUNTIME-FLOW.md`: the actual `POST /search` pipeline (cache, keyword, did-you-mean, VPS, hybrid ranking, log) with the component map and degradation ladder. Docs only; keep it in sync with `SearchController::search()`.
 - [ ] **M42** — Drop the cPanel vectors + panel polish: the bundle loses `vectors.bin` / `vectors.idx` (`release.zip` about a sixth of its size); `/reload` checks the normalization version and `meta.count` against the staging rows (a pre-M42 bundle keeps its old checks); `model.name` / `revision` / `dim` leave `App\Config` (listed in `Config::deprecated()`); the model and dimension rows leave the status, ops and install pages. Panel: content fills the window up to about 1600 px, consistent tables, a centered login box, aliases paginated server-side with a search across all groups, and the logs page with whitelisted server-side sorting, rows per page and a keyword search, all in the query string.
+- [ ] **M43** — Off-topic hygiene and tweaks: the VPS gets the normalized query; cart / order tracking removed; "did you mean" distance 1 (2 only for long Latin tokens); `search.tail_cap` and `semantic_top_k` 100; latency target 800 ms (`vps.timeout_ms` 600); stable zero-rate trend (unique searches, moving average, low-confidence / partial marks); `search.synonym_blocklist`; letter + digit variants; masked personal-data queries in `search_logs`. Config changes in [CHANGELOG.md](CHANGELOG.md).

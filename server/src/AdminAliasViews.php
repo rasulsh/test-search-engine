@@ -514,6 +514,29 @@ final class AdminAliasViews
     }
 
     /**
+     * The brands / platforms the query named (M44) and, when no candidate carries the brand, the brand asked for
+     * and not found; nothing when the query named none.
+     *
+     * @param array<string, mixed>|null $entities the debug `entities` block
+     * @param array<string, mixed> $t
+     */
+    private static function entityRows(?array $entities, array $t): string
+    {
+        if ($entities === null) {
+            return '';
+        }
+        $named = array_merge($entities['brands'] ?? [], $entities['platforms'] ?? []);
+        $html = '<dt>' . self::e($t['entities']) . '</dt><dd><bdi class="ltr">'
+            . self::e(implode(AdminStrings::fa()['ui']['list_sep'], $named)) . '</bdi></dd>';
+        if (($entities['brand_unmatched'] ?? []) !== []) {
+            $html .= '<dt>' . self::e($t['brand_unmatched']) . '</dt><dd><bdi class="ltr">'
+                . self::e(implode(AdminStrings::fa()['ui']['list_sep'], $entities['brand_unmatched'])) . '</bdi></dd>';
+        }
+
+        return $html;
+    }
+
+    /**
      * @param array<string, mixed> $d q, result (search response + debug) | null, titles (id => title),
      *        error (bool)
      */
@@ -541,7 +564,7 @@ final class AdminAliasViews
             . self::e($r['query']['normalized']) . '</bdi></dd><dt>' . self::e($t['tier']) . '</dt><dd>'
             . self::e($t['tiers'][$tier] ?? $tier) . '</dd><dt>' . self::e($t['did_you_mean']) . '</dt><dd>'
             . $suggestion . '</dd><dt>' . self::e($t['count']) . '</dt><dd>' . AdminViews::num($r['count'])
-            . '</dd></dl>';
+            . '</dd>' . self::entityRows($r['debug']['entities'] ?? null, $t) . '</dl>';
 
         $rows = '';
         foreach (array_slice($r['debug']['results'] ?? [], 0, 10) as $row) {

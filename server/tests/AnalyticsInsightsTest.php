@@ -261,9 +261,55 @@ final class AnalyticsInsightsTest extends DatabaseTestCase
 
         self::assertSame(['gtavi'], array_column($silent, 'query'));
         self::assertSame(
-            ['query' => 'gtavi', 'searches' => 6, 'clicks' => 0, 'ctr' => 0.0, 'avg_results' => 34.0],
-            $silent[0]
+            [
+                'query' => 'gtavi', 'searches' => 6, 'clicks' => 0, 'ctr' => 0.0, 'avg_results' => 34.0,
+                'top_id' => null, 'top_title' => '',
+            ],
+            $silent[0],
+            'no product table row for the logged top id: no title'
         );
+    }
+
+    public function testSilentFailuresShowTheFirstResultOfTheLatestSearch(): void
+    {
+        $this->pdo->exec("INSERT INTO products (product_id, title, description, normalized_title, normalized_desc)
+            VALUES (501, 'Atari Flashback 11 Console', '', 'atari flashback 11 console', ''),
+                   (502, 'Old answer', '', 'old answer', '')");
+        // The older answer led with 502; the latest one with 501. Both have results, none is clicked.
+        $this->log('old', 'gtavi', 5, ['session_id' => 'o', 'top_ids' => '502,9', 'minutes_ago' => 120]);
+        for ($i = 0; $i < 5; $i++) {
+            $this->log("g{$i}", 'gtavi', 5, ['session_id' => "g{$i}", 'top_ids' => '501,502,9']);
+        }
+        $this->log('p', 'ps5', 3, ['session_id' => 'p']);
+        $this->event('p', 'click', 1);
+
+        $silent = $this->report('24h')['silent_failures'];
+
+        self::assertSame('gtavi', $silent[0]['query']);
+        self::assertSame(501, $silent[0]['top_id']);
+        self::assertSame('Atari Flashback 11 Console', $silent[0]['top_title']);
+    }
+
+    public function testUnmatchedBrandsAreCountedByBrandWithAnExample(): void
+    {
+        $this->log('a', 'مانیتور شیامی', 4, ['session_id' => 'a', 'brand_unmatched' => 'xiaomi']);
+        $this->log('b', 'مانیتور شیامی', 4, ['session_id' => 'b', 'brand_unmatched' => 'xiaomi']);
+        $this->log('c', 'پرینتر کنون', 2, ['session_id' => 'c', 'brand_unmatched' => 'canon']);
+        $this->log('d', 'مانیتور ایسوس', 4, ['session_id' => 'd']);
+        $this->log('dup', 'مانیتور شیامی', 4, ['session_id' => 'a', 'brand_unmatched' => 'xiaomi', 'is_duplicate' => 1]);
+
+        $rows = $this->report('24h')['brand_unmatched'];
+
+        self::assertSame(['xiaomi', 'canon'], array_column($rows, 'brand'));
+        self::assertSame(2, $rows[0]['searches']);
+        self::assertSame('مانیتور شیامی', $rows[0]['example']);
+    }
+
+    public function testNoUnmatchedBrandColumnMeansAnEmptyList(): void
+    {
+        $this->pdo->exec('ALTER TABLE search_logs DROP COLUMN brand_unmatched');
+
+        self::assertSame([], $this->report('24h')['brand_unmatched']);
     }
 
     public function testTrendingAndCompareAgainstThePreviousWindow(): void

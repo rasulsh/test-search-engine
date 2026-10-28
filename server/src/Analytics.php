@@ -60,7 +60,7 @@ final class Analytics
         $this->pdo = $pdo;
         $this->table = Identifier::quote($searchLogsTable);
         $this->productsTable = $productsTable === null ? null : Identifier::quote($productsTable);
-        $this->insights = new AnalyticsInsights($pdo, $searchLogsTable, $searchEventsTable);
+        $this->insights = new AnalyticsInsights($pdo, $searchLogsTable, $searchEventsTable, $productsTable);
     }
 
     /** The window a request names, or the default (7d) for anything unknown. */

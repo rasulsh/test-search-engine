@@ -1,0 +1,8 @@
+# SAMPLE ONLY. The product ids below are FAKE (990001...), they exist in no catalog. Copy this file, replace the rows with
+# 150-200 real queries and the product ids that are right for them (docs/EVALUATION.md says how to pick them from the logs).
+# Columns: query, relevant_ids (product ids separated by ";"; leave empty when NOTHING should come back), note (free text).
+query,relevant_ids,note
+sample ps5 console,990001;990002,fake ids: a head query with two right answers
+sample gta 5,990003,fake id: a game with a model number
+sample misspelled brand monitor,990004;990005,fake ids: the shopper misspelled the brand
+sample clothes shirt,,fake: off-topic; nothing should come back

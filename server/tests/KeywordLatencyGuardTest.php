@@ -9,6 +9,7 @@ use App\Keyword;
 use App\ProductLoader;
 use App\SearchController;
 use App\Synonyms;
+use App\TokenStats;
 use App\VpsClient;
 use PHPUnit\Framework\Attributes\DataProvider;
 use ReflectionMethod;
@@ -20,8 +21,8 @@ use ReflectionMethod;
  * grows with how many rows a query matches. Seeds 20000 products with ~2 KB
  * descriptions and times a broad FULLTEXT query (10% of the catalog mentions it
  * in the description, 4% in the title). The median must stay under the
- * configured budget. The LIKE fallback is not guarded here: it scans every
- * description and is dominated by that scan, not by this score. CI hardware
+ * configured budget. (The LIKE fallback this once mentioned is gone since M44: short tokens are
+ * whole words of the title or tags, timed in testShortTokenQueriesStayWithinBudget.) CI hardware
  * differs from cPanel, so this is a regression guard; real-host latency is a
  * production-validation item.
  *
@@ -33,7 +34,7 @@ use ReflectionMethod;
  * REGEXPs run on every matching row without a title hit. Two more shapes add
  * synonym / alias expansion (M15) at the configured alias_max_variants: every
  * variant is one more keyword search, and variants holding a short token (a
- * digit, "ps 5") take the LIKE path that scans every row. Rows are inserted
+ * digit, "ps 5") take the whole-word title scan of the covering index. Rows are inserted
  * into the indexed table, as products.load.sql does, so the FULLTEXT index is
  * built incrementally like on the host.
  *
@@ -95,7 +96,7 @@ final class KeywordLatencyGuardTest extends DatabaseTestCase
             'capped + specs + fulltext aliases' => [
                 self::DESC_INDEX_CHARS, true, ['دسته بازی', 'گیم پد', 'کنترلر بازی', 'جوی استیک', 'gamepad', 'joypad'],
             ],
-            'capped + specs + LIKE aliases' => [
+            'capped + specs + short-token aliases' => [
                 self::DESC_INDEX_CHARS, true, ['دسته بازی', 'دسته 5', 'ps 5', 'بازی 4', 'gamepad 5', 'joystick 5'],
             ],
         ];
@@ -183,6 +184,64 @@ final class KeywordLatencyGuardTest extends DatabaseTestCase
             (int) $budgetMs
         ));
         self::assertLessThan($budgetMs, $median, 'strict + any-terms fallback exceeded the latency budget');
+    }
+
+    /** @return array<string, array{string, bool, bool}> query, any-terms (partial) mode, generic statistics on */
+    public static function shortTokenQueries(): array
+    {
+        return [
+            // FULLTEXT-sized words plus a short number: the engine narrows, the number is a whole word of the title.
+            'words + short number'         => ['دسته بازی 25', false, false],
+            'words + short number, partial' => ['دسته بازی ناموجود 25', true, false],
+            // Only short tokens: a whole-word scan of the covering title index.
+            'short tokens only'            => ['25', false, false],
+            // Generic words are optional; the weights add arithmetic to every row scored.
+            'generic words, weighted'      => ['دسته بازی', false, true],
+        ];
+    }
+
+    #[DataProvider('shortTokenQueries')]
+    public function testShortTokenQueriesStayWithinBudget(string $query, bool $partial, bool $withStats): void
+    {
+        $budgetMs = self::BUDGET_MS;
+        $this->seedCatalog(self::DESC_INDEX_CHARS, true);
+        $stats = $withStats ? new TokenStats(self::PRODUCTS, ['بازی' => 5000, 'دسته' => 900], 0.15, []) : null;
+        $keyword = new Keyword($this->pdo, 'products', 3, 20, softAndMinResults: 0, stats: $stats);
+
+        // The partial (any-terms) search is the fallback of a strict one that found nothing, so a request pays
+        // both: time them together, as the M16 guard does. Warm the buffer pool first: right after the bulk
+        // insert the first runs of a query that reads the structured columns of thousands of rows still fetch
+        // pages from disk (293 ms, then 170-200 ms, then a steady 95 ms here).
+        $calm = 0;
+        for ($i = 0; $i < 60 && $calm < 3; $i++) {
+            $start = hrtime(true);
+            $keyword->search($query);
+            $keyword->search($query, null, !$partial);
+            $calm = (hrtime(true) - $start) / 1e6 < $budgetMs / 2 ? $calm + 1 : 0;
+        }
+        $times = [];
+        for ($i = 0; $i < self::RUNS; $i++) {
+            $start = hrtime(true);
+            $keyword->search($query);
+            $hits = $keyword->search($query, null, !$partial);
+            $times[] = (hrtime(true) - $start) / 1e6;
+        }
+        sort($times);
+        $median = $times[intdiv(self::RUNS, 2)];
+
+        fwrite(STDERR, sprintf(
+            "\n[keyword guard] %d products, short-token query '%s'%s%s: median %.1f ms (max %.1f, budget %d ms), %d hits\n",
+            self::PRODUCTS,
+            $query,
+            $partial ? ' (partial)' : '',
+            $withStats ? ' (generic weights)' : '',
+            $median,
+            max($times),
+            (int) $budgetMs,
+            count($hits)
+        ));
+        self::assertNotSame([], $hits);
+        self::assertLessThan($budgetMs, $median, 'short-token keyword query exceeded the latency budget');
     }
 
     /** @return array<string, array{list<list<string>>, bool}> alias groups, whether they are broad words */

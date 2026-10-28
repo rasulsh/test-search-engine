@@ -662,9 +662,16 @@ final class Keyword
                 // 42S22 (unknown column): the live table predates M13 (specs) or
                 // M21 (tags, brand, category), e.g. between code upload and
                 // reload, or after a rollback. Search it without those columns.
-                if ($e->getCode() !== '42S22' || !$this->dropNewestFields()) {
-                    throw $e;
+                if ($e->getCode() === '42S22' && $this->dropNewestFields()) {
+                    continue;
                 }
+                // 1176: no covering title index (a table from before M15): the short-token candidate
+                // source needs it; search without it from now on.
+                if (($e->errorInfo[1] ?? null) === 1176 && $this->titleIndex) {
+                    $this->titleIndex = false;
+                    continue;
+                }
+                throw $e;
             }
         }
     }
@@ -833,6 +840,7 @@ final class Keyword
         $where = [$match];
         $whereParams = [$expr];
         $flags = null;
+        $candidates = null;
         if ($allTerms) {
             foreach ($short as $i) {
                 [$sql, $params] = $wholeWord($i);
@@ -841,25 +849,54 @@ final class Keyword
             }
             $clause = implode(' AND ', $where);
         } else {
-            $flagged = [];
-            foreach ($short as $i) {
-                [$sql, $params] = $wholeWord($i);
-                $where[] = $sql;
-                $whereParams = array_merge($whereParams, $params);
-                $flagged[$i] = [$sql, $params];
+            $clause = $match;
+            // The engine's match OR a regex over every row costs a scan that evaluates the engine per row
+            // (300+ ms on 20000 products): the rows holding a short token are found on the title index
+            // instead and joined to the engine's, so a short token adds a cheap candidate source.
+            if ($short !== [] && $this->titleIndex) {
+                $titleMatches = [];
+                $candidateParams = [$expr];
+                foreach ($short as $i) {
+                    $titleMatches[] = '(normalized_title LIKE ? AND normalized_title REGEXP ?)';
+                    array_push(
+                        $candidateParams,
+                        '%' . $this->escapeLike($tokens[$i]) . '%',
+                        self::WORD_START . $tokens[$i] . self::WORD_END
+                    );
+                }
+                $candidates = [
+                    "SELECT product_id FROM {$this->table} WHERE {$match} UNION SELECT product_id FROM {$this->table}"
+                    . ' FORCE INDEX (' . self::TITLE_INDEX . ') WHERE ' . implode(' OR ', $titleMatches),
+                    $candidateParams,
+                    '',
+                    [],
+                ];
             }
-            $clause = implode(' OR ', $where);
             // Without the engine's per-token counts a structured search counts the tokens held from
             // the field levels instead (see scoredSearch): one more full FULLTEXT search per token,
             // on every variant, otherwise.
             if (!$structured) {
+                $flags = [];
                 foreach ($profile['required'] as $i) {
+                    if ($profile['short'][$i]) {
+                        $flags[$i] = $wholeWord($i);
+                        continue;
+                    }
                     // A prefix of FULLTEXT-minimum length is noise in a partial match ("gta" would
                     // hold "gtax6000"): such a token counts only as the whole word.
                     $star = mb_strlen($tokens[$i]) > $this->minTokenSize ? '*' : '';
-                    $flagged[$i] ??= ["({$match} > 0)", [$tokens[$i] . $star]];
+                    if ($candidates === null) {
+                        $flags[$i] = ["({$match} > 0)", [$tokens[$i] . $star]];
+                        continue;
+                    }
+                    // A MATCH in the select list of a query that has none in its WHERE runs the engine's
+                    // search again for every row (2.5x slower here): the rows holding the token come from
+                    // one engine search each, joined on.
+                    $candidates[2] .= " LEFT JOIN (SELECT product_id, 1 AS hit FROM {$this->table} WHERE {$match}) fj{$i}"
+                        . " ON fj{$i}.product_id = p.product_id";
+                    $candidates[3][] = $tokens[$i] . $star;
+                    $flags[$i] = ["COALESCE(fj{$i}.hit, 0)", []];
                 }
-                $flags = $flagged;
             }
         }
 
@@ -875,7 +912,8 @@ final class Keyword
             $flags,
             $minCoverage,
             $structured,
-            $candidateCap
+            $candidateCap,
+            $candidates
         );
     }
 
@@ -918,6 +956,9 @@ final class Keyword
      * @param float $minCoverage with $flags or $structured: rows whose held tokens weigh less of the
      *        total are dropped
      * @param int $candidateCap score only this many rows of $where, best $relevance first
+     * @param null|array{0: string, 1: list<string>, 2: string, 3: list<string>} $candidates a query of product_ids
+     *        (and its params) to score instead of the rows of $where, for sources $where cannot express cheaply,
+     *        and the joins (with their params) the held flags read
      * @param bool $structured the tokens held are those found in the title or a
      *        structured field (all required, or $minCoverage of the weight), never only in the
      *        description: alias variants must not match on a mere mention
@@ -938,7 +979,8 @@ final class Keyword
         ?array $flags = null,
         float $minCoverage = 0.0,
         bool $structured = false,
-        int $candidateCap = 0
+        int $candidateCap = 0,
+        ?array $candidates = null
     ): array {
         // One CASE per token names the best field it is found in (1 = title,
         // 2.. = $this->fields in order, 0 = description only): one regex chain
@@ -1078,13 +1120,20 @@ final class Keyword
                         LIMIT {$candidateCap}
                     ) c
                     JOIN {$this->table} p ON p.product_id = c.product_id"
-            : "SELECT product_id, popularity,
+            : ($candidates !== null
+                ? "SELECT STRAIGHT_JOIN p.product_id, p.popularity, 0 AS relevance,
+                           " . implode(', ', $levels) . ",
+                           {$phrase} AS phrase_hit{$flagSelect}
+                    FROM ({$candidates[0]}) c
+                    JOIN {$this->table} p ON p.product_id = c.product_id{$candidates[2]}
+                    LIMIT " . PHP_INT_MAX
+                : "SELECT product_id, popularity,
                            {$relevance} AS relevance,
                            " . implode(', ', $levels) . ",
                            {$phrase} AS phrase_hit{$flagSelect}
                     FROM {$this->table}
                     WHERE {$where}
-                    LIMIT " . PHP_INT_MAX) . "
+                    LIMIT " . PHP_INT_MAX)) . "
                 ) matched
                 {$filter}
                 ORDER BY held DESC, ({$titleHits} > 0) DESC, ({$titleHits} = 0 AND {$fieldHits} > 0) DESC,
@@ -1094,9 +1143,11 @@ final class Keyword
         $stmt = $this->pdo->prepare($sql);
         // Placeholders in SQL order: the levels and phrase of the select list come
         // first when the capped form puts the engine query in a derived table below it.
-        $stmt->execute($capped
-            ? array_merge($params, $relevanceParams, $whereParams)
-            : array_merge($relevanceParams, $params, $whereParams));
+        $stmt->execute(match (true) {
+            $capped => array_merge($params, $relevanceParams, $whereParams),
+            $candidates !== null => array_merge($params, $candidates[1], $candidates[3]),
+            default => array_merge($relevanceParams, $params, $whereParams),
+        });
 
         return $this->hydrate($stmt->fetchAll(PDO::FETCH_ASSOC), $matchType, $count);
     }

@@ -264,6 +264,58 @@ final class ReloadTest extends DatabaseTestCase
         self::assertSame([['ps5']], Synonyms::fromDirectory($dataDir, 4, $aliasFile)->variants(['ps5'], 6));
     }
 
+    public function testTheOptionalStatisticFilesAreAcceptedWhenValidAndWhenAbsent(): void
+    {
+        $this->createStaging(2);
+        $dataDir = $this->newTempDir('_data');
+        $this->tempDirs[] = $dataDir . '_old';
+        $incomingDir = $this->makeIncoming(2);
+        file_put_contents($incomingDir . '/' . \App\TokenStats::FILE, '{"version": 1, "n": 2, "df": {"a": 2}}');
+        file_put_contents(
+            $incomingDir . '/' . \App\QueryEntities::FILE,
+            '{"version": 1, "brands": [{"name": "asus", "count": 2}], "platforms": {"ps4": ["ps4"]}}'
+        );
+        $meta = json_decode((string) file_get_contents($incomingDir . '/meta.json'), true);
+        file_put_contents(
+            $incomingDir . '/meta.json',
+            json_encode($meta + ['token_df_version' => 1, 'entities_version' => 1])
+        );
+
+        $result = (new Reload($this->pdo, $this->config($dataDir, $incomingDir)))->run();
+
+        self::assertSame(2, $result['count']);
+        self::assertFileExists($dataDir . '/' . \App\TokenStats::FILE);
+    }
+
+    public function testATokenDfFileForAnotherProductCountIsRejected(): void
+    {
+        $this->createStaging(2);
+        $dataDir = $this->newTempDir('_data');
+        $incomingDir = $this->makeIncoming(2);
+        file_put_contents($incomingDir . '/' . \App\TokenStats::FILE, '{"version": 1, "n": 5, "df": {}}');
+
+        try {
+            (new Reload($this->pdo, $this->config($dataDir, $incomingDir)))->run();
+            self::fail('expected ReloadException');
+        } catch (ReloadException $e) {
+            self::assertSame('invalid_token_df', $e->reason());
+        }
+        self::assertDirectoryExists($incomingDir);
+    }
+
+    public function testAMetaVersionTheCodeDoesNotKnowIsRejected(): void
+    {
+        $this->createStaging(2);
+        $dataDir = $this->newTempDir('_data');
+        $incomingDir = $this->makeIncoming(2);
+        file_put_contents($incomingDir . '/' . \App\TokenStats::FILE, '{"version": 1, "n": 2, "df": {}}');
+        $meta = json_decode((string) file_get_contents($incomingDir . '/meta.json'), true);
+        file_put_contents($incomingDir . '/meta.json', json_encode($meta + ['token_df_version' => 2]));
+
+        $this->expectException(ReloadException::class);
+        (new Reload($this->pdo, $this->config($dataDir, $incomingDir)))->run();
+    }
+
     /** @return iterable<string, array{string, string, string}> */
     public static function malformedGroupFiles(): iterable
     {

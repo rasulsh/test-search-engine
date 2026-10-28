@@ -15,8 +15,8 @@ from normalize import NORMALIZATION_VERSION
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 INPUT_SQL = REPO_ROOT / "fixtures" / "products.input.sql"
-BUNDLE_FILES = ("products.load.sql", "synonyms.json",
-                "intent_map.json", "spellcheck.txt", "keymap.json", "meta.json")
+BUNDLE_FILES = ("products.load.sql", "synonyms.json", "intent_map.json", "spellcheck.txt",
+                "keymap.json", "token_df.json", "entities.json", "meta.json")
 
 
 @pytest.fixture()

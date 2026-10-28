@@ -92,6 +92,16 @@ final class KeywordShortTokenTest extends DatabaseTestCase
         self::assertContains(self::PS4_CONSOLE, $ids);
     }
 
+    public function testALongModelNameWithANumberMeetsItsSpacedTitle(): void
+    {
+        (new ProductLoader($this->pdo, 'products'))->load([
+            ['product_id' => 20, 'title' => 'Red Dead Redemption 2 PS4', 'popularity' => 1],
+        ]);
+
+        self::assertContains(20, $this->ids('redemption2'));
+        self::assertContains(20, $this->ids('red dead redemption2'));
+    }
+
     public function testPs4WithAWordDoesNotNeedTheLikePath(): void
     {
         $results = $this->keyword()->search('ps4 کارکرده');

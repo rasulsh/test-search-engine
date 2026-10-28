@@ -359,7 +359,7 @@ final class Keyword
     {
         $split = [];
         foreach ($tokens as $token) {
-            if (preg_match('/^([a-z]{2,5})(\d{1,' . ($this->minTokenSize - 1) . '})$/', $token, $m) === 1) {
+            if (preg_match('/^([a-z]{2,})(\d{1,' . ($this->minTokenSize - 1) . '})$/', $token, $m) === 1) {
                 array_push($split, $m[1], $m[2]);
                 continue;
             }
@@ -391,6 +391,13 @@ final class Keyword
             if (!$profile['optional'][$i]) {
                 $profile['required'][] = $i;
             }
+        }
+        // No single word may outweigh all the others together: a rare word nothing stocks (a misspelled
+        // brand) must not turn every hit that holds the common words into a weak one.
+        if (count($tokens) > 1) {
+            $total = array_sum($profile['weight']);
+            $heaviest = array_search(max($profile['weight']), $profile['weight'], true);
+            $profile['weight'][$heaviest] = min($profile['weight'][$heaviest], $total - $profile['weight'][$heaviest]);
         }
 
         return $profile;
@@ -1088,8 +1095,10 @@ final class Keyword
         if ($structured && $minCoverage <= 0.0) {
             $filters[] = "{$heldCount} >= {$count}";
         } elseif ($minCoverage > 0.0) {
-            $needed = sprintf('%.6F', $minCoverage * array_sum($profile['weight']) - 1e-6);
-            $filters[] = "{$heldCount} >= 1 AND {$heldWeight} >= {$needed}";
+            // The share of the required words held, by count (a rare word nothing stocks, "شیامی", must not
+            // make every monitor too weak to list); the weights order the hits and give the coverage shown.
+            $needed = max(1, (int) ceil($minCoverage * $count - 1e-9));
+            $filters[] = "{$heldCount} >= {$needed}";
         } elseif ($flags !== null) {
             $filters[] = "{$heldCount} >= 1";
         }

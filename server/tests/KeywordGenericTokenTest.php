@@ -79,13 +79,16 @@ final class KeywordGenericTokenTest extends DatabaseTestCase
         self::assertNotSame([], $this->keyword(null)->search('بازی'), 'without statistics nothing is generic');
     }
 
-    public function testARareBrandWordOutweighsATwoGenericOnes(): void
+    public function testTheCardThatHoldsTheRareBrandWordLeadsAndTheOtherTrailsAsAPartial(): void
     {
-        // "گیفت کارت apple": "کارت" is generic; the Nintendo card holds "گیفت" only. It is no longer a
-        // partial match worth listing, and the Apple card is the only full one.
+        // "گیفت کارت apple": "کارت" is generic. The Apple card holds the rare brand word and leads; the Nintendo
+        // card holds "گیفت" only: a partial match, ranked below it with a lower (weighted) coverage.
         $hits = $this->keyword($this->stats())->search('گیفت کارت apple');
 
-        self::assertSame([self::CARD_APPLE], array_column($hits, 'product_id'));
+        self::assertSame(self::CARD_APPLE, $hits[0]['product_id']);
+        $nintendo = array_column($hits, null, 'product_id')[self::CARD_NINTENDO];
+        self::assertSame(Keyword::MATCH_PARTIAL, $nintendo['match_type']);
+        self::assertLessThan($hits[0]['coverage'], $nintendo['coverage']);
     }
 
     public function testWithoutTheStatisticsTheSoftAndTopUpStillListsThePartialCard(): void
@@ -93,6 +96,16 @@ final class KeywordGenericTokenTest extends DatabaseTestCase
         $ids = array_column($this->keyword(null)->search('گیفت کارت apple'), 'product_id');
 
         self::assertContains(self::CARD_NINTENDO, $ids);
+    }
+
+    public function testANumberIsNeverGenericWhateverItsFrequency(): void
+    {
+        $stats = new TokenStats(100, ['4' => 60, 'بازی' => 60], 0.15, ['2']);
+
+        self::assertFalse($stats->isGeneric('4'), 'the 4 of "پلی استیشن 4" tells products apart');
+        self::assertFalse($stats->isGeneric('2'), 'not even as a stopword');
+        self::assertTrue($stats->isGeneric('بازی'));
+        self::assertGreaterThan(TokenStats::GENERIC_WEIGHT, $stats->weight('4'));
     }
 
     public function testStopwordsAreGenericWithoutAnyFrequencyFile(): void

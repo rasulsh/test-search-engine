@@ -76,12 +76,19 @@ the most) and a token held by more than `search.generic_df_ratio` (0.15) of the 
 - A product has to hold every **non-generic** word (the all-words rule applies to them only), so a result can
   never qualify on generic words alone. `بازی یک راه خروج` no longer lists PS4 consoles that hold `بازی` and
   `یک`; a generic word the product holds adds a little score and coverage.
-- The soft-AND test and the `coverage` the tester shows are **weighted**: the held words' weight over the total.
-  A hit holding a rare word and a generic one is not "coverage 1.00" any more, and `گیفت کارت apple` no longer
-  lists Nintendo cards that hold only `گیفت` (a rare brand word outweighs the common ones).
+- The `coverage` the tester shows, the score and the order among partial matches are **weighted**: the held
+  words' weight over the total weight (no single word weighs more than all the others together, so a rare word
+  nothing stocks cannot sink every hit). A hit holding only generic words plus one rare word is not "coverage 1.00"
+  any more; `گیفت کارت apple` lists the Apple card first and a card that holds `گیفت` only trails it as a weaker
+  partial match. Whether a partial match is listed at all still counts the required words
+  (`search.soft_and_min_coverage`).
+- A number is never generic, however common (`4` in `پلی استیشن 4`): it is what tells `ps4` from `ps5`.
 - A query of generic words only (`بازی خرید`) has **no keyword answer**; it falls back to the owner's intent map
   (the categories / tags it names, if the map lists the phrase) and to the semantic tier, never to a substring scan.
 - A bundle without `token_df.json` has no frequencies: only the stopwords are generic and every other word weighs 1.
+- Tuning: a word every product of a PlayStation shop carries (`پلی استیشن`) can pass `search.generic_df_ratio`; a query
+  made of such words only has no keyword answer (the semantic tier and the intent map answer it). Raise the ratio, or
+  remove the word's effect by adding it to a query with a number or a name, if that bites.
 
 <a id="entities"></a>**Brand and platform recognition (M44).** The build writes `entities.json`: the catalog's brands
 (normalized `brand`, with their product counts) and a short seed list of platforms (`ps5`, `ps4`, `ps3`,

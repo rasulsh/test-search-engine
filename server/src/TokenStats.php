@@ -11,7 +11,8 @@ namespace App;
  * tags contain it (pipeline/keyword.py build_token_df). A token's weight is its inverse document
  * frequency, log(N / (1 + df)) scaled to [0, 1] by log(N). A token held by more than
  * `generic_df_ratio` of the catalog, or listed in `search.stopwords`, is GENERIC ("بازی", "خرید",
- * "یک"): it can never make a product a keyword match by itself and only adds a small score.
+ * "یک"): it can never make a product a keyword match by itself and only adds a small score. A number is
+ * never generic, whatever its frequency.
  * A bundle without the file has no frequencies: only the stopwords are generic and every
  * other token weighs 1.
  */
@@ -114,6 +115,10 @@ final class TokenStats
 
     public function isGeneric(string $token): bool
     {
+        // A number is a model ("4" in "پلی استیشن 4", "2" in "gta 2"): common, but what tells products apart.
+        if (ctype_digit($token)) {
+            return false;
+        }
         if (isset($this->stopwords[$token])) {
             return true;
         }

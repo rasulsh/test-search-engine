@@ -296,7 +296,9 @@ final class AnalyticsInsightsTest extends DatabaseTestCase
         $this->log('b', 'مانیتور شیامی', 4, ['session_id' => 'b', 'brand_unmatched' => 'xiaomi']);
         $this->log('c', 'پرینتر کنون', 2, ['session_id' => 'c', 'brand_unmatched' => 'canon']);
         $this->log('d', 'مانیتور ایسوس', 4, ['session_id' => 'd']);
-        $this->log('dup', 'مانیتور شیامی', 4, ['session_id' => 'a', 'brand_unmatched' => 'xiaomi', 'is_duplicate' => 1]);
+        $this->log('dup', 'مانیتور شیامی', 4, [
+            'session_id' => 'a', 'brand_unmatched' => 'xiaomi', 'is_duplicate' => 1,
+        ]);
 
         $rows = $this->report('24h')['brand_unmatched'];
 

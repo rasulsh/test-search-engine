@@ -230,7 +230,8 @@ final class KeywordLatencyGuardTest extends DatabaseTestCase
         $median = $times[intdiv(self::RUNS, 2)];
 
         fwrite(STDERR, sprintf(
-            "\n[keyword guard] %d products, short-token query '%s'%s%s: median %.1f ms (max %.1f, budget %d ms), %d hits\n",
+            "\n[keyword guard] %d products, short-token query '%s'%s%s: median %.1f ms (max %.1f, budget %d ms), "
+            . "%d hits\n",
             self::PRODUCTS,
             $query,
             $partial ? ' (partial)' : '',

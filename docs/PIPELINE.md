@@ -36,12 +36,23 @@ swap with no manual `ALTER`; then its rows, normalized columns from the canonica
 split into statements of at most `SEARCH_LOAD_MAX_STATEMENT_BYTES`, 1 MB by
 default, so each fits a shared host's `max_allowed_packet`),
 `synonyms.json` (no `aliases.json` since M41: the owner's [aliases](SEARCH-BEHAVIOR.md#aliases) live on the server, [panel-edited](ADMIN.md#alias-manager-m41)), `intent_map.json` (the owner's [intent map](SEARCH-BEHAVIOR.md#intent-map), keys checked
-to be normalized), `spellcheck.txt`, `keymap.json`, and `meta.json`
-(`{normalization_version, count, built_at}`). The bundle has carried no vectors
+to be normalized), `spellcheck.txt`, `keymap.json`, `token_df.json` and `entities.json` (M44, below), and `meta.json`
+(`{normalization_version, count, built_at, token_df_version, entities_version}`). The bundle has carried no vectors
 since M42 (nothing on cPanel read them since M18), so building it runs no
 embedder; the semantic vectors are the separate `--vps-out` artifact below.
 M21 added the `normalized_tags`, `normalized_brand` and `normalized_category`
 columns to `products.load.sql`.
+
+**Query-understanding files (M44).** `token_df.json` is `{"version": 1, "n": <products>, "df": {token: products}}`:
+for every token of the normalized titles and tags that occurs in at least two products, the number of products holding
+it (`keyword.py` `build_token_df`). The server weights a query token by `log(N / (1 + df)) / log(N)` and treats a token in more than
+`search.generic_df_ratio` of the catalog as generic ([SEARCH-BEHAVIOR.md](SEARCH-BEHAVIOR.md#generic-tokens)).
+`entities.json` is `{"version": 1, "brands": [{"name", "count"}], "platforms": {key: [spellings]}}`: the normalized
+`brand` values of the catalog and the short platform seed list in `keyword.py` (`PLATFORM_SEEDS`; edit it and rebuild to
+add a platform). The owner's alias groups are applied by the server at query time (they live in `server/storage`, not in
+the bundle), so a misspelled brand needs an alias, not a rebuild ([SEARCH-BEHAVIOR.md](SEARCH-BEHAVIOR.md#entities)). Both files are optional for
+`/reload` (a pre-M44 bundle has neither) and validated when present (`invalid_token_df`, `invalid_entities`; `token_df.json`'s `n`
+must equal `meta.count`, and the versions in `meta.json` must match the code's).
 
 **Embedding contract (model parity, contract 2).** The semantic tier's model
 is bge-m3 on the VPS: `build.py --vps-out` embeds products with

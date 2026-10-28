@@ -37,7 +37,8 @@ final class KeywordShortTokenTest extends DatabaseTestCase
             ['product_id' => self::PS4_SPACED, 'title' => 'کنسول بازی PS 4 Slim', 'popularity' => 60],
             ['product_id' => self::FC_26, 'title' => 'بازی EA SPORTS FC26', 'popularity' => 40],
             ['product_id' => self::FC_25, 'title' => 'بازی EA SPORTS FC 25', 'popularity' => 80],
-            ['product_id' => self::BEARING, 'title' => 'بلبرینگ 6202', 'description' => 'مناسب gta2 و fc 26', 'popularity' => 1],
+            ['product_id' => self::BEARING, 'title' => 'بلبرینگ 6202', 'description' => 'مناسب gta2 و fc 26',
+                'popularity' => 1],
         ]);
     }
 
@@ -68,7 +69,8 @@ final class KeywordShortTokenTest extends DatabaseTestCase
 
     public function testNoRelevanceResultComesFromASubstringScan(): void
     {
-        foreach (['gta 2', 'بازی ظرفیت gta 2', 'play station 4 کارکرده', 'ps4 کارکرده', 'ps 4', 'fc 26', 'tv', 'لپ'] as $query) {
+        $queries = ['gta 2', 'بازی ظرفیت gta 2', 'play station 4 کارکرده', 'ps4 کارکرده', 'ps 4', 'fc 26', 'tv', 'لپ'];
+        foreach ($queries as $query) {
             $types = array_unique(array_column($this->keyword()->search($query), 'match_type'));
 
             self::assertNotContains('like', $types, $query);

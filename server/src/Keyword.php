@@ -337,7 +337,8 @@ final class Keyword
             $last = count($joined) - 1;
             if (
                 $last >= 0 && $this->isShortNumber($token)
-                && (preg_match('/^[a-z]+$/', $joined[$last]) === 1 || $this->synonyms?->hasAliasToken($joined[$last]) === true)
+                && (preg_match('/^[a-z]+$/', $joined[$last]) === 1
+                    || $this->synonyms?->hasAliasToken($joined[$last]) === true)
             ) {
                 $joined[$last] .= $token;
                 continue;
@@ -892,8 +893,8 @@ final class Keyword
                     // A MATCH in the select list of a query that has none in its WHERE runs the engine's
                     // search again for every row (2.5x slower here): the rows holding the token come from
                     // one engine search each, joined on.
-                    $candidates[2] .= " LEFT JOIN (SELECT product_id, 1 AS hit FROM {$this->table} WHERE {$match}) fj{$i}"
-                        . " ON fj{$i}.product_id = p.product_id";
+                    $candidates[2] .= " LEFT JOIN (SELECT product_id, 1 AS hit FROM {$this->table}"
+                        . " WHERE {$match}) fj{$i} ON fj{$i}.product_id = p.product_id";
                     $candidates[3][] = $tokens[$i] . $star;
                     $flags[$i] = ["COALESCE(fj{$i}.hit, 0)", []];
                 }
@@ -1053,9 +1054,12 @@ final class Keyword
         // (a facet such as a genre): solid like a name match, see facet_all.
         $facetHits = $nameHits;
         if ($specsLevel !== null && $this->facetMinProducts > 0) {
-            $facetHits = $sum($required, fn (int $i): string => "(lv{$i} = 1"
-                . ($tagsLevel === null ? '' : " OR lv{$i} = {$tagsLevel}")
-                . (!$profile['short'][$i] && $this->isFacetTerm($tokens[$i]) ? " OR lv{$i} = {$specsLevel}" : '') . ')');
+            $facetHits = $sum($required, function (int $i) use ($tokens, $profile, $tagsLevel, $specsLevel): string {
+                $facet = !$profile['short'][$i] && $this->isFacetTerm($tokens[$i]);
+
+                return "(lv{$i} = 1" . ($tagsLevel === null ? '' : " OR lv{$i} = {$tagsLevel}")
+                    . ($facet ? " OR lv{$i} = {$specsLevel}" : '') . ')';
+            });
         }
         $all = array_keys($tokens);
         $credit = $sum($all, static function (int $i) use ($levelWeights, $weight, $profile): string {
@@ -1084,7 +1088,8 @@ final class Keyword
         if ($structured && $minCoverage <= 0.0) {
             $filters[] = "{$heldCount} >= {$count}";
         } elseif ($minCoverage > 0.0) {
-            $filters[] = "{$heldCount} >= 1 AND {$heldWeight} >= " . sprintf('%.6F', $minCoverage * array_sum($profile['weight']) - 1e-6);
+            $needed = sprintf('%.6F', $minCoverage * array_sum($profile['weight']) - 1e-6);
+            $filters[] = "{$heldCount} >= 1 AND {$heldWeight} >= {$needed}";
         } elseif ($flags !== null) {
             $filters[] = "{$heldCount} >= 1";
         }

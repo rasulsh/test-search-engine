@@ -12,7 +12,11 @@ final class RankerEntityTest extends TestCase
 {
     private const ENTITY = [
         'active' => ['brand' => true, 'platform' => false],
-        'status' => [1 => ['brand' => 1, 'platform' => 0], 2 => ['brand' => -1, 'platform' => 0], 3 => ['brand' => 0, 'platform' => 0]],
+        'status' => [
+            1 => ['brand' => 1, 'platform' => 0],
+            2 => ['brand' => -1, 'platform' => 0],
+            3 => ['brand' => 0, 'platform' => 0],
+        ],
     ];
 
     /** @param list<array{product_id: int}> $rows @return list<int> */
@@ -25,7 +29,8 @@ final class RankerEntityTest extends TestCase
     {
         $ranker = new Ranker(0.0, 0.0, 0.4, 0.6, 0.0, 0.0, 0.0, 0.0, 2, 0, 0.15, 0.10);
         // Equal relevance: only the entity factor orders them.
-        $out = $ranker->blend([1 => 10.0, 2 => 10.0, 3 => 10.0], [1 => 0.5, 2 => 0.5, 3 => 0.5], [], 10, [], 0.0, [], true, [], self::ENTITY);
+        $keyword = [1 => 10.0, 2 => 10.0, 3 => 10.0];
+        $out = $ranker->blend($keyword, [1 => 0.5, 2 => 0.5, 3 => 0.5], [], 10, [], 0.0, [], true, [], self::ENTITY);
 
         self::assertSame([1, 3, 2], self::ids($out));
         self::assertEqualsWithDelta(1.15, $out[0]['detail']['entity']['factor'], 1e-9);
@@ -53,7 +58,8 @@ final class RankerEntityTest extends TestCase
         $ranker = new Ranker(0.0, 0.0, 0.4, 0.6, 0.0, 0.0, 0.0, 0.0, 2, 0, 0.15, 0.10);
         $inactive = ['active' => ['brand' => false, 'platform' => false]] + self::ENTITY;
 
-        $out = $ranker->blend([1 => 10.0, 2 => 10.0], [1 => 0.5, 2 => 0.5], [], 10, [1, 2], 0.0, [], true, [], $inactive);
+        $keyword = [1 => 10.0, 2 => 10.0];
+        $out = $ranker->blend($keyword, [1 => 0.5, 2 => 0.5], [], 10, [1, 2], 0.0, [], true, [], $inactive);
 
         self::assertSame([1, 2], self::ids($out));
         self::assertArrayNotHasKey('entity', $out[0]['detail']);
@@ -63,7 +69,8 @@ final class RankerEntityTest extends TestCase
     {
         $ranker = new Ranker(0.0, 0.0, 0.4, 0.6, 0.0);
 
-        $out = $ranker->blend([1 => 10.0, 2 => 10.0], [1 => 0.5, 2 => 0.5], [], 10, [], 0.0, [], false, [], self::ENTITY);
+        $keyword = [1 => 10.0, 2 => 10.0];
+        $out = $ranker->blend($keyword, [1 => 0.5, 2 => 0.5], [], 10, [], 0.0, [], false, [], self::ENTITY);
 
         self::assertSame([1, 2], self::ids($out));
     }

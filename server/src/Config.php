@@ -298,7 +298,10 @@ final class Config
             'search.generic_df_ratio'         => ['float', 0.15],
             // Words that are generic whatever the catalog says (comma separated, normalized). Keep it to
             // words no product is named by; "play", "one", "pro" are product words and stay out.
-            'search.stopwords'                => ['string', 'خرید,قیمت,مدل,نوع,یک,با,برای,و,از,buy,price,for,with,and,the'],
+            'search.stopwords'                => [
+                'string',
+                'خرید,قیمت,مدل,نوع,یک,با,برای,و,از,buy,price,for,with,and,the',
+            ],
             // M44: a brand / platform the query names lifts its products by entity_boost and demotes the
             // other brands' / platforms' by entity_demote, after the relevance floor. Both 0 turns it off.
             'search.entities_enabled'         => ['bool', true],

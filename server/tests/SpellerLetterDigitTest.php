@@ -28,10 +28,9 @@ final class SpellerLetterDigitTest extends TestCase
     public function testTheWordIsCorrectedAndTheNumberStays(): void
     {
         self::assertSame('redemption2', $this->speller()->suggest('redeption2'));
-        self::assertSame(
-            'بازی ps4 red dead redemption2',
-            (new Speller(Speller::buildVocabulary(['بازی ps4 red dead redemption'])))->suggest('بازی ps4 red dead redeption2')
-        );
+        $speller = new Speller(Speller::buildVocabulary(['بازی ps4 red dead redemption']));
+
+        self::assertSame('بازی ps4 red dead redemption2', $speller->suggest('بازی ps4 red dead redeption2'));
     }
 
     public function testKnownAndTooShortModelNamesAreUntouched(): void

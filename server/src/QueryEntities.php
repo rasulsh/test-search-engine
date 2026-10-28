@@ -232,7 +232,10 @@ final class QueryEntities
      * carrying another brand / platform last; each group keeps its order. Nothing is dropped.
      *
      * @param list<int> $ids
-     * @param array{active: array{brand: bool, platform: bool}, status: array<int, array{brand: int, platform: int}>} $entity
+     * @param array{
+     *     active: array{brand: bool, platform: bool},
+     *     status: array<int, array{brand: int, platform: int}>
+     * } $entity
      * @return list<int>
      */
     public static function reorder(array $ids, array $entity): array

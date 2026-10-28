@@ -34,8 +34,10 @@ final class AdminTesterEntitiesTest extends TestCase
 
     public function testTheBrandAskedForAndNotFoundIsListed(): void
     {
-        $html = $this->page(['brands' => ['xiaomi'], 'platforms' => ['ps4'], 'active' => ['brand' => false, 'platform' => false],
-            'brand_unmatched' => ['xiaomi']]);
+        $html = $this->page([
+            'brands' => ['xiaomi'], 'platforms' => ['ps4'], 'active' => ['brand' => false, 'platform' => false],
+            'brand_unmatched' => ['xiaomi'],
+        ]);
 
         self::assertStringContainsString('برند و پلتفرم شناخته‌شده', $html);
         self::assertStringContainsString('xiaomi، ps4', $html);
@@ -53,8 +55,10 @@ final class AdminTesterEntitiesTest extends TestCase
 
     public function testAMatchedBrandListsNoUnmatchedRow(): void
     {
-        $html = $this->page(['brands' => ['asus'], 'platforms' => [], 'active' => ['brand' => true, 'platform' => false],
-            'brand_unmatched' => []]);
+        $html = $this->page([
+            'brands' => ['asus'], 'platforms' => [], 'active' => ['brand' => true, 'platform' => false],
+            'brand_unmatched' => [],
+        ]);
 
         self::assertStringContainsString('برند و پلتفرم شناخته‌شده', $html);
         self::assertStringNotContainsString('برندِ خواسته‌شده که در نتایج نیست', $html);

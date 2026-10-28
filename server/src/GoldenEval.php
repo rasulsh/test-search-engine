@@ -39,7 +39,8 @@ final class GoldenEval
                 }
                 continue;
             }
-            $cells = array_combine($columns, array_pad(array_slice($row, 0, count($columns)), count($columns), '')) ?: [];
+            $padded = array_pad(array_slice($row, 0, count($columns)), count($columns), '');
+            $cells = array_combine($columns, $padded) ?: [];
             $query = trim((string) ($cells['query'] ?? ''));
             if ($query === '') {
                 continue;
@@ -50,7 +51,11 @@ final class GoldenEval
                     $ids[] = (int) trim($id);
                 }
             }
-            $cases[] = ['query' => $query, 'relevant' => array_values(array_unique($ids)), 'note' => (string) ($cells['note'] ?? '')];
+            $cases[] = [
+                'query'    => $query,
+                'relevant' => array_values(array_unique($ids)),
+                'note'     => (string) ($cells['note'] ?? ''),
+            ];
         }
         fclose($stream);
 

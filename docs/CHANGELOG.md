@@ -10,6 +10,30 @@ holds overrides). A **renamed** key keeps working for two releases (its value is
 config doctor / status page warn with the new name. A **removed** key is ignored; the doctor says why and that the
 line can be deleted. `php server/tools/config-check.php` lists all of it.
 
+## M44: query understanding and evaluation
+
+- **Added**:
+  - `search.generic_df_ratio` = `0.15`: a token in more than this share of the catalog's titles and tags is generic (it can
+    no longer qualify a product by itself). `0` = frequency rule off.
+  - `search.stopwords` = `خرید,قیمت,مدل,نوع,یک,با,برای,و,از,buy,price,for,with,and,the`: generic whatever the catalog says.
+  - `search.entities_enabled` = `true`, `search.entity_boost` = `0.15`, `search.entity_demote` = `0.10`: brand / platform
+    recognition. The boost and the demotion both at `0` (or the switch off) disable it.
+- **Removed / renamed**: none.
+- **Changed defaults**: none.
+- **Behaviour** (no key; some of it needs the new bundle):
+  - A token shorter than `search.min_token_size` is no longer a `LIKE '%token%'` scan over title, specs and description:
+    a number joins the word before it, any other short token is a whole word of the title or tags, `match_type` `like`
+    is gone (`title` for a query of short tokens only, `intent` for an intent-map answer).
+  - The bundle gains `token_df.json` and `entities.json` and `meta.json` gains `token_df_version` / `entities_version`.
+    Both files are optional; `/reload` rejects a present one that is invalid (`invalid_token_df`, `invalid_entities`).
+  - `search_logs.brand_unmatched` (`db/migrations/2026-10-28_search_logs_brand_unmatched.sql`, also added by the
+    logger itself when it may ALTER) and the analytics JSON keys `brand_unmatched` and `silent_failures[].top_id` /
+    `top_title`.
+  - "Did you mean" corrects the word of a model name (`redeption2` -> `redemption2`) and never drops a digit.
+- **After deploying**: build and upload the bundle, `/reload`, flush the result cache (the cache key does not carry
+  these settings), check the effective configuration on the status page, run the log migration if the logger's user may
+  not ALTER. See [DEPLOY.md](DEPLOY.md).
+
 ## M43: off-topic hygiene, tracking and ranking tweaks
 
 - **Added**:

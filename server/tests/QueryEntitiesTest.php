@@ -47,7 +47,8 @@ final class QueryEntitiesTest extends TestCase
 
     public function testAPhraseBrandIsFoundLongestFirst(): void
     {
-        self::assertSame(['western digital'], $this->entities()->recognize(self::variants('هارد وسترن دیجیتال 1tb'))['brands']);
+        $found = $this->entities()->recognize(self::variants('هارد وسترن دیجیتال 1tb'));
+        self::assertSame(['western digital'], $found['brands']);
         self::assertSame(['western digital'], $this->entities()->recognize(self::variants('wd'))['brands']);
     }
 
@@ -139,11 +140,13 @@ final class QueryEntitiesTest extends TestCase
             ['brands' => ['asus'], 'platforms' => ['ps4' => ['ps4']]],
             QueryEntities::parse($good)
         );
-        foreach (['', '[]', '{"version": 2, "brands": [], "platforms": {}}',
+        foreach (
+            ['', '[]', '{"version": 2, "brands": [], "platforms": {}}',
             '{"version": 1, "brands": [{"name": "a"}], "platforms": {}}',
             '{"version": 1, "brands": ["a"], "platforms": {}}',
             '{"version": 1, "brands": [], "platforms": {"ps4": "ps4"}}',
-            '{"version": 1, "brands": []}'] as $bad) {
+            '{"version": 1, "brands": []}'] as $bad
+        ) {
             self::assertNull(QueryEntities::parse($bad), $bad);
         }
     }

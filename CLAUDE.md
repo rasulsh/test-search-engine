@@ -77,7 +77,10 @@ abstraction layers.
 │   ├── DEPLOY.md                 # deploy, updates, upgrades, rollback, go-live checklist
 │   ├── CHANGELOG.md              # config changes per milestone (M40): added / removed / renamed / re-defaulted keys
 │   ├── ADMIN.md                  # the admin panel (M39): setup, security model, pages
+│   ├── EVALUATION.md             # golden-set evaluation: tools/eval/run_eval.php (M44)
+│   ├── INTENT-MAP-TODO.md        # intent-map candidates the owner maps to real categories / tags (M44)
 │   └── SEARCH-API.md             # endpoints, logs, debug, eval harness, test page
+├── tools/eval/                   # run_eval.php + golden.sample.csv: golden-set evaluation (M44)
 ├── .gitignore
 ├── .github/workflows/ci.yml
 ├── db/
@@ -106,6 +109,9 @@ abstraction layers.
 │   ├── src/
 │   │   ├── Normalizer.php         # MUST mirror pipeline/normalize.py exactly
 │   │   ├── Keyword.php            # FULLTEXT + fuzzy + keymap + did-you-mean
+│   ├── TokenStats.php         # token_df.json: IDF weights, generic tokens, stopwords (M44)
+│   ├── QueryEntities.php      # brand / platform recognition through the owner's aliases (M44)
+│   ├── GoldenEval.php         # success@k / MRR / nDCG@k / compare for tools/eval (M44)
 │   │   ├── VpsClient.php          # server-to-server call to the VPS /search-vectors
 │   │   ├── Cache.php              # optional Redis result cache for /search (M26)
 │   │   ├── RedisClient.php        # minimal in-repo RESP client for Cache (no Composer package)
@@ -441,6 +447,16 @@ wait for review before starting the next.
   (drops build-derived groups, never owner aliases); letter + digit variants (`gta6` / `gta 6`); personal-data queries
   masked in `search_logs`; `docs/ALIASES.md` rewritten for the alias manager. Off-topic queries (the store sells gaming
   products only) are expected to return zero results and no suggestion.
+
+- **M44 — Query understanding + evaluation:** `tools/eval/run_eval.php` (golden CSV -> success@k, MRR, nDCG@k, zero-result
+  rate, per-query first rank, timestamped JSON, `--compare`; no logging, no result cache; `docs/EVALUATION.md`); no
+  substring `LIKE` relevance path (`Keyword`: a short number joins the word before it, other short tokens are whole words
+  of the title / tags, `match_type` `like` gone); `token_df.json` + `TokenStats` (IDF-weighted coverage and score, generic
+  tokens never qualify a product, `search.generic_df_ratio`, `search.stopwords`); `entities.json` + `QueryEntities`
+  (brand / platform boost and demotion through the owner's aliases after the floor, `search.entities_enabled` /
+  `entity_boost` / `entity_demote`, `brand_unmatched` in debug, `search_logs` and analytics); the speller keeps a model
+  name's digits; analytics silent failures show the first result's title; the intent map starter is `docs/INTENT-MAP-TODO.md`
+  (the catalog export is not in the repo). `/reload` validates both new files and tolerates their absence.
 
 **Definition of Done (per PR):** code + tests pass in CI; docs updated;
 KISS respected (no unused abstraction); PR description complete; no secrets or

@@ -28,14 +28,17 @@ final class KeywordGenericTokenTest extends DatabaseTestCase
             ['product_id' => self::EXIT_GAME, 'title' => 'بازی راه خروج', 'popularity' => 1],
             ['product_id' => self::GENERIC_ONLY, 'title' => 'کنسول پلی استیشن یک ترابایت بازی', 'popularity' => 900],
             ['product_id' => self::HALF, 'title' => 'بازی خروج اضطراری', 'popularity' => 50],
-            ['product_id' => self::CARD_APPLE, 'title' => 'گیفت کارت اپل iTunes', 'tags' => 'apple', 'popularity' => 10],
+            ['product_id' => self::CARD_APPLE, 'title' => 'گیفت کارت اپل iTunes', 'tags' => 'apple',
+                'popularity' => 10],
             ['product_id' => self::CARD_NINTENDO, 'title' => 'گیفت کارت نینتندو eShop', 'popularity' => 800],
         ]);
     }
 
     private function stats(float $ratio = 0.15, string $stopwords = 'یک'): TokenStats
     {
-        return new TokenStats(100, ['بازی' => 60, 'کارت' => 40, 'گیفت' => 10, 'راه' => 3, 'خروج' => 2, 'apple' => 2], $ratio, explode(',', $stopwords));
+        $frequencies = ['بازی' => 60, 'کارت' => 40, 'گیفت' => 10, 'راه' => 3, 'خروج' => 2, 'apple' => 2];
+
+        return new TokenStats(100, $frequencies, $ratio, explode(',', $stopwords));
     }
 
     private function keyword(?TokenStats $stats): Keyword
@@ -121,8 +124,10 @@ final class KeywordGenericTokenTest extends DatabaseTestCase
             ['n' => 3, 'df' => ['a' => 2]],
             TokenStats::parse('{"version": 1, "n": 3, "df": {"a": 2}}')
         );
-        foreach (['', '[]', '{"version": 2, "n": 3, "df": {}}', '{"version": 1, "n": -1, "df": {}}',
-            '{"version": 1, "n": 3, "df": {"a": "x"}}', '{"version": 1, "n": 3}'] as $bad) {
+        foreach (
+            ['', '[]', '{"version": 2, "n": 3, "df": {}}', '{"version": 1, "n": -1, "df": {}}',
+            '{"version": 1, "n": 3, "df": {"a": "x"}}', '{"version": 1, "n": 3}'] as $bad
+        ) {
             self::assertNull(TokenStats::parse($bad), $bad);
         }
     }

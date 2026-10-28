@@ -39,8 +39,12 @@ final class AnalyticsInsights
     private ?array $columns = null;
 
     /** @param string|null $productsTable the catalog table the silent-failure rows read their first result's title from */
-    public function __construct(PDO $pdo, string $searchLogsTable, string $searchEventsTable, ?string $productsTable = null)
-    {
+    public function __construct(
+        PDO $pdo,
+        string $searchLogsTable,
+        string $searchEventsTable,
+        ?string $productsTable = null
+    ) {
         $this->pdo = $pdo;
         $this->logs = Identifier::quote($searchLogsTable);
         $this->events = Identifier::quote($searchEventsTable);
@@ -424,7 +428,9 @@ final class AnalyticsInsights
      * Each row names the first product the query's latest search returned (`top_id`, `top_title`), so the
      * owner can judge at a glance whether the answer was right.
      *
-     * @return list<array{query: string, searches: int, clicks: int, ctr: float, avg_results: float, top_id: ?int, top_title: string}>
+     * @return list<array{
+     *     query: string, searches: int, clicks: int, ctr: float, avg_results: float, top_id: ?int, top_title: string
+     * }>
      */
     public function silentFailures(?string $from, ?string $to, int $limit): array
     {
@@ -533,7 +539,8 @@ final class AnalyticsInsights
         $limit = min(100, max(1, $limit));
         try {
             $stmt = $this->pdo->prepare(
-                'SELECT brand_unmatched AS b, COUNT(*) AS n, MAX(COALESCE(NULLIF(normalized_q, \'\'), raw_q)) AS example,'
+                'SELECT brand_unmatched AS b, COUNT(*) AS n,'
+                . ' MAX(COALESCE(NULLIF(normalized_q, \'\'), raw_q)) AS example,'
                 . " MAX(ts) AS last FROM {$this->logs}{$where} GROUP BY b ORDER BY n DESC, b LIMIT {$limit}"
             );
             $stmt->execute($params);

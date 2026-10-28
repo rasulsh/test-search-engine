@@ -40,7 +40,7 @@ only `SELECT`s.
 
 `POST /search` with `"debug": 1` and the header `X-Debug-Token:
 $SEARCH_DEBUG_TOKEN` (off until that is set; `403 debug_forbidden` otherwise)
-adds `debug: {tier, settings, results[]}` to the response: per result its rank,
+adds `debug: {tier, settings, entities, results[]}` to the response (`entities`, M44: `null`, or `{brands, platforms, active, brand_unmatched}` when the query names a brand / platform; `coverage` is weighted by token rarity): per result its rank,
 keyword hit (match type, score, whether the title / a structured field / a name
 matched), whether it was pinned by an exact SKU, and, for hybrid results, the
 blend: raw and normalized keyword score, cosine and normalized cosine, the
@@ -85,7 +85,8 @@ columns) the report carries `log_v2: {available: false}` and none of the keys be
 | `capped_share` | `{searches, capped, share}`: lists that reached `search.result_cap` |
 | `did_you_mean` | the old `{total, suggested, share}` plus `{shown, shown_rate, clicked, ctr, zero_result_suggestions, top[]}` (`top`: query → suggestion pairs with shown / clicked counts) |
 | `alias_candidates` | `[{query, then, pairs, clicks}]`: a zero-result query followed within 60 s in the same session by a different query that had results, ranked by clicks on the follow-up, then frequency |
-| `silent_failures` | `[{query, searches, clicks, ctr, avg_results}]`: frequent (5+) queries with results and a click-through of at most 2 %; empty while no click is tracked |
+| `silent_failures` | `[{query, searches, clicks, ctr, avg_results, top_id, top_title}]`: frequent (5+) queries with results and a click-through of at most 2 %; empty while no click is tracked. `top_id` / `top_title` (M44): the first result of the query's latest search and its title (`null` / `""` when the product is gone), so the answer can be judged at a glance. Clicks are under-counted until the storefront sends them |
+| `brand_unmatched` | `[{brand, searches, example, last_seen}]` (M44): brands a query named that none of the returned candidates carried ("asked for, not stocked"); from `search_logs.brand_unmatched`, empty without the column |
 | `demand_gap` | zero-result queries that appear in no alias candidate (likely products missing from the catalog) |
 | `trending` | `[{query, searches, previous, growth, growth_pct}]` against the previous window |
 | `suspicious` | `{count, samples[]}`: the probes the service refused |
@@ -112,7 +113,8 @@ Sample (abridged; the numbers are illustrative, the shape is real):
                    "ctr": 23.9, "zero_result_suggestions": 2,
                    "top": [{"query": "gtavi", "suggestion": "atari", "shown": 7, "clicked": 0}]},
   "alias_candidates": [{"query": "ولورینگ", "then": "wolvering", "pairs": 4, "clicks": 3}],
-  "silent_failures": [{"query": "gtavi", "searches": 7, "clicks": 0, "ctr": 0.0, "avg_results": 34.0}],
+  "silent_failures": [{"query": "gtavi", "searches": 7, "clicks": 0, "ctr": 0.0, "avg_results": 34.0, "top_id": 1001, "top_title": "Atari Flashback 11"}],
+  "brand_unmatched": [{"brand": "xiaomi", "searches": 4, "example": "مانیتور شیامی", "last_seen": "2026-10-27 18:02:11"}],
   "demand_gap": [{"query": "phasmophobia", "searches": 6, "last_seen": "2026-10-23 16:40:02"}],
   "trending": [{"query": "gta 6", "searches": 44, "previous": 12, "growth": 32, "growth_pct": 266.7}],
   "suspicious": {"count": 2, "samples": [{"ts": "2026-10-22 03:14:15", "query": "1 AND extractvalue(1,concat(0x7e,..."}]},

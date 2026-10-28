@@ -46,7 +46,10 @@ final class EvalToolTest extends DatabaseTestCase
 
     public function testItRunsTheGoldenFileSavesTheRunAndWritesNoLogs(): void
     {
-        file_put_contents($this->dir . '/golden.csv', "# fake\nquery,relevant_ids,note\nsony,1009;1011,two sony products\nzzzzqx,,nothing\nsony camera,1011,\n");
+        file_put_contents(
+            $this->dir . '/golden.csv',
+            "# fake\nquery,relevant_ids,note\nsony,1009;1011,two sony products\nzzzzqx,,nothing\nsony camera,1011,\n"
+        );
 
         [$code, $out] = $this->cli(['--golden=' . $this->dir . '/golden.csv', '--out-dir=' . $this->dir . '/runs']);
 
@@ -68,7 +71,8 @@ final class EvalToolTest extends DatabaseTestCase
             'success' => true, 'rr' => 0.0, 'ndcg' => 0.0, 'zero' => false,
         ];
         $run = static fn (int $rank): array => [
-            'success_at_k' => 1.0, 'mrr' => 1.0, 'ndcg_at_k' => 1.0, 'zero_result_rate' => 0.0, 'per_query' => [$row($rank)],
+            'success_at_k' => 1.0, 'mrr' => 1.0, 'ndcg_at_k' => 1.0, 'zero_result_rate' => 0.0,
+            'per_query' => [$row($rank)],
         ];
         file_put_contents($this->dir . '/a.json', json_encode($run(1)));
         file_put_contents($this->dir . '/b.json', json_encode($run(4)));

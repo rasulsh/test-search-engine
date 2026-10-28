@@ -103,8 +103,11 @@ final class GoldenEvalTest extends TestCase
                 'first_rank' => null, 'success' => $clean, 'rr' => 0.0, 'ndcg' => 0.0, 'zero' => $clean]],
         ];
 
-        self::assertSame(['shirt'], array_column(GoldenEval::compare($none(true), $none(false))['regressions'], 'query'));
-        self::assertSame(['shirt'], array_column(GoldenEval::compare($none(false), $none(true))['improvements'], 'query'));
+        $worse = GoldenEval::compare($none(true), $none(false));
+        $better = GoldenEval::compare($none(false), $none(true));
+
+        self::assertSame(['shirt'], array_column($worse['regressions'], 'query'));
+        self::assertSame(['shirt'], array_column($better['improvements'], 'query'));
     }
 
     public function testParseCsvSkipsCommentsAndReadsIdsAndNotes(): void
@@ -132,7 +135,8 @@ final class GoldenEvalTest extends TestCase
 
     public function testTheSampleFileParses(): void
     {
-        $cases = GoldenEval::parseCsv((string) file_get_contents(dirname(__DIR__, 2) . '/tools/eval/golden.sample.csv'));
+        $sample = dirname(__DIR__, 2) . '/tools/eval/golden.sample.csv';
+        $cases = GoldenEval::parseCsv((string) file_get_contents($sample));
 
         self::assertCount(4, $cases);
         self::assertSame([990001, 990002], $cases[0]['relevant']);

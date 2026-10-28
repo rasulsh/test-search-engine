@@ -175,7 +175,8 @@ final class SearchController
                 return [];
             }
             $placeholders = implode(',', array_fill(0, count($ids), '?'));
-            $query = static fn (string $columns): string => 'SELECT product_id, stock, popularity, normalized_title' . $columns
+            $query = static fn (string $columns): string => 'SELECT product_id, stock, popularity, normalized_title'
+                . $columns
                 . ' FROM ' . Identifier::quote($productsTable) . ' WHERE product_id IN (' . $placeholders . ')';
             try {
                 $texts = ', normalized_brand, normalized_category, normalized_tags';
@@ -397,7 +398,10 @@ final class SearchController
         // A query of generic words only ("بازی خرید") has no keyword answer: the category / tag the owner's
         // intent map names for it, if it names any. Other queries keep intent words as a boost (M34).
         if ($results === [] && $this->intentMap !== null && $this->keyword->isGenericOnly($query)) {
-            $intent = $this->intentMap->resolve($didYouMean !== null && $applied ? $didYouMean : $normalized, $this->intentMaxTerms);
+            $intent = $this->intentMap->resolve(
+                $didYouMean !== null && $applied ? $didYouMean : $normalized,
+                $this->intentMaxTerms
+            );
             if ($intent['categories'] !== [] || $intent['tags'] !== []) {
                 $results = $this->keyword->intentHits($intent['categories'], $intent['tags'], $limit);
             }
@@ -499,8 +503,12 @@ final class SearchController
      * @param list<string> $brandUnmatched recognized brands none of the candidates carries
      * @return array{expanded_q: ?string, alias_hit: bool, dym_shown: bool, is_capped: bool, brand_unmatched: ?string}
      */
-    private function meta(string $effectiveQuery, ?string $didYouMean, int $resultCount, array $brandUnmatched = []): array
-    {
+    private function meta(
+        string $effectiveQuery,
+        ?string $didYouMean,
+        int $resultCount,
+        array $brandUnmatched = []
+    ): array {
         $variants = array_map(
             static fn (array $tokens): string => implode(' ', $tokens),
             array_slice($this->keyword->variants($effectiveQuery), 1)
@@ -738,7 +746,9 @@ final class SearchController
             }
         }
 
-        return [$productIds, $cosine, $details, $recognized === null ? null : self::entityInfo($recognized, $entity, $signals)];
+        $info = $recognized === null ? null : self::entityInfo($recognized, $entity, $signals);
+
+        return [$productIds, $cosine, $details, $info];
     }
 
     /**
@@ -748,7 +758,10 @@ final class SearchController
      */
     private function recognizeEntities(string $query): ?array
     {
-        if ($this->entities === null || $this->signalsProvider === null || $this->entities->isEmpty() || $query === '') {
+        if (
+            $this->entities === null || $this->signalsProvider === null || $query === ''
+            || $this->entities->isEmpty()
+        ) {
             return null;
         }
         $recognized = $this->entities->recognize($this->keyword->variants($query));
@@ -809,8 +822,13 @@ final class SearchController
      * @param array<string, mixed>|null $entityInfo the brands / platforms recognized (M44)
      * @return array<string, mixed>
      */
-    private function explain(array $results, array $productIds, bool $hybrid, ?array $scored, ?array $entityInfo = null): array
-    {
+    private function explain(
+        array $results,
+        array $productIds,
+        bool $hybrid,
+        ?array $scored,
+        ?array $entityInfo = null
+    ): array {
         $hits = array_column($results, null, 'product_id');
         $rows = [];
         foreach ($productIds as $rank => $id) {

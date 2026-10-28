@@ -37,8 +37,12 @@ final class TokenStats
      * @param array<string, int> $frequencies token => number of products
      * @param list<string> $stopwords raw words; normalized here
      */
-    public function __construct(int $total = 0, array $frequencies = [], float $genericRatio = 0.15, array $stopwords = [])
-    {
+    public function __construct(
+        int $total = 0,
+        array $frequencies = [],
+        float $genericRatio = 0.15,
+        array $stopwords = []
+    ) {
         $this->total = max(0, $total);
         $this->frequencies = $frequencies;
         $this->genericRatio = $genericRatio;

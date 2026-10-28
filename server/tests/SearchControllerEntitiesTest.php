@@ -26,7 +26,10 @@ final class SearchControllerEntitiesTest extends DatabaseTestCase
         parent::setUp();
         $this->dataDir = TempTree::path('m44_data');
         mkdir($this->dataDir, 0777, true);
-        file_put_contents($this->dataDir . '/aliases.json', json_encode([['شیامی', 'شیائومی', 'xiaomi']], JSON_UNESCAPED_UNICODE));
+        file_put_contents(
+            $this->dataDir . '/aliases.json',
+            json_encode([['شیامی', 'شیائومی', 'xiaomi']], JSON_UNESCAPED_UNICODE)
+        );
         $this->entities(true);
         Synonyms::clearCache();
         QueryEntities::clearCache();
@@ -53,7 +56,9 @@ final class SearchControllerEntitiesTest extends DatabaseTestCase
         }
         file_put_contents($path, json_encode([
             'version' => 1,
-            'brands' => [['name' => 'xiaomi', 'count' => 1], ['name' => 'asus', 'count' => 1], ['name' => 'lg', 'count' => 1]],
+            'brands' => [
+                ['name' => 'xiaomi', 'count' => 1], ['name' => 'asus', 'count' => 1], ['name' => 'lg', 'count' => 1],
+            ],
             'platforms' => ['ps4' => ['ps4', 'playstation 4'], 'xbox' => ['xbox one']],
         ], JSON_UNESCAPED_UNICODE));
         QueryEntities::clearCache();
@@ -65,7 +70,9 @@ final class SearchControllerEntitiesTest extends DatabaseTestCase
         $config = Config::defaults();
         $config['paths']['data'] = $this->dataDir;
         $config['search'] = $search + $config['search'];
-        $vps = $vectors === null ? null : FakeVps::client(['products' => $vectors, 'queries' => ['*' => [1.0, 0.0, 0.0]]]);
+        $vps = $vectors === null
+            ? null
+            : FakeVps::client(['products' => $vectors, 'queries' => ['*' => [1.0, 0.0, 0.0]]]);
 
         return SearchController::fromConfig($this->pdo, $config, $vps);
     }
@@ -73,7 +80,8 @@ final class SearchControllerEntitiesTest extends DatabaseTestCase
     private function load(): void
     {
         (new ProductLoader($this->pdo, 'products'))->load([
-            ['product_id' => 1, 'title' => 'مانیتور گیمینگ ایسوس ۲۷ اینچ', 'brand' => 'Asus', 'stock' => 1, 'popularity' => 100],
+            ['product_id' => 1, 'title' => 'مانیتور گیمینگ ایسوس ۲۷ اینچ', 'brand' => 'Asus', 'stock' => 1,
+                'popularity' => 100],
             ['product_id' => 2, 'title' => 'مانیتور ال جی ۲۷ اینچ', 'brand' => 'LG', 'stock' => 1, 'popularity' => 90],
             ['product_id' => 3, 'title' => 'گوشی موبایل ردمی', 'brand' => 'Xiaomi', 'stock' => 1, 'popularity' => 80],
         ]);
@@ -102,7 +110,8 @@ final class SearchControllerEntitiesTest extends DatabaseTestCase
         $out = $this->controller()->search(['q' => 'مانیتور ال'], true);
 
         self::assertNull($out['debug']['entities']);
-        self::assertNull($this->pdo->query('SELECT brand_unmatched FROM search_logs ORDER BY id DESC LIMIT 1')->fetchColumn());
+        $logged = $this->pdo->query('SELECT brand_unmatched FROM search_logs ORDER BY id DESC LIMIT 1');
+        self::assertNull($logged->fetchColumn());
     }
 
     public function testAPlatformNoCandidateAnswersTheRestOfTheQueryWithKeepsTheOrder(): void
@@ -155,7 +164,8 @@ final class SearchControllerEntitiesTest extends DatabaseTestCase
             ['product_id' => 2, 'title' => 'fifa ps4 standard', 'popularity' => 1],
         ]);
 
-        $out = $this->controller(['entity_boost' => 0.0, 'entity_demote' => 0.0])->search(['q' => 'fifa ps4 deluxe'], true);
+        $controller = $this->controller(['entity_boost' => 0.0, 'entity_demote' => 0.0]);
+        $out = $controller->search(['q' => 'fifa ps4 deluxe'], true);
 
         self::assertSame([1, 2], $out['product_ids']);
         self::assertNull($out['debug']['entities']);
@@ -184,7 +194,10 @@ final class SearchControllerEntitiesTest extends DatabaseTestCase
             ['product_id' => 1, 'title' => 'کنسول پلی استیشن یک ترابایت', 'category' => 'کنسول', 'popularity' => 900],
             ['product_id' => 2, 'title' => 'ماوس ریزر', 'category' => 'لوازم جانبی گیمینگ', 'popularity' => 5],
         ]);
-        file_put_contents($this->dataDir . '/' . TokenStats::FILE, json_encode(['version' => 1, 'n' => 10, 'df' => ['بازی' => 6]]));
+        file_put_contents(
+            $this->dataDir . '/' . TokenStats::FILE,
+            json_encode(['version' => 1, 'n' => 10, 'df' => ['بازی' => 6]], JSON_UNESCAPED_UNICODE)
+        );
         $without = $this->controller()->search(['q' => 'بازی یک']);
 
         file_put_contents(

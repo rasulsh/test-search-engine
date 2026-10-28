@@ -140,17 +140,21 @@ final class QueryEntities
     }
 
     /**
-     * The brands and platforms a query names, from its tokens and the alias variants of them.
+     * The brands and platforms a query names, from its tokens and the alias variants of them, and `rest`:
+     * the words of the query that are not that brand / platform ("مانیتور" in "مانیتور شیامی").
      *
      * @param list<list<string>> $variants the query's token lists, the literal one first
-     * @return array{brands: list<string>, platforms: list<string>}
+     * @return array{brands: list<string>, platforms: list<string>, rest: list<string>}
      */
     public function recognize(array $variants): array
     {
         $brands = [];
         $platforms = [];
+        $rest = null;
         foreach ($variants as $tokens) {
             $count = count($tokens);
+            $outside = [];
+            $any = false;
             for ($start = 0; $start < $count;) {
                 $matched = 0;
                 for ($length = min($this->longest, $count - $start); $length > 0 && $matched === 0; $length--) {
@@ -168,18 +172,31 @@ final class QueryEntities
                     }
                     $matched = $found ? $length : 0;
                 }
+                if ($matched === 0) {
+                    $outside[] = $tokens[$start];
+                }
+                $any = $any || $matched > 0;
                 $start += max(1, $matched);
+            }
+            if ($any && $rest === null) {
+                $rest = $outside;
             }
         }
 
-        return ['brands' => array_map('strval', array_keys($brands)), 'platforms' => array_map('strval', array_keys($platforms))];
+        return [
+            'brands'    => array_map('strval', array_keys($brands)),
+            'platforms' => array_map('strval', array_keys($platforms)),
+            'rest'      => $rest ?? [],
+        ];
     }
 
     /**
      * Per candidate: +1 when it carries a recognized brand / platform, -1 when it carries another one
-     * and none of the recognized, 0 when it names none. A dimension is `active` when some candidate is +1.
+     * and none of the recognized, 0 when it names none. A dimension is `active` when some candidate is +1
+     * and also holds the rest of the query (a Xiaomi phone does not answer "مانیتور شیامی": nothing of the
+     * brand matches the rest, so the other brands' monitors keep their places).
      *
-     * @param array{brands: list<string>, platforms: list<string>} $recognized
+     * @param array{brands: list<string>, platforms: list<string>, rest?: list<string>} $recognized
      * @param array<int, array<string, mixed>> $signals product_id => normalized `brand`, `title`, `tags`, `category`
      * @return array{active: array{brand: bool, platform: bool}, status: array<int, array{brand: int, platform: int}>}
      */
@@ -200,8 +217,10 @@ final class QueryEntities
                 $own = $this->platformsOf($signal);
                 $platform = $own === [] ? 0 : (array_intersect_key($own, $platforms) !== [] ? 1 : -1);
             }
-            $active['brand'] = $active['brand'] || $brand === 1;
-            $active['platform'] = $active['platform'] || $platform === 1;
+            if (($brand === 1 || $platform === 1) && $this->holdsRest($signal, $recognized['rest'] ?? [])) {
+                $active['brand'] = $active['brand'] || $brand === 1;
+                $active['platform'] = $active['platform'] || $platform === 1;
+            }
             $status[(int) $id] = ['brand' => $brand, 'platform' => $platform];
         }
 
@@ -233,6 +252,37 @@ final class QueryEntities
         usort($ids, static fn (int $a, int $b): int => [$rank($a), $order[$a]] <=> [$rank($b), $order[$b]]);
 
         return $ids;
+    }
+
+    /**
+     * True when every word of $rest starts a word of the product's title, tags, category or brand.
+     *
+     * @param array<string, mixed> $signal
+     * @param list<string> $rest
+     */
+    private function holdsRest(array $signal, array $rest): bool
+    {
+        if ($rest === []) {
+            return true;
+        }
+        $words = Tokenizer::split(
+            ($signal['title'] ?? '') . ' ' . ($signal['tags'] ?? '') . ' ' . ($signal['category'] ?? '')
+            . ' ' . ($signal['brand'] ?? '')
+        );
+        foreach ($rest as $token) {
+            $found = false;
+            foreach ($words as $word) {
+                if (str_starts_with($word, $token)) {
+                    $found = true;
+                    break;
+                }
+            }
+            if (!$found) {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     /**

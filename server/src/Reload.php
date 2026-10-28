@@ -218,6 +218,8 @@ final class Reload
         // Searches in this worker re-read synonyms.json (and the alias file) at once.
         Synonyms::clearCache();
         IntentMap::clearCache();
+        TokenStats::clearCache();
+        QueryEntities::clearCache();
 
         // The swap is committed; warming the speller is best-effort. Other
         // workers pick up the new file on their own (the cache key is the file's
@@ -380,6 +382,16 @@ final class Reload
         $intentPath = $this->incomingDir . '/' . IntentMap::FILE;
         if (is_file($intentPath) && IntentMap::parse((string) file_get_contents($intentPath)) === null) {
             throw new ReloadException('invalid_intent_map', ['file' => IntentMap::FILE]);
+        }
+        // M44: token_df.json and entities.json are optional (a bundle built before them has none), but a
+        // present one must parse, so a broken file fails the reload instead of silently switching off.
+        $statsPath = $this->incomingDir . '/' . TokenStats::FILE;
+        if (is_file($statsPath) && TokenStats::parse((string) file_get_contents($statsPath)) === null) {
+            throw new ReloadException('invalid_token_df', ['file' => TokenStats::FILE]);
+        }
+        $entitiesPath = $this->incomingDir . '/' . QueryEntities::FILE;
+        if (is_file($entitiesPath) && QueryEntities::parse((string) file_get_contents($entitiesPath)) === null) {
+            throw new ReloadException('invalid_entities', ['file' => QueryEntities::FILE]);
         }
     }
 

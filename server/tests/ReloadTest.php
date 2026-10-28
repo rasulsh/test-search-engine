@@ -269,6 +269,10 @@ final class ReloadTest extends DatabaseTestCase
     {
         yield 'intent map entry not an object' => [\App\IntentMap::FILE, '{"a": ["x"]}', 'invalid_intent_map'];
         yield 'intent map unknown field' => [\App\IntentMap::FILE, '{"a": {"colour": ["x"]}}', 'invalid_intent_map'];
+        yield 'token df wrong version' => [\App\TokenStats::FILE, '{"version": 9, "n": 3, "df": {}}', 'invalid_token_df'];
+        yield 'token df count not a number' => [\App\TokenStats::FILE, '{"version": 1, "n": 3, "df": {"a": "x"}}', 'invalid_token_df'];
+        yield 'entities brand without a count' => [\App\QueryEntities::FILE, '{"version": 1, "brands": [{"name": "a"}], "platforms": {}}', 'invalid_entities'];
+        yield 'entities platform not a list' => [\App\QueryEntities::FILE, '{"version": 1, "brands": [], "platforms": {"ps4": "x"}}', 'invalid_entities'];
         yield 'synonym term not a string' => [Synonyms::SYNONYMS_FILE, '[["laptop", 5]]', 'invalid_synonyms'];
     }
 

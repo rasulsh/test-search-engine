@@ -41,6 +41,7 @@ final class Logger
 
     /** Longest values the VARCHAR columns hold; longer text is cut, not rejected. */
     private const TEXT_LIMIT = 512;
+    private const BRAND_LIMIT = 190;
 
     private PDO $pdo;
     private string $table;
@@ -74,7 +75,8 @@ final class Logger
      *     lat_keyword_ms?: ?int,
      *     lat_vector_ms?: ?int,
      *     lat_spell_ms?: ?int,
-     *     is_suspicious?: bool
+     *     is_suspicious?: bool,
+     *     brand_unmatched?: ?string
      * } $entry
      */
     public function log(array $entry): void
@@ -126,6 +128,9 @@ final class Logger
             'lat_vector_ms'  => $entry['lat_vector_ms'] ?? null,
             'lat_spell_ms'   => $entry['lat_spell_ms'] ?? null,
             'is_suspicious'  => ($entry['is_suspicious'] ?? false) ? 1 : 0,
+            'brand_unmatched' => isset($entry['brand_unmatched'])
+                ? mb_substr((string) $entry['brand_unmatched'], 0, self::BRAND_LIMIT)
+                : null,
             'is_duplicate'   => $this->isDuplicate($session, $values['normalized_q'], $page) ? 1 : 0,
         ];
 
@@ -218,7 +223,8 @@ final class Logger
                     ADD COLUMN IF NOT EXISTS lat_vector_ms INT UNSIGNED DEFAULT NULL,
                     ADD COLUMN IF NOT EXISTS lat_spell_ms INT UNSIGNED DEFAULT NULL,
                     ADD COLUMN IF NOT EXISTS is_suspicious TINYINT(1) NOT NULL DEFAULT 0,
-                    ADD COLUMN IF NOT EXISTS is_duplicate TINYINT(1) NOT NULL DEFAULT 0"
+                    ADD COLUMN IF NOT EXISTS is_duplicate TINYINT(1) NOT NULL DEFAULT 0,
+                    ADD COLUMN IF NOT EXISTS brand_unmatched VARCHAR(190) DEFAULT NULL"
             );
         } catch (PDOException) {
             // Another request added them first, or the user cannot alter.

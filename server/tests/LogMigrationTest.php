@@ -132,6 +132,26 @@ final class LogMigrationTest extends DatabaseTestCase
             ->fetchColumn());
     }
 
+    private function brandUnmatched(string $suffix): string
+    {
+        return (string) file_get_contents(
+            self::repoRoot() . '/db/migrations/2026-10-28_search_logs_brand_unmatched' . $suffix . '.sql'
+        );
+    }
+
+    public function testTheBrandUnmatchedMigrationRunsTwiceAndItsDownFileRemovesTheColumn(): void
+    {
+        $this->pdo->exec($this->brandUnmatched(''));
+        $this->pdo->exec($this->brandUnmatched(''));
+        self::assertContains('brand_unmatched', $this->columns());
+        self::assertDoesNotMatchRegularExpression('/DROP\s+(COLUMN|INDEX)/i', $this->brandUnmatched(''));
+
+        $this->pdo->exec($this->brandUnmatched('.down'));
+        $this->pdo->exec($this->brandUnmatched('.down'));
+        self::assertSame(self::OLD_COLUMNS, $this->columns());
+        self::assertSame('old row', $this->pdo->query('SELECT raw_q FROM search_logs')->fetchColumn());
+    }
+
     public function testSchemaSqlMatchesTheMigration(): void
     {
         $this->pdo->exec('DROP TABLE search_logs');
@@ -143,6 +163,7 @@ final class LogMigrationTest extends DatabaseTestCase
         $this->pdo->exec('DROP TABLE search_events');
         $this->setUp();
         $this->pdo->exec($this->up());
+        $this->pdo->exec($this->brandUnmatched(''));
 
         self::assertEqualsCanonicalizing($fromSchema, $this->columns());
         self::assertEqualsCanonicalizing($schemaIndexes, array_merge($this->indexes(), ['idx_ts_result']));

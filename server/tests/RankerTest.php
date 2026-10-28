@@ -455,6 +455,7 @@ final class RankerTest extends TestCase
                 'keyword_weight' => 0.4, 'semantic_weight' => 0.6, 'min_relevance' => 0.45, 'stock_boost' => 0.1,
                 'popularity_boost' => 0.2, 'brand_match_boost' => 0.15, 'category_match_boost' => 0.1,
                 'tag_match_boost' => 0.05, 'tag_match_min_tokens' => 3, 'tail_cap' => 40,
+                'entity_boost' => 0.0, 'entity_demote' => 0.0,
             ],
             $settings
         );

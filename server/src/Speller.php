@@ -349,9 +349,20 @@ final class Speller
                 $corrected[] = $token;
                 continue;
             }
-            $candidate = $this->bestCandidate($token);
-            if ($candidate !== null && $candidate !== $token) {
-                $corrected[] = $candidate;
+            // A model name with a number ("redeption2", "ps4"): the word is corrected, the number stays
+            // attached; a word too short to correct ("fc27") is left as typed.
+            $digits = '';
+            $word = $token;
+            if (preg_match('/^(\p{L}+)(\d+)$/u', $token, $m) === 1) {
+                [, $word, $digits] = $m;
+                if (isset($this->vocabulary[$word]) || mb_strlen($word) < self::MIN_CORRECTED) {
+                    $corrected[] = $token;
+                    continue;
+                }
+            }
+            $candidate = $this->bestCandidate($word);
+            if ($candidate !== null && $candidate !== $word) {
+                $corrected[] = $candidate . $digits;
                 $changed = true;
             } else {
                 $corrected[] = $token;
@@ -363,7 +374,30 @@ final class Speller
         }
         $suggestion = implode(' ', $corrected);
 
-        return $suggestion === $normalizedQuery ? null : $suggestion;
+        // A suggestion that loses a number the shopper typed ("gta 5" -> "gta") is a different product.
+        if ($suggestion === $normalizedQuery || !self::keepsDigits($normalizedQuery, $suggestion)) {
+            return null;
+        }
+
+        return $suggestion;
+    }
+
+    /** True when every digit of $input is also in $suggestion (counted, so "2" and "22" differ). */
+    private static function keepsDigits(string $input, string $suggestion): bool
+    {
+        $count = static function (string $text): array {
+            preg_match_all('/\d/u', $text, $matches);
+
+            return array_count_values($matches[0]);
+        };
+        $kept = $count($suggestion);
+        foreach ($count($input) as $digit => $times) {
+            if (($kept[$digit] ?? 0) < $times) {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     private function bestCandidate(string $token): ?string

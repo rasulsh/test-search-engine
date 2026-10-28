@@ -208,7 +208,8 @@ final class SpellerLatencyGuardTest extends DatabaseTestCase
     private function typo(string $word): string
     {
         $chars = mb_str_split($word);
-        $chars[intdiv(count($chars), 2)] = '7';
+        // A letter: a stray digit is a number the speller must keep (M44), not a typo it may drop.
+        $chars[intdiv(count($chars), 2)] = 'q';
 
         return implode('', $chars);
     }

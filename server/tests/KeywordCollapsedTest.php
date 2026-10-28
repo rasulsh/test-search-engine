@@ -178,14 +178,19 @@ final class KeywordCollapsedTest extends DatabaseTestCase
 
     public function testSoftAndPartialsRankBelowTheCollapsedHit(): void
     {
-        // With soft AND on (the default), the "cry*" prefix of "crystal" is a partial
-        // match of "far cry": it follows every full-coverage hit, the collapsed one included.
+        // With soft AND on (the default), a product holding the word "far" is a partial match of
+        // "far cry": it follows every full-coverage hit, the collapsed one included. The 3-letter
+        // prefix "cry*" is no partial match of "crystal" any more (M44: such a prefix is noise).
+        (new ProductLoader($this->pdo, 'products'))->load([
+            ['product_id' => 20, 'title' => 'Far Horizon', 'popularity' => 1],
+        ]);
         $hits = $this->keyword(9.0, 5, 4)->search('far cry');
         $ids = array_column($hits, 'product_id');
 
-        $partial = array_search(self::SOFAR_CRYSTAL, $ids, true);
+        $partial = array_search(20, $ids, true);
         self::assertNotFalse($partial);
         self::assertSame(Keyword::MATCH_PARTIAL, $hits[$partial]['match_type']);
+        self::assertNotContains(self::SOFAR_CRYSTAL, $ids);
         foreach ([self::FAR_CRY_6, self::FAR_CRY_TAG, self::FARCRY_5] as $id) {
             self::assertLessThan($partial, array_search($id, $ids, true), "product {$id}");
         }

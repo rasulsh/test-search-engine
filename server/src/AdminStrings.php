@@ -242,6 +242,8 @@ final class AdminStrings
                     'normalization_version_mismatch' => 'نسخهٔ نرمال‌سازی بسته با نسخهٔ کد یکی نیست؛ بسته باید دوباره ساخته شود.',
                     'invalid_synonyms' => 'فایل synonyms.json در بسته نامعتبر است.',
                     'invalid_intent_map' => 'فایل intent_map.json در بسته نامعتبر است.',
+                    'invalid_token_df' => 'فایل token_df.json در بسته نامعتبر است.',
+                    'invalid_entities' => 'فایل entities.json در بسته نامعتبر است.',
                     'count_mismatch' => 'تعداد محصولات در meta.json با تعداد ردیف‌های جدول موقت (و در بسته‌های قدیمی، با فهرست بردارها) یکی نیست.',
                     'missing_index' => 'فایل vectors.idx در بسته نیست.',
                     'missing_vectors' => 'فایل vectors.bin در بسته نیست.',

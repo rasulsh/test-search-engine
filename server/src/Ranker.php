@@ -41,6 +41,11 @@ namespace App;
  * candidates but never let a brand or category flood the results with items the
  * relevance rejected.
  *
+ * Entities (M44): when the query names a brand or a platform (QueryEntities), a candidate carrying it is lifted
+ * by entity_boost and one carrying another brand / platform demoted by entity_demote (both after the floor,
+ * as a factor on the relevance; nothing is removed by them), and a solid keyword hit of another brand than the
+ * recognized one loses its floor exemption. A dimension counts only when some candidate carries the entity.
+ *
  * Tail cap (M43): after the sort, every solid row is kept but only the first `tail_cap` of the
  * other rows (semantic-only neighbours and weak keyword hits), so a broad query does not trail
  * off into hundreds of loosely related products. 0 turns the cap off.
@@ -57,6 +62,8 @@ final class Ranker
     private float $tagMatchBoost;
     private int $tagMatchMinTokens;
     private int $tailCap;
+    private float $entityBoost;
+    private float $entityDemote;
 
     public function __construct(
         float $stockBoost = 0.1,
@@ -68,7 +75,9 @@ final class Ranker
         float $categoryMatchBoost = 0.0,
         float $tagMatchBoost = 0.0,
         int $tagMatchMinTokens = 2,
-        int $tailCap = 0
+        int $tailCap = 0,
+        float $entityBoost = 0.0,
+        float $entityDemote = 0.0
     ) {
         $this->stockBoost = max(0.0, $stockBoost);
         $this->popularityBoost = max(0.0, $popularityBoost);
@@ -80,6 +89,8 @@ final class Ranker
         $this->tagMatchBoost = max(0.0, $tagMatchBoost);
         $this->tagMatchMinTokens = max(1, $tagMatchMinTokens);
         $this->tailCap = max(0, $tailCap);
+        $this->entityBoost = max(0.0, $entityBoost);
+        $this->entityDemote = min(1.0, max(0.0, $entityDemote));
     }
 
     /** @return array<string, float|int> the knobs, for the debug breakdown */
@@ -96,6 +107,8 @@ final class Ranker
             'tag_match_boost'     => $this->tagMatchBoost,
             'tag_match_min_tokens' => $this->tagMatchMinTokens,
             'tail_cap'            => $this->tailCap,
+            'entity_boost'        => $this->entityBoost,
+            'entity_demote'       => $this->entityDemote,
         ];
     }
 
@@ -115,6 +128,10 @@ final class Ranker
      * @param array{categories?: list<string>, tags?: list<string>} $intent normalized category / tag
      *        names the query's intent words map to (IntentMap, M34): they count as if the query
      *        had named that category / tag, through the same boosts (no extra knob)
+     * @param array{
+     *     active?: array{brand: bool, platform: bool},
+     *     status?: array<int, array{brand: int, platform: int}>
+     * } $entity QueryEntities::statuses() of the candidates; empty when the query names no brand / platform
      * @return list<array{
      *     product_id: int, score: float, keyword: bool, detail?: array<string, mixed>
      * }> best first
@@ -128,7 +145,8 @@ final class Ranker
         float $solidCosine = 0.0,
         array $variants = [],
         bool $explain = false,
-        array $intent = []
+        array $intent = [],
+        array $entity = []
     ): array {
         $categoryVariants = $variants;
         foreach ($intent['categories'] ?? [] as $name) {
@@ -142,7 +160,13 @@ final class Ranker
             $maxPopularity = max($maxPopularity, $signal['popularity']);
         }
 
-        $exempt = array_flip($solid);
+        $active = $entity['active'] ?? ['brand' => false, 'platform' => false];
+        $status = $entity['status'] ?? [];
+        // A solid hit of another brand than the one the query names is no longer safe from the floor.
+        $exempt = array_flip(array_values(array_filter(
+            $solid,
+            static fn (int $id): bool => !($active['brand'] && ($status[$id]['brand'] ?? 0) < 0)
+        )));
         $rows = [];
         foreach (array_keys($keywordScores + $cosines) as $id) {
             $keyword = $maxKeyword > 0.0 ? max(0.0, $keywordScores[$id] ?? 0.0) / $maxKeyword : 0.0;
@@ -164,7 +188,15 @@ final class Ranker
                 'category'   => $this->categoryMatchBoost * (int) $category,
                 'tag'        => $this->tagMatchBoost * (int) $tag,
             ];
-            $score = $relevance * (1.0 + array_sum($boosts));
+            $lifted = 0;
+            $demoted = 0;
+            foreach (['brand', 'platform'] as $dimension) {
+                $value = $active[$dimension] ? ($status[$id][$dimension] ?? 0) : 0;
+                $lifted += $value > 0 ? 1 : 0;
+                $demoted += $value < 0 ? 1 : 0;
+            }
+            $entityFactor = (1.0 + $this->entityBoost * $lifted) * (1.0 - $this->entityDemote * $demoted);
+            $score = $relevance * (1.0 + array_sum($boosts)) * $entityFactor;
             $row = ['product_id' => $id, 'score' => $score, 'keyword' => isset($keywordScores[$id])];
             if ($explain) {
                 $row['detail'] = [
@@ -182,6 +214,13 @@ final class Ranker
                     'boosts'    => array_map(static fn (float $b): float => round($b, 4), $boosts),
                     'score'     => round($score, 4),
                 ];
+                if ($active['brand'] || $active['platform']) {
+                    $row['detail']['entity'] = [
+                        'brand'    => $status[$id]['brand'] ?? 0,
+                        'platform' => $status[$id]['platform'] ?? 0,
+                        'factor'   => round($entityFactor, 4),
+                    ];
+                }
             }
             $rows[] = $row;
         }

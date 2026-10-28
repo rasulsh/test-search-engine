@@ -23,7 +23,7 @@ final class KeywordAllTermsTest extends DatabaseTestCase
     private const TITLE_RED_KEYBOARD = 4; // both words, adjacent, in the title
     private const DESC_RED_KEYBOARD = 5;  // keyboard title, red only in the description
     private const RED_HEADSET = 6;        // red in the title, not a keyboard
-    private const BLACK_K2 = 7;           // short model token (LIKE path), black
+    private const BLACK_K2 = 7;           // short model token (whole-word path), black
     private const EN_RED_KEYBOARD = 8;    // English title only (alias variant)
     private const EN_BLACK_KEYBOARD = 9;
 
@@ -181,7 +181,7 @@ final class KeywordAllTermsTest extends DatabaseTestCase
         }
     }
 
-    public function testAnyTermsOnTheLikePath(): void
+    public function testAnyTermsWithAShortToken(): void
     {
         $results = $this->keyword()->search('k2 قرمز', null, false);
         $types = array_column($results, 'match_type', 'product_id');

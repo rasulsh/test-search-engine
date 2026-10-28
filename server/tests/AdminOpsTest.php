@@ -262,7 +262,7 @@ final class AdminOpsTest extends DatabaseTestCase
     {
         $reasons = AdminStrings::fa()['ops']['reasons'];
         $known = ['busy', 'nothing_to_roll_back', 'missing_meta', 'invalid_meta',
-            'normalization_version_mismatch', 'invalid_synonyms', 'invalid_intent_map',
+            'normalization_version_mismatch', 'invalid_synonyms', 'invalid_intent_map', 'invalid_token_df', 'invalid_entities',
             'count_mismatch', 'missing_index', 'missing_vectors', 'vectors_size_mismatch', 'checksum_mismatch',
             'missing_staging_table', 'missing_load_sql', 'staging_load_failed', 'unexpected_statement',
             'directory_swap_failed', 'lock_unavailable', 'redis_off', 'redis_unreachable', 'vps_off', 'internal'];

@@ -109,7 +109,8 @@ final class SearchControllerStructuredTest extends DatabaseTestCase
         $out = $this->controller()->search(['q' => self::SSD_QUERY], true);
 
         $debug = $out['debug'];
-        self::assertSame(['tier', 'settings', 'results'], array_keys($debug));
+        self::assertSame(['tier', 'settings', 'entities', 'results'], array_keys($debug));
+        self::assertNull($debug['entities'], 'the query names no brand or platform');
         self::assertSame('hybrid', $debug['tier']);
         self::assertSame(0.15, $debug['settings']['brand_match_boost']);
         self::assertCount(count($out['product_ids']), $debug['results']);

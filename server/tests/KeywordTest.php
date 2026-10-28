@@ -59,21 +59,21 @@ final class KeywordTest extends DatabaseTestCase
         self::assertSame([1009], $this->ids($strict->search('sony headphones')));
     }
 
-    public function testLikeFallbackForShortEnglishToken(): void
+    public function testShortEnglishTokenIsAWholeWordOfTheTitle(): void
     {
         $results = $this->keyword->search('tv');
 
         self::assertSame([1013], $this->ids($results));
-        self::assertSame('like', $results[0]['match_type']);
+        self::assertSame(Keyword::MATCH_TITLE, $results[0]['match_type']);
     }
 
-    public function testLikeFallbackForShortPersianTokenOrdersByPopularity(): void
+    public function testShortPersianTokenOrdersByPopularity(): void
     {
         $results = $this->keyword->search('لپ');
 
-        // Both laptop rows contain "لپ"; ordered by popularity: 1008 (680), 1006 (480).
+        // Both laptop titles hold the word "لپ"; ordered by popularity: 1008 (680), 1006 (480).
         self::assertSame([1008, 1006], $this->ids($results));
-        self::assertSame('like', $results[0]['match_type']);
+        self::assertSame(Keyword::MATCH_TITLE, $results[0]['match_type']);
     }
 
     public function testNormalizationFindsZwnjTermViaFulltext(): void

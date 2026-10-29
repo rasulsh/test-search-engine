@@ -226,9 +226,18 @@ swapped neighbour pair (`battel` → `battle`) wins; a short token's candidate m
 share its first letter (`gtavi` is not `atari`); what is left after dropping letters
 from the token (`کالاف` → `کالا`) and the words of `search.suggest_blocklist` are
 never offered. An owner alias written with other spacing (`رزیدنتاویل` for
-`رزیدنت اویل`) is tried before any of this, and the keyboard-layout fix only runs
-for a query of plain words (no digit or hyphen) and needs a result naming the
-remapped words in its title or tags.
+`رزیدنت اویل`) is tried before any of this.
+
+**Keyboard-layout fix.** The map is the standard Windows Persian layout (ISIRI 9147): the 26 letter keys plus the punctuation
+keys `;`→ک `'`→گ `,`→و `[`→ج `]`→چ `\`→پ and Shift+C→ژ (`pipeline/keyword.py` `PERSIAN_KEYBOARD` and `Keymap.php` are
+the same table, a test compares them). Arabic ي / ك are unified to ی / ک first. A word is remapped when it is letters and
+those keys, optionally followed by digits (`gta6`, `سن۵`); a word with a hyphen or a leading digit (`HF-1502`) is a model code
+and stays, and so do standalone numbers (`لفش ۶` → `gta ۶`, the normalizer folds the digit). A remap is accepted only if it has
+more full-coverage hits than the literal query and a result names all its words in the title or tags. When it fails that test
+the speller runs on the **remapped** text (not the gibberish) and its correction is accepted under the same test; the speller's
+own rules (first letter of a short token, distance) are unchanged. When a remap or a spelling suggestion is applied (the
+literal query had no full match), the VPS receives the applied text, so the hybrid results match the corrected query. The
+result-cache key stays the literal normalized query (the corrected answer is a function of it).
 Bundles built before M9 still work, but their dictionary includes description
 words; rebuild to get the high-signal one. The dictionary is cached
 like the vectors: parsed once per PHP worker, and stored in APCu (about 3 MB for

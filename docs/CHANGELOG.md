@@ -10,6 +10,14 @@ holds overrides). A **renamed** key keeps working for two releases (its value is
 config doctor / status page warn with the new name. A **removed** key is ignored; the doctor says why and that the
 line can be deleted. `php server/tools/config-check.php` lists all of it.
 
+## Keyboard-layout recovery
+
+- **Config**: no key added, removed, renamed or re-defaulted.
+- **Behaviour**: the layout map gains `;` `'` `,` `[` `]` `\` and Shift+C; Arabic ي / ك are unified first; digits no longer
+  disable the remap (letter runs are remapped, digits kept); a failed remap is followed by one spelling pass on the remapped
+  text; an applied correction is what the VPS embeds. `keymap.json` in the bundle now lists 33 keys; rebuild to refresh it
+  (the server does not read that file).
+
 ## M44: query understanding and evaluation
 
 - **Added**:

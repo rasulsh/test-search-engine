@@ -201,7 +201,7 @@ def test_build_keymap_round_trips() -> None:
 
     assert keymap["en_to_fa"]["a"] == "ش"
     assert keymap["fa_to_en"]["ش"] == "a"
-    assert len(keymap["en_to_fa"]) == 26
+    assert len(keymap["en_to_fa"]) == 33
 
 
 def test_spellcheck_lines_format() -> None:

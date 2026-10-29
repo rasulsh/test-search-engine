@@ -414,14 +414,14 @@ final class SearchController
         $cosineScores = null;
         $explanation = null;
 
-        // Boost words come from the query that produced the results: the applied
+        // Boost words and the VPS query come from the text that produced the results: the applied
         // suggestion when the literal query matched nothing.
         $boostQuery = $applied && $didYouMean !== null ? $didYouMean : $normalized;
 
         // Tier 2 is additive: only reshuffle when the VPS answered. Otherwise the
         // keyword ordering above stands.
         $stage = microtime(true);
-        $semantic = $this->semantic($normalized);
+        $semantic = $this->semantic($boostQuery);
         $timing['vector'] = $semanticOn && $normalized !== '' ? self::elapsedMs($stage) : null;
         $recognized = $this->recognizeEntities($boostQuery);
         $entityInfo = null;
@@ -871,15 +871,22 @@ final class SearchController
         ));
     }
 
+    /** @param list<array{match_type: string, name_all?: bool}> $rows */
+    private function acceptsLayoutCandidate(array $rows, int $baseline): bool
+    {
+        return $this->fullCoverageCount($rows) > $baseline && in_array(true, array_column($rows, 'name_all'), true);
+    }
+
     /**
      * Try the owner's alias spelling first, then keyboard-layout remaps, then spell
      * correction. Returns the alternative's results and the suggestion, or empty
      * + null when no alternative returns more than $baseline results.
      *
-     * A keyboard-layout remap is only credible for a query of plain words (a model
-     * code such as "HF-1502" or "GM 2025" is not mistyped Persian) and only when
-     * a result names the remapped words in its title or tags: matches found in
-     * descriptions alone are coincidences of a few letters.
+     * A keyboard-layout remap only touches words of letters (and the layout's punctuation keys,
+     * with trailing digits kept; a hyphenated code such as "HF-1502" is not mistyped Persian)
+     * and is only accepted when a result names the remapped words in its title or tags:
+     * matches found in descriptions alone are coincidences of a few letters. A remap that fails
+     * that test gets one spelling pass on the remapped text, under the same test.
      *
      * @return array{
      *     0: list<array{product_id: int, score: float, match_type: string}>,
@@ -896,22 +903,29 @@ final class SearchController
             }
         }
 
-        $candidates = preg_match('/[\p{N}-]/u', $raw) === 1 ? [] : [Keymap::enToFa($raw), Keymap::faToEn($raw)];
-        foreach ($candidates as $candidate) {
+        // Digits stay as typed ("لفش ۶" -> "gta 6"); the acceptance test below is the safety net.
+        $speller = null;
+        foreach ([Keymap::enToFa($raw), Keymap::faToEn($raw)] as $candidate) {
             $candidateNormalized = ($this->normalize)($candidate);
             if ($candidateNormalized === '' || $candidateNormalized === $normalized) {
                 continue;
             }
             $alternative = $this->keyword->search($candidate, $limit);
-            if (
-                $this->fullCoverageCount($alternative) > $baseline
-                && in_array(true, array_column($alternative, 'name_all'), true)
-            ) {
+            if ($this->acceptsLayoutCandidate($alternative, $baseline)) {
                 return [$alternative, $candidateNormalized];
+            }
+            // The layout is right but the shopper also mistyped: correct the remapped text, not the gibberish.
+            $speller ??= ($this->spellerFactory)();
+            $corrected = $speller->suggest($candidateNormalized);
+            if ($corrected !== null && $corrected !== $candidateNormalized) {
+                $alternative = $this->keyword->search($corrected, $limit);
+                if ($this->acceptsLayoutCandidate($alternative, $baseline)) {
+                    return [$alternative, $corrected];
+                }
             }
         }
 
-        $suggestion = ($this->spellerFactory)()->suggest($normalized);
+        $suggestion = ($speller ?? ($this->spellerFactory)())->suggest($normalized);
         if ($suggestion !== null && $suggestion !== $normalized) {
             $alternative = $this->keyword->search($suggestion, $limit);
             if ($this->fullCoverageCount($alternative) > $baseline) {

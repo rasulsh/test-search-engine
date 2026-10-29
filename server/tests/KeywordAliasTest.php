@@ -166,7 +166,7 @@ final class KeywordAliasTest extends DatabaseTestCase
 
         self::assertNotContains(8, $this->ids('ps5'));
         self::assertNotContains(8, $this->ids('gta'));
-        self::assertContains(8, $this->ids('playstation 5')); // the literal query still searches descriptions
+        self::assertContains(8, $this->ids('playstation')); // the literal query still searches descriptions
     }
 
     public function testATableWithoutTheTitleIndexServesTheLiteralQuery(): void

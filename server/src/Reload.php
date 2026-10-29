@@ -82,7 +82,7 @@ final class Reload
         return $this->locked(function () use ($willLoadStaging): array {
             $meta = $this->readMeta();
             $this->assertCompatible($meta);
-            $this->assertGroupFiles();
+            $this->assertGroupFiles($meta);
             if ($willLoadStaging) {
                 $path = $this->incomingDir . '/' . StagingLoader::LOAD_FILE;
                 if (!is_file($path)) {
@@ -185,7 +185,7 @@ final class Reload
     {
         $meta = $this->readMeta();
         $this->assertCompatible($meta);
-        $this->assertGroupFiles();
+        $this->assertGroupFiles($meta);
         if ($loadStaging) {
             (new StagingLoader($this->pdo, $this->stagingTable))
                 ->load($this->incomingDir . '/' . StagingLoader::LOAD_FILE);
@@ -218,6 +218,8 @@ final class Reload
         // Searches in this worker re-read synonyms.json (and the alias file) at once.
         Synonyms::clearCache();
         IntentMap::clearCache();
+        TokenStats::clearCache();
+        QueryEntities::clearCache();
 
         // The swap is committed; warming the speller is best-effort. Other
         // workers pick up the new file on their own (the cache key is the file's
@@ -372,7 +374,7 @@ final class Reload
      * aliases.json is ignored (M41): the owner's aliases live in storage/aliases.json, which a
      * reload never reads, validates or writes.
      */
-    private function assertGroupFiles(): void
+    private function assertGroupFiles(array $meta): void
     {
         if (!$this->groupsFileParses(Synonyms::SYNONYMS_FILE)) {
             throw new ReloadException('invalid_synonyms', ['file' => Synonyms::SYNONYMS_FILE]);
@@ -380,6 +382,27 @@ final class Reload
         $intentPath = $this->incomingDir . '/' . IntentMap::FILE;
         if (is_file($intentPath) && IntentMap::parse((string) file_get_contents($intentPath)) === null) {
             throw new ReloadException('invalid_intent_map', ['file' => IntentMap::FILE]);
+        }
+        // M44: token_df.json and entities.json are optional (a bundle built before them has none), but a
+        // present one must parse, carry the version meta.json names and (token_df) count the same products,
+        // so a broken file fails the reload instead of silently switching the feature off.
+        $statsPath = $this->incomingDir . '/' . TokenStats::FILE;
+        if (is_file($statsPath)) {
+            $stats = TokenStats::parse((string) file_get_contents($statsPath));
+            if (
+                $stats === null || $stats['n'] !== (int) ($meta['count'] ?? -1)
+                || (int) ($meta['token_df_version'] ?? TokenStats::VERSION) !== TokenStats::VERSION
+            ) {
+                throw new ReloadException('invalid_token_df', ['file' => TokenStats::FILE]);
+            }
+        }
+        $entitiesPath = $this->incomingDir . '/' . QueryEntities::FILE;
+        if (
+            is_file($entitiesPath)
+            && (QueryEntities::parse((string) file_get_contents($entitiesPath)) === null
+                || (int) ($meta['entities_version'] ?? QueryEntities::VERSION) !== QueryEntities::VERSION)
+        ) {
+            throw new ReloadException('invalid_entities', ['file' => QueryEntities::FILE]);
         }
     }
 

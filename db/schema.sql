@@ -91,6 +91,8 @@ CREATE TABLE IF NOT EXISTS search_logs (
     lat_spell_ms   INT UNSIGNED    DEFAULT NULL,
     is_suspicious  TINYINT(1)      NOT NULL DEFAULT 0,
     is_duplicate   TINYINT(1)      NOT NULL DEFAULT 0,
+    -- M44: the brand(s) the query named that none of the candidates carries ("asked for, not stocked").
+    brand_unmatched VARCHAR(190)   DEFAULT NULL,
     PRIMARY KEY (id),
     KEY idx_ts (ts),
     -- M31: keeps the analytics zero-result window scan and grouped counts cheap.

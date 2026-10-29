@@ -49,6 +49,8 @@ final class Synonyms
     private string $version;
     /** @var list<string> */
     private array $aliasTokens;
+    /** @var array<string, true> */
+    private array $aliasTokenSet;
 
     /**
      * @param list<list<string>> $groups
@@ -59,6 +61,7 @@ final class Synonyms
     {
         $this->version = $version;
         $this->aliasTokens = $aliasTokens;
+        $this->aliasTokenSet = array_fill_keys($aliasTokens, true);
         foreach ($groups as $group) {
             $terms = [];
             foreach ($group as $term) {
@@ -228,6 +231,26 @@ final class Synonyms
         return $this->aliasTokens;
     }
 
+    /** True when $token is a word of one of the owner's alias terms. */
+    public function hasAliasToken(string $token): bool
+    {
+        return isset($this->aliasTokenSet[$token]);
+    }
+
+    /**
+     * The alias / synonym terms (as phrases) that are in the same group as the term $phrase, or
+     * none. The term itself is not included.
+     *
+     * @return list<string>
+     */
+    public function alternativesOf(string $phrase): array
+    {
+        return array_map(
+            static fn (array $tokens): string => implode(' ', $tokens),
+            $this->alternatives[$phrase] ?? []
+        );
+    }
+
     /** Drop cached maps (POST /reload, after the swap). */
     public static function clearCache(): void
     {
@@ -284,7 +307,7 @@ final class Synonyms
                 }
             }
             if ($length === 0) {
-                $spelling = $this->otherSpelling($tokens, $start);
+                $spelling = $this->otherSpelling($tokens, $start) ?? $this->spacedTerm($tokens, $start);
                 if ($spelling === null) {
                     $start++;
                     continue;
@@ -359,6 +382,27 @@ final class Synonyms
         }
 
         return [$length, array_merge([explode(' ', $other)], $this->alternatives[$other])];
+    }
+
+    /**
+     * A run of two or more query words that reads like an alias term once the spaces are ignored
+     * ("play station 4" for the term "playstation 4"), with the term and its group as replacements.
+     *
+     * @param list<string> $tokens
+     * @return array{0: int, 1: list<list<string>>}|null [span length, replacements]
+     */
+    private function spacedTerm(array $tokens, int $start): ?array
+    {
+        $count = count($tokens);
+        for ($length = min($this->longestPhrase + 2, $count - $start); $length >= 2; $length--) {
+            $span = array_slice($tokens, $start, $length);
+            $phrase = $this->byCollapsed[Normalizer::collapse(implode('', $span))] ?? null;
+            if ($phrase !== null && $phrase !== implode(' ', $span) && isset($this->alternatives[$phrase])) {
+                return [$length, array_merge([explode(' ', $phrase)], $this->alternatives[$phrase])];
+            }
+        }
+
+        return null;
     }
 
     /**

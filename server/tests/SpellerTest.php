@@ -227,7 +227,8 @@ final class SpellerTest extends TestCase
         // when the alphabet exceeds the 255 byte codes (fallback path).
         mt_srand(20260922);
         $persian = mb_str_split('ابپتثجچحخدذرزژسشصضطظعغفقکگلمنوهی');
-        $latin = str_split('abcde0123');
+        // No digits: a suggestion that loses a digit is rejected (M44), which the reference below does not model.
+        $latin = str_split('abcdefghi');
         $cjk = [];
         for ($c = 0x4E00; $c < 0x4E00 + 300; $c++) {
             $cjk[] = mb_chr($c);

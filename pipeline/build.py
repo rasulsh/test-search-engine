@@ -7,8 +7,9 @@
 Input is a simple, documented shape (NOT the raw OpenCart export); see docs/PIPELINE.md for
 the columns and how to derive them from OpenCart. Output is the bundle the server
 consumes (CLAUDE.md sec. 4): products.load.sql, synonyms.json, intent_map.json, spellcheck.txt,
-keymap.json, meta.json. The owner's aliases live on the server (server/storage/aliases.json,
-edited in the admin panel); the build neither reads nor ships them. The bundle carries no
+keymap.json, token_df.json, entities.json (M44), meta.json. The owner's aliases live on the
+server (server/storage/aliases.json, edited in the admin panel); the build neither reads nor
+ships them. The bundle carries no
 vectors since M42: the product vectors for the semantic tier are built with --vps-out.
 """
 
@@ -511,10 +512,23 @@ def build_bundle(
         encoding="utf-8",
     )
 
+    # M44: query-side statistics (token weights, brand / platform lexicons). Both are optional on
+    # the server; meta.json versions them so /reload can check the files against the code.
+    token_df = _keyword.build_token_df(server_rows)
+    (out / "token_df.json").write_text(
+        json.dumps(token_df, ensure_ascii=False, separators=(",", ":")) + "\n", encoding="utf-8"
+    )
+    (out / "entities.json").write_text(
+        json.dumps(_keyword.build_entities(server_rows), ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+
     meta = {
         "normalization_version": int(config["model"]["normalization_version"]),
         "count": len(products),
         "built_at": datetime.now(UTC).isoformat(),
+        "token_df_version": _keyword.TOKEN_DF_VERSION,
+        "entities_version": _keyword.ENTITIES_VERSION,
     }
     (out / "meta.json").write_text(
         json.dumps(meta, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"

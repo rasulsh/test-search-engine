@@ -11,6 +11,8 @@ A standalone two-tier product-search service for an OpenCart 2.0.3.1 storefront 
 | [docs/PIPELINE.md](docs/PIPELINE.md) | Offline build, the bundle format, the data model (specs, tags, brand, category, normalization, the M23 space-collapse field) and the OpenCart export (`db_export.py`) |
 | [docs/RUNTIME-FLOW.md](docs/RUNTIME-FLOW.md) | The actual end-to-end runtime of `POST /search`, stage by stage (cache, keyword, did-you-mean, VPS, hybrid ranking, log), the component / data map and the degradation ladder |
 | [docs/SEARCH-BEHAVIOR.md](docs/SEARCH-BEHAVIOR.md) | How a query is matched, ranked and corrected: field weights, aliases, soft AND, SKU, "did you mean", the hybrid blend |
+| [docs/EVALUATION.md](docs/EVALUATION.md) | Measure a search change: build a golden set from the logs, run `tools/eval/run_eval.php` (success@k, MRR, nDCG@k), compare two runs |
+| [docs/INTENT-MAP-TODO.md](docs/INTENT-MAP-TODO.md) | Intent-map candidate keys the owner maps to the real category / tag names |
 | [docs/ALIASES.md](docs/ALIASES.md) | Offline LLM alias generator: Persian spellings of English names, review, merge, rebuild, and the zero-result loop (`logs-export.php` → `gen_aliases.py --queries-file`) |
 | [docs/TRAINING-COLAB.md](docs/TRAINING-COLAB.md) | **Rebuild / retrain end to end on Google Colab** (export, upload, build, download), the recommended build path |
 | [docs/runbook.md](docs/runbook.md) | Quick step-by-step rebuild and deploy: export, Colab build, VPS update, cPanel update (commands only) |

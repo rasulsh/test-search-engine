@@ -83,7 +83,7 @@ The cPanel bundle carries no vectors and no model since M42 (the semantic tier's
 | key | default | meaning |
 | --- | --- | --- |
 | `search.default_limit` | 20 | results when the request has no `limit` |
-| `search.min_token_size` | 3 | mirror the host's `innodb_ft_min_token_size`; queries with a shorter token use the LIKE fallback |
+| `search.min_token_size` | 3 | mirror the host's `innodb_ft_min_token_size`. A shorter token ("2", "rx") is never a substring scan since M44: a short number joins the word before it (`ps 4` / `ps4`), any other short token is a whole word of the title or tags ([SEARCH-BEHAVIOR.md](SEARCH-BEHAVIOR.md#short-tokens)) |
 | `search.title_weight` / `search.desc_weight` / `search.phrase_bonus` | 10 / 1 / 5 | field weighting and the adjacent-in-title bonus |
 | `search.spec_weight` | 6 | token found only in attributes / feature titles |
 | `search.tag_weight` / `search.brand_weight` / `search.category_weight` | 8 / 7 / 5 | M21 fields (tags just below the title) |
@@ -103,6 +103,8 @@ The cPanel bundle carries no vectors and no model since M42 (the semantic tier's
 | `search.suggest_max_distance` | 1 | maximum edits of a "did you mean" (M43; was 2). Two edits are still allowed for a Latin token of 8+ characters whose first letter is kept (`kaybourd` → `keyboard`); on any other token a second edit jumped between unrelated words. Setting 2 here restores the old behaviour for every token over 4 characters |
 | `search.suggest_blocklist` | `کالا,عدد,باب,…` | comma-separated generic words never offered as "did you mean" |
 | `search.synonym_blocklist` | empty | M43: comma-separated terms (normalized like the file); a **build-derived** synonym group (`synonyms.json`) holding one is dropped at runtime, which is how a bad generated group is removed without editing build output (a rebuild would bring it back). The owner's aliases are never filtered. Part of the result-cache version, so a change invalidates cached answers |
+| `search.generic_df_ratio` | 0.15 | M44: a token held by more than this share of the catalog's titles and tags (from the bundle's `token_df.json`) is **generic** (`بازی`, `کارت`): it never makes a product a keyword match by itself and adds only a small score. `0` turns the frequency rule off (the stopwords still apply). Needs a bundle built with M44; without `token_df.json` only the stopwords are generic ([SEARCH-BEHAVIOR.md](SEARCH-BEHAVIOR.md#generic-tokens)) |
+| `search.stopwords` | `خرید,قیمت,مدل,نوع,یک,با,برای,و,از,buy,price,for,with,and,the` | M44: comma-separated words that are generic whatever the catalog says (normalized like the query). Keep it to words no product is named by: `play`, `one`, `pro` are product words and stay out |
 | `search.query_max_chars` | 100 | longer queries are cut before the keyword, spell and VPS stages |
 | `search.query_max_tokens` | 8 | likewise, in words |
 | `search.result_cap` | 300 | a result list this long is logged with `is_capped = 1` |
@@ -119,6 +121,9 @@ The cPanel bundle carries no vectors and no model since M42 (the semantic tier's
 | `search.brand_match_boost` / `search.category_match_boost` / `search.tag_match_boost` | 0.15 / 0.1 / 0.1 | M21 match boosts (0 disables one) |
 | `search.intent_max_terms` | `4` | most intent-map keys applied to one query ([intent map](SEARCH-BEHAVIOR.md#intent-map), M34). The mapped categories / tags use the two boosts above; there is no separate knob |
 | `search.tag_match_min_tokens` | 2 | shortest query that phrase-matches tags |
+| `search.entities_enabled` | 1 | M44: master switch of brand / platform recognition ([SEARCH-BEHAVIOR.md](SEARCH-BEHAVIOR.md#entities)). Needs the bundle's `entities.json`; without it nothing is recognized |
+| `search.entity_boost` | 0.15 | M44: a candidate carrying the brand / platform the query names is lifted by this factor (`1 + boost` per dimension), after the floor |
+| `search.entity_demote` | 0.10 | M44: a candidate carrying another brand / platform is lowered by this factor (`1 - demote` per dimension); nothing is removed. Both knobs at `0` (or `entities_enabled=0`) disable the feature, including the loss of the floor exemption |
 | `search.latency_budget_ms` | 800 | the documented server-side latency target per request (M43; was 200). **The runtime never enforces it**: nothing is cut or timed out at this number; it is a target for the go-live measurements and a reference value, not a limit. The CI latency guards keep their own fixed 200 ms bar |
 
 ### VPS client (`vps` section)

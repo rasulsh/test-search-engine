@@ -132,12 +132,12 @@ final class KeywordFieldWeightingTest extends DatabaseTestCase
         self::assertSame(self::BUNDLE, array_column($results, 'product_id')[2]);
     }
 
-    public function testLikeFallbackUsesTheSameFieldWeighting(): void
+    public function testAShortTokenUsesTheSameFieldWeighting(): void
     {
-        // "4" is below min_token_size, so this takes the LIKE path.
+        // "4" is below min_token_size: a whole word of the title, no substring scan (M44).
         $results = $this->keyword()->search('شاک 4');
 
-        self::assertSame('like', $results[0]['match_type']);
+        self::assertSame('fulltext', $results[0]['match_type']);
         self::assertSame(self::CONTROLLER, $results[0]['product_id']);
         self::assertTrue($results[0]['title_match']);
     }

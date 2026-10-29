@@ -215,12 +215,13 @@ def test_build_bundle_format_and_determinism(tmp_path: Path) -> None:
     meta = build.build_bundle(products, tmp_path / "b1", config)
 
     # M42: no model, no vectors; /reload checks the version and the count.
-    assert set(meta) == {"normalization_version", "count", "built_at"}
+    assert set(meta) == {"normalization_version", "count", "built_at",
+                         "token_df_version", "entities_version"}
     assert meta["count"] == 6
     assert meta["normalization_version"] == NORMALIZATION_VERSION
 
     for name in ("products.load.sql", "synonyms.json", "intent_map.json", "spellcheck.txt",
-                 "keymap.json", "meta.json"):
+                 "keymap.json", "token_df.json", "entities.json", "meta.json"):
         assert (tmp_path / "b1" / name).exists()
     assert not (tmp_path / "b1" / "vectors.bin").exists()
     assert not (tmp_path / "b1" / "vectors.idx").exists()

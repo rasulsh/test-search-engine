@@ -34,14 +34,21 @@ final class AnalyticsInsights
     private PDO $pdo;
     private string $logs;
     private string $events;
+    private ?string $products;
     /** @var array<string, true>|null */
     private ?array $columns = null;
 
-    public function __construct(PDO $pdo, string $searchLogsTable, string $searchEventsTable)
-    {
+    /** @param string|null $productsTable the catalog table the silent-failure rows read their first result's title from */
+    public function __construct(
+        PDO $pdo,
+        string $searchLogsTable,
+        string $searchEventsTable,
+        ?string $productsTable = null
+    ) {
         $this->pdo = $pdo;
         $this->logs = Identifier::quote($searchLogsTable);
         $this->events = Identifier::quote($searchEventsTable);
+        $this->products = $productsTable === null ? null : Identifier::quote($productsTable);
     }
 
     /** True when the log table has the v2 columns (the migration, or the Logger, added them). */
@@ -73,6 +80,7 @@ final class AnalyticsInsights
             'did_you_mean' => $this->suggestions($from, $to, $limit),
             'alias_candidates' => array_slice($pairs, 0, $limit),
             'silent_failures' => $this->silentFailures($from, $to, $limit),
+            'brand_unmatched' => $this->brandUnmatched($from, $to, $limit),
             'demand_gap' => $this->demandGap($from, $to, $limit, $resolved),
             'trending' => $this->trending($from, $to, $previousFrom, $limit),
             'suspicious' => $this->suspicious($from, $to),
@@ -417,7 +425,12 @@ final class AnalyticsInsights
      * Frequent queries that return results nobody clicks: the answer looks like a hit and is not
      * ("gtavi" showing Atari products). Empty while no click was ever tracked in the range.
      *
-     * @return list<array{query: string, searches: int, clicks: int, ctr: float, avg_results: float}>
+     * Each row names the first product the query's latest search returned (`top_id`, `top_title`), so the
+     * owner can judge at a glance whether the answer was right.
+     *
+     * @return list<array{
+     *     query: string, searches: int, clicks: int, ctr: float, avg_results: float, top_id: ?int, top_title: string
+     * }>
      */
     public function silentFailures(?string $from, ?string $to, int $limit): array
     {
@@ -447,10 +460,100 @@ final class AnalyticsInsights
             return [];
         }
 
+        $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
+        $top = $this->topResults(array_map(static fn (array $r): string => (string) $r['q'], $rows));
+
         return array_map(
             static fn (array $r): array => [
                 'query' => (string) $r['q'], 'searches' => (int) $r['n'], 'clicks' => (int) $r['clicked'],
                 'ctr' => self::pct((int) $r['clicked'], (int) $r['n']), 'avg_results' => round((float) $r['avg'], 1),
+                'top_id' => $top[(string) $r['q']]['id'] ?? null,
+                'top_title' => $top[(string) $r['q']]['title'] ?? '',
+            ],
+            $rows
+        );
+    }
+
+    /**
+     * The first result of each query's latest search that had results, with its title (cut to 120 characters).
+     *
+     * @param list<string> $queries normalized queries
+     * @return array<string, array{id: int, title: string}> by query; a query whose product is gone is left out
+     */
+    private function topResults(array $queries): array
+    {
+        if ($queries === [] || $this->products === null) {
+            return [];
+        }
+        try {
+            $latest = $this->pdo->prepare(
+                "SELECT top_ids FROM {$this->logs} WHERE normalized_q = ? AND result_count > 0 AND is_suspicious = 0"
+                . ' ORDER BY ts DESC, id DESC LIMIT 1'
+            );
+            $ids = [];
+            foreach ($queries as $query) {
+                $latest->execute([$query]);
+                $first = (int) explode(',', (string) $latest->fetchColumn())[0];
+                if ($first > 0) {
+                    $ids[$query] = $first;
+                }
+            }
+            if ($ids === []) {
+                return [];
+            }
+            $unique = array_values(array_unique($ids));
+            $stmt = $this->pdo->prepare(
+                "SELECT product_id, title FROM {$this->products} WHERE product_id IN ("
+                . implode(',', array_fill(0, count($unique), '?')) . ')'
+            );
+            $stmt->execute($unique);
+            $titles = $stmt->fetchAll(PDO::FETCH_KEY_PAIR);
+        } catch (PDOException $e) {
+            error_log('analytics: silent failure titles unavailable: ' . $e->getMessage());
+
+            return [];
+        }
+        $top = [];
+        foreach ($ids as $query => $id) {
+            if (isset($titles[$id])) {
+                $top[$query] = ['id' => $id, 'title' => mb_substr((string) $titles[$id], 0, 120)];
+            }
+        }
+
+        return $top;
+    }
+
+    /**
+     * Brands a query named that none of the candidates carried ("asked for, not stocked", M44), most searched
+     * first: the brand as the query named it, its unique searches, one example query and the last search.
+     * Empty while the log table has no `brand_unmatched` column.
+     *
+     * @return list<array{brand: string, searches: int, example: string, last_seen: string}>
+     */
+    public function brandUnmatched(?string $from, ?string $to, int $limit): array
+    {
+        if (!$this->hasColumn('brand_unmatched')) {
+            return [];
+        }
+        [$where, $params] = $this->v2($from, $to, ['is_duplicate = 0', 'brand_unmatched IS NOT NULL']);
+        $limit = min(100, max(1, $limit));
+        try {
+            $stmt = $this->pdo->prepare(
+                'SELECT brand_unmatched AS b, COUNT(*) AS n,'
+                . ' MAX(COALESCE(NULLIF(normalized_q, \'\'), raw_q)) AS example,'
+                . " MAX(ts) AS last FROM {$this->logs}{$where} GROUP BY b ORDER BY n DESC, b LIMIT {$limit}"
+            );
+            $stmt->execute($params);
+        } catch (PDOException $e) {
+            error_log('analytics: unmatched brands unavailable: ' . $e->getMessage());
+
+            return [];
+        }
+
+        return array_map(
+            static fn (array $r): array => [
+                'brand' => (string) $r['b'], 'searches' => (int) $r['n'],
+                'example' => (string) $r['example'], 'last_seen' => (string) $r['last'],
             ],
             $stmt->fetchAll(PDO::FETCH_ASSOC)
         );

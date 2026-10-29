@@ -70,6 +70,7 @@ final class SearchController
     private int $queryMaxChars;
     private int $queryMaxTokens;
     private int $resultCap;
+    private ?QueryEntities $entities;
 
     /**
      * @param callable(): Speller $spellerFactory Built lazily (a catalog scan),
@@ -99,7 +100,8 @@ final class SearchController
         string $dataVersion = '',
         int $queryMaxChars = 100,
         int $queryMaxTokens = 8,
-        int $resultCap = 300
+        int $resultCap = 300,
+        ?QueryEntities $entities = null
     ) {
         $this->keyword = $keyword;
         $this->logger = $logger;
@@ -120,6 +122,7 @@ final class SearchController
         $this->queryMaxChars = $queryMaxChars;
         $this->queryMaxTokens = $queryMaxTokens;
         $this->resultCap = $resultCap;
+        $this->entities = $entities;
     }
 
     /**
@@ -147,6 +150,8 @@ final class SearchController
 
         $synonyms = self::synonymsFromConfig($config);
         $keyword = self::keywordFromConfig($pdo, $config, $synonyms);
+        $entitiesOn = (bool) $search['entities_enabled']
+            && ((float) $search['entity_boost'] > 0.0 || (float) $search['entity_demote'] > 0.0);
         // The bundle dictionary is cached per worker (and in APCu); the table scan
         // is only a fallback for a data directory without spellcheck.txt.
         $dictionaryPath = $config['paths']['data'] . '/' . Speller::DICTIONARY_FILE;
@@ -170,7 +175,8 @@ final class SearchController
                 return [];
             }
             $placeholders = implode(',', array_fill(0, count($ids), '?'));
-            $query = static fn (string $columns): string => 'SELECT product_id, stock, popularity' . $columns
+            $query = static fn (string $columns): string => 'SELECT product_id, stock, popularity, normalized_title'
+                . $columns
                 . ' FROM ' . Identifier::quote($productsTable) . ' WHERE product_id IN (' . $placeholders . ')';
             try {
                 $texts = ', normalized_brand, normalized_category, normalized_tags';
@@ -189,6 +195,7 @@ final class SearchController
                 $signals[(int) $row['product_id']] = [
                     'stock'      => (int) $row['stock'],
                     'popularity' => (int) $row['popularity'],
+                    'title'      => (string) $row['normalized_title'],
                 ] + ($withTexts ? [
                     'brand'    => (string) $row['normalized_brand'],
                     'category' => (string) $row['normalized_category'],
@@ -216,7 +223,9 @@ final class SearchController
                 (float) $search['category_match_boost'],
                 (float) $search['tag_match_boost'],
                 (int) $search['tag_match_min_tokens'],
-                (int) $search['tail_cap']
+                (int) $search['tail_cap'],
+                $entitiesOn ? (float) $search['entity_boost'] : 0.0,
+                $entitiesOn ? (float) $search['entity_demote'] : 0.0
             ),
             $signalsProvider,
             (int) $search['semantic_top_k'],
@@ -229,7 +238,8 @@ final class SearchController
             $synonyms->version(),
             (int) $search['query_max_chars'],
             (int) $search['query_max_tokens'],
-            (int) $search['result_cap']
+            (int) $search['result_cap'],
+            $entitiesOn ? QueryEntities::fromDirectory($config['paths']['data'], $synonyms) : null
         );
     }
 
@@ -283,7 +293,12 @@ final class SearchController
             (float) $search['soft_and_min_coverage'],
             (float) $search['soft_and_partial_penalty'],
             (int) $search['soft_and_candidate_cap'],
-            (int) $search['facet_min_products']
+            (int) $search['facet_min_products'],
+            TokenStats::fromDirectory(
+                $config['paths']['data'],
+                (float) $search['generic_df_ratio'],
+                (string) $search['stopwords']
+            )
         );
 
         return $keyword;
@@ -380,8 +395,19 @@ final class SearchController
             $results = $this->keyword->search($query, $limit, false);
             $timing['keyword'] += self::elapsedMs($stage);
         }
+        // A query of generic words only ("بازی خرید") has no keyword answer: the category / tag the owner's
+        // intent map names for it, if it names any. Other queries keep intent words as a boost (M34).
+        if ($results === [] && $this->intentMap !== null && $this->keyword->isGenericOnly($query)) {
+            $intent = $this->intentMap->resolve(
+                $didYouMean !== null && $applied ? $didYouMean : $normalized,
+                $this->intentMaxTerms
+            );
+            if ($intent['categories'] !== [] || $intent['tags'] !== []) {
+                $results = $this->keyword->intentHits($intent['categories'], $intent['tags'], $limit);
+            }
+        }
         $allTermsHits = $multiTerm && $skuIds === [] && $results !== [] && $this->keyword->requiresAllTerms()
-            && !in_array(Keyword::MATCH_PARTIAL, array_column($results, 'match_type'), true);
+            && !array_intersect([Keyword::MATCH_PARTIAL, Keyword::MATCH_INTENT], array_column($results, 'match_type'));
 
         $keywordIds = array_map(static fn (array $row): int => $row['product_id'], $results);
         $productIds = $keywordIds;
@@ -397,8 +423,10 @@ final class SearchController
         $stage = microtime(true);
         $semantic = $this->semantic($normalized);
         $timing['vector'] = $semanticOn && $normalized !== '' ? self::elapsedMs($stage) : null;
+        $recognized = $this->recognizeEntities($boostQuery);
+        $entityInfo = null;
         if ($semantic !== null) {
-            [$productIds, $cosineScores, $explanation] = $this->hybrid(
+            [$productIds, $cosineScores, $explanation, $entityInfo] = $this->hybrid(
                 $results,
                 $skuIds,
                 $semantic,
@@ -406,12 +434,15 @@ final class SearchController
                 !$allTermsHits,
                 $this->keyword->variants($boostQuery),
                 $debug,
-                $this->intentMap?->resolve($boostQuery, $this->intentMaxTerms) ?? []
+                $this->intentMap?->resolve($boostQuery, $this->intentMaxTerms) ?? [],
+                $recognized
             );
+        } elseif ($recognized !== null && $keywordIds !== []) {
+            [$productIds, $entityInfo] = $this->keywordOnlyEntities($recognized, $keywordIds, $skuIds);
         }
 
         $latencyMs = (int) round((microtime(true) - $start) * 1000);
-        $meta = $this->meta($boostQuery, $didYouMean, count($productIds));
+        $meta = $this->meta($boostQuery, $didYouMean, count($productIds), $entityInfo['brand_unmatched'] ?? []);
 
         // Logging is best-effort: a rejected log row (e.g. an over-long query
         // under strict SQL mode) must never fail the search itself.
@@ -442,7 +473,7 @@ final class SearchController
             $response['cosine_scores'] = $cosineScores;
         }
         if ($debug) {
-            $response['debug'] = $this->explain($results, $productIds, $semantic !== null, $explanation);
+            $response['debug'] = $this->explain($results, $productIds, $semantic !== null, $explanation, $entityInfo);
         }
 
         // A result served without the semantic tier that is configured (VPS down,
@@ -469,10 +500,15 @@ final class SearchController
      * which alias / synonym variants the query was expanded into, whether a
      * suggestion was shown, whether the list hit the result cap.
      *
-     * @return array{expanded_q: ?string, alias_hit: bool, dym_shown: bool, is_capped: bool}
+     * @param list<string> $brandUnmatched recognized brands none of the candidates carries
+     * @return array{expanded_q: ?string, alias_hit: bool, dym_shown: bool, is_capped: bool, brand_unmatched: ?string}
      */
-    private function meta(string $effectiveQuery, ?string $didYouMean, int $resultCount): array
-    {
+    private function meta(
+        string $effectiveQuery,
+        ?string $didYouMean,
+        int $resultCount,
+        array $brandUnmatched = []
+    ): array {
         $variants = array_map(
             static fn (array $tokens): string => implode(' ', $tokens),
             array_slice($this->keyword->variants($effectiveQuery), 1)
@@ -483,6 +519,7 @@ final class SearchController
             'alias_hit'  => $variants !== [],
             'dym_shown'  => $didYouMean !== null,
             'is_capped'  => $this->resultCap > 0 && $resultCount >= $this->resultCap,
+            'brand_unmatched' => $brandUnmatched === [] ? null : implode(',', $brandUnmatched),
         ];
     }
 
@@ -590,6 +627,7 @@ final class SearchController
             'alias_hit'    => (bool) ($meta['alias_hit'] ?? false),
             'dym_shown'    => is_string($response['did_you_mean']),
             'is_capped'    => (bool) ($meta['is_capped'] ?? false),
+            'brand_unmatched' => is_string($meta['brand_unmatched'] ?? null) ? $meta['brand_unmatched'] : null,
         ]);
 
         return $response;
@@ -630,7 +668,9 @@ final class SearchController
      * @param bool $explain also return each ranked id's score breakdown (third element)
      * @param array{categories?: list<string>, tags?: list<string>} $intent names the query's intent
      *        words map to (M34)
-     * @return array{0: list<int>, 1: list<?float>, 2: array<int, array<string, mixed>>}
+     * @param array{brands: list<string>, platforms: list<string>}|null $recognized the brands / platforms
+     *        the query names (M44)
+     * @return array{0: list<int>, 1: list<?float>, 2: array<int, array<string, mixed>>, 3: ?array<string, mixed>}
      */
     private function hybrid(
         array $results,
@@ -640,7 +680,8 @@ final class SearchController
         bool $neighbours,
         array $variants,
         bool $explain,
-        array $intent = []
+        array $intent = [],
+        ?array $recognized = null
     ): array {
         $skuSet = array_flip($skuIds);
         $keywordScores = [];
@@ -669,6 +710,7 @@ final class SearchController
         $keywordScores = array_intersect_key($keywordScores, $signals);
         $cosines = array_intersect_key($cosines, $signals);
 
+        $entity = $recognized === null ? [] : $this->entities->statuses($recognized, $signals);
         $effectiveLimit = $limit !== null ? max(1, $limit) : $this->defaultLimit;
         $ranked = $this->ranker->blend(
             $keywordScores,
@@ -679,7 +721,8 @@ final class SearchController
             $this->semanticMinScore,
             $variants,
             $explain,
-            $intent
+            $intent,
+            $entity
         );
         $pinned = array_values(array_intersect($skuIds, array_keys($signals)));
         $productIds = array_slice(
@@ -703,7 +746,69 @@ final class SearchController
             }
         }
 
-        return [$productIds, $cosine, $details];
+        $info = $recognized === null ? null : self::entityInfo($recognized, $entity, $signals);
+
+        return [$productIds, $cosine, $details, $info];
+    }
+
+    /**
+     * The brands / platforms the query names, or null when the feature is off or it names none.
+     *
+     * @return array{brands: list<string>, platforms: list<string>}|null
+     */
+    private function recognizeEntities(string $query): ?array
+    {
+        if (
+            $this->entities === null || $this->signalsProvider === null || $query === ''
+            || $this->entities->isEmpty()
+        ) {
+            return null;
+        }
+        $recognized = $this->entities->recognize($this->keyword->variants($query));
+
+        return $recognized['brands'] === [] && $recognized['platforms'] === [] ? null : $recognized;
+    }
+
+    /**
+     * Without the semantic tier: the keyword hits, those of another brand / platform than the query's
+     * after the rest (exact-SKU hits stay first), and the brand the query names when none of them carries it.
+     *
+     * @param array{brands: list<string>, platforms: list<string>} $recognized
+     * @param list<int> $keywordIds
+     * @param list<int> $skuIds
+     * @return array{0: list<int>, 1: array<string, mixed>}
+     */
+    private function keywordOnlyEntities(array $recognized, array $keywordIds, array $skuIds): array
+    {
+        $signals = ($this->signalsProvider)($keywordIds);
+        $entity = $this->entities->statuses($recognized, $signals);
+        $rest = array_values(array_diff($keywordIds, $skuIds));
+
+        return [
+            array_merge($skuIds, QueryEntities::reorder($rest, $entity)),
+            self::entityInfo($recognized, $entity, $signals),
+        ];
+    }
+
+    /**
+     * @param array{brands: list<string>, platforms: list<string>} $recognized
+     * @param array<string, mixed> $entity QueryEntities::statuses()
+     * @param array<int, mixed> $signals the candidates
+     * @return array<string, mixed>
+     */
+    private static function entityInfo(array $recognized, array $entity, array $signals): array
+    {
+        $active = $entity['active'] ?? ['brand' => false, 'platform' => false];
+
+        return [
+            'brands'          => $recognized['brands'],
+            'platforms'       => $recognized['platforms'],
+            'active'          => $active,
+            // The brand was asked for and no candidate carries it: asked for, not stocked.
+            'brand_unmatched' => $recognized['brands'] !== [] && !$active['brand'] && $signals !== []
+                ? $recognized['brands']
+                : [],
+        ];
     }
 
     /**
@@ -714,10 +819,16 @@ final class SearchController
      * @param list<array<string, mixed>> $results keyword hits
      * @param list<int> $productIds the returned ids, in order
      * @param array<int, array<string, mixed>>|null $scored hybrid detail per id
+     * @param array<string, mixed>|null $entityInfo the brands / platforms recognized (M44)
      * @return array<string, mixed>
      */
-    private function explain(array $results, array $productIds, bool $hybrid, ?array $scored): array
-    {
+    private function explain(
+        array $results,
+        array $productIds,
+        bool $hybrid,
+        ?array $scored,
+        ?array $entityInfo = null
+    ): array {
         $hits = array_column($results, null, 'product_id');
         $rows = [];
         foreach ($productIds as $rank => $id) {
@@ -742,6 +853,7 @@ final class SearchController
         return [
             'tier'     => $hybrid ? Logger::TIER_HYBRID : Logger::TIER_KEYWORD_ONLY,
             'settings' => $this->ranker?->settings(),
+            'entities' => $entityInfo,
             'results'  => $rows,
         ];
     }

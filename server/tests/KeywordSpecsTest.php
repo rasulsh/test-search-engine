@@ -109,14 +109,25 @@ final class KeywordSpecsTest extends DatabaseTestCase
         self::assertSame([self::SPEC], array_column($this->keyword()->search('پاسخ دهی'), 'product_id'));
     }
 
-    public function testLikeFallbackSearchesSpecs(): void
+    public function testAShortNumberIsNeverASubstringOfALongerOne(): void
     {
-        // "54" is below min_token_size, so this takes the LIKE path.
+        // "54" is below min_token_size (M44): it is a whole word of a title or tag, never the start of
+        // "540" in a spec or the middle of a longer token, so only the other word matches (partially).
         $results = $this->keyword()->search('هرتز 54');
 
-        self::assertSame([self::SPEC, self::DESC], array_column($results, 'product_id'));
-        self::assertSame('like', $results[0]['match_type']);
-        self::assertTrue($results[0]['spec_match']);
+        self::assertSame(['partial'], array_values(array_unique(array_column($results, 'match_type'))));
+        self::assertLessThan(1.0, $results[0]['coverage']);
+    }
+
+    public function testAShortNumberIsAWholeWordOfTheTitle(): void
+    {
+        $results = $this->keyword()->search('گیمینگ 27');
+
+        self::assertSame(self::SPEC, $results[0]['product_id']);
+        self::assertSame('fulltext', $results[0]['match_type']);
+        self::assertSame(1.0, $results[0]['coverage']);
+        // The monitor that is only "گیمینگ" (no 27) trails as a partial match.
+        self::assertSame(Keyword::MATCH_PARTIAL, $results[1]['match_type'] ?? null);
     }
 
     public function testTableFromBeforeTheSpecsColumnIsStillSearched(): void
@@ -126,7 +137,7 @@ final class KeywordSpecsTest extends DatabaseTestCase
         $this->pdo->exec('ALTER TABLE products ADD FULLTEXT KEY ft_normalized (normalized_title, normalized_desc)');
         $keyword = $this->keyword();
 
-        foreach (['ASUS ROG', 'rog 54'] as $query) { // FULLTEXT and LIKE paths
+        foreach (['ASUS ROG', 'rog 54'] as $query) { // FULLTEXT only, and FULLTEXT with a short token
             $results = $keyword->search($query);
             self::assertContains(self::DESC, array_column($results, 'product_id'), $query);
             self::assertNotContains(self::SPEC, array_column($results, 'product_id'), $query);

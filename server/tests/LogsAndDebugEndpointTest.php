@@ -168,7 +168,7 @@ final class LogsAndDebugEndpointTest extends TestCase
 
         self::assertSame(200, $status);
         $decoded = json_decode($body, true);
-        self::assertSame(['tier', 'settings', 'results'], array_keys($decoded['debug']));
+        self::assertSame(['tier', 'settings', 'entities', 'results'], array_keys($decoded['debug']));
         self::assertSame('keyword_only', $decoded['debug']['tier']); // no VPS configured
         self::assertSame($decoded['product_ids'], array_column($decoded['debug']['results'], 'product_id'));
         self::assertSame('fulltext', $decoded['debug']['results'][0]['keyword_hit']['match_type']);

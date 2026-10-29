@@ -474,8 +474,10 @@
       quality.push(
         card(C.alias, [table('alias', [H.zero_query, H.then, H.pairs, H.clicks], ['t', 't', 'n', 'n'], r.alias_candidates.map(function (a) {
           return [a.query, a.then, a.pairs, a.clicks]; }), true, T.empty.needs_session)], T.notes.alias, 'alias'),
-        card(C.silent, [table('silent', [H.query, H.searches, H.clicks, H.ctr], ['t', 'n', 'n', 'p'], r.silent_failures.map(function (q) {
-          return [q.query, q.searches, q.clicks, q.ctr]; }), true, e.tracking ? T.empty.rows : T.empty.needs_events)], T.notes.silent, 'silent'),
+        card(C.silent, [table('silent', [H.query, H.top_result, H.searches, H.clicks, H.ctr], ['t', 't', 'n', 'n', 'p'], r.silent_failures.map(function (q) {
+          return [q.query, q.top_title, q.searches, q.clicks, q.ctr]; }), true, e.tracking ? T.empty.rows : T.empty.needs_events)], T.notes.silent, 'silent'),
+        card(C.brand_unmatched, [table('brand_unmatched', [H.brand, H.query, H.searches, H.last_seen], ['t', 't', 'n', 'd'], r.brand_unmatched.map(function (b) {
+          return [b.brand, b.example, b.searches, b.last_seen]; }), true)], T.notes.brand_unmatched, 'brand_unmatched'),
         card(C.gap, [table('gap', [H.query, H.searches, H.last_seen], ['t', 'n', 'd'], rowsOf(r.demand_gap), true)], T.notes.gap, 'gap'),
         card(C.trending, [table('trend', [H.query, H.searches, H.previous, H.growth], ['t', 'n', 'n', 'n'], r.trending.map(function (q) {
           return [q.query, q.searches, q.previous, q.growth]; }), true)], null, 'trending'),

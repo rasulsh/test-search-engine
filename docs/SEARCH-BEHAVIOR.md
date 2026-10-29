@@ -43,6 +43,72 @@ always serves partial matches (products holding every word still rank first,
 also in the hybrid ranking, by their higher keyword score) with the additive neighbours. Server-only: no
 bundle rebuild or schema change.
 
+<a id="short-tokens"></a>**Short tokens (M44).** InnoDB's FULLTEXT cannot see a token shorter than
+`search.min_token_size` (3 on shared cPanel), and the old answer, a `LIKE '%token%'` scan over title,
+specs and description, matched inside other words and long numbers: `gta 2` returned two routers
+(`GT-AX6000` holds "gta" as a prefix and the description holds "2"), `هرتز 54` matched "540". There is no
+substring relevance path any more. In order:
+
+1. **A short number joins the word before it** when that word is Latin or a word of one of the owner's
+   aliases: `ps 4` is also searched as `ps4`, `gta 2` as `gta2`, `fc 26` as `fc26`; the other way round, a
+   letter-digit name with a short number (`gta2`) is also searched spaced. These are ordinary alias
+   variants (counted in `search.alias_max_variants`). Words that read like an alias term once the spaces are
+   ignored meet it too: `play station 4` finds `playstation 4` and, through its alias group, `ps4`.
+2. **Any other short token** (`2` after a Persian word, `rx`, `تی`) is matched only as a **whole word** of
+   the title or the tags, never as a prefix or a substring and never in the description or the specs. With
+   FULLTEXT-sized words in the query the engine finds the candidates and the short token is a whole-word
+   condition on them; a query of short tokens only is one whole-word scan of the covering title index
+   (`match_type: title`, all words required, no partial matches).
+3. In the partial (any-terms) mode a token of exactly `search.min_token_size` letters counts as held only as a
+   whole word (the engine's `gta*` would hold `gtax6000`); longer tokens stay prefixes.
+4. `LIKE` remains only for SKU / model prefixes (`normalized_sku LIKE 'x%'`, not a relevance path) and as the
+   prefilter of the covering-index scans, which a regex always decides.
+
+Server-only; no rebuild. Product descriptions that only mention a short number no longer match it
+(`playstation 5` finds a description mentioning it through `playstation`, not through `5`).
+
+<a id="generic-tokens"></a>**Generic tokens and token weights (M44).** The build writes `token_df.json`:
+for every token seen in at least two products' normalized titles or tags, the number of such products. At query
+time a token's weight is `log(N / (1 + df)) / log(N)` (between 0.2 and 1; a token the file does not list weighs
+the most) and a token held by more than `search.generic_df_ratio` (0.15) of the catalog, or listed in
+`search.stopwords`, is **generic**: weight 0.1 and optional.
+
+- A product has to hold every **non-generic** word (the all-words rule applies to them only), so a result can
+  never qualify on generic words alone. `بازی یک راه خروج` no longer lists PS4 consoles that hold `بازی` and
+  `یک`; a generic word the product holds adds a little score and coverage.
+- The `coverage` the tester shows, the score and the order among partial matches are **weighted**: the held
+  words' weight over the total weight (no single word weighs more than all the others together, so a rare word
+  nothing stocks cannot sink every hit). A hit holding only generic words plus one rare word is not "coverage 1.00"
+  any more; `گیفت کارت apple` lists the Apple card first and a card that holds `گیفت` only trails it as a weaker
+  partial match. Whether a partial match is listed at all still counts the required words
+  (`search.soft_and_min_coverage`).
+- A number is never generic, however common (`4` in `پلی استیشن 4`): it is what tells `ps4` from `ps5`.
+- A query of generic words only (`بازی خرید`) has **no keyword answer**; it falls back to the owner's intent map
+  (the categories / tags it names, if the map lists the phrase) and to the semantic tier, never to a substring scan.
+- A bundle without `token_df.json` has no frequencies: only the stopwords are generic and every other word weighs 1.
+- Tuning: a word every product of a PlayStation shop carries (`پلی استیشن`) can pass `search.generic_df_ratio`; a query
+  made of such words only has no keyword answer (the semantic tier and the intent map answer it). Raise the ratio, or
+  remove the word's effect by adding it to a query with a number or a name, if that bites.
+
+<a id="entities"></a>**Brand and platform recognition (M44).** The build writes `entities.json`: the catalog's brands
+(normalized `brand`, with their product counts) and a short seed list of platforms (`ps5`, `ps4`, `ps3`,
+`xbox_one`, `xbox_series`, `switch`, `pc`, each with its spellings). At query time `QueryEntities` finds, longest
+phrase first and over the query and its alias variants, the brands and platforms the query names; the owner's alias
+groups resolve them, so `شیامی` (an alias of `شیائومی` and `xiaomi`) is the brand `xiaomi` and `پلی استیشن 4` the
+platform `ps4`. A used / new **condition** is not recognized: nothing in the catalog export reliably marks it.
+
+Per candidate, the carried entity is +1 (the product's brand is the named one; its title, tags or category name the
+named platform), another one is -1, none is 0. A dimension is **active** only if some candidate carries the entity
+**and** holds the rest of the query in its title, tags, category or brand (a Xiaomi phone does not answer
+`مانیتور شیامی`); otherwise nothing is lifted or lowered. In the hybrid ranking, after the floor, an active
+dimension multiplies the score by `1 + search.entity_boost` (carries it) or `1 - search.entity_demote` (carries another);
+nothing is removed. One more rule: a **solid** keyword hit of another brand than the named one is no longer exempt from
+the relevance floor. Without the semantic tier the keyword hits are reordered the same way (carriers first,
+the neutral ones next, the others last). When the brand is named and no candidate carries it, the brand is
+reported as `brand_unmatched`: in the debug breakdown (`debug.entities`), on the admin tester page, in
+`search_logs.brand_unmatched` and in the analytics page's "brand asked for, not in the results" table. Setting both
+`entity_boost` and `entity_demote` to 0 (or `search.entities_enabled` to 0) turns it all off.
+
 <a id="soft-and"></a>**Soft AND (M23).** Strict all-words returned nothing as
 soon as one word matched no field: `مدرن وارفار` for the product titled `Call of
 Duty Modern Warfare` (the transliteration `وارفار` is nowhere in the catalog).
@@ -142,7 +208,9 @@ typed with other words, or a partial code, still matches through FULLTEXT
 like any title word. Needs a rebuild + reload (new columns); until then the
 SKU lookup is skipped and text search answers.
 
-**"Did you mean" (`server/src/Speller.php`).** The speller runs only when a
+**"Did you mean" (`server/src/Speller.php`).** (M44: a model name such as `redeption2` is the word `redeption` plus
+the number `2`: the word is corrected and the number stays attached, `redeption2` -> `redemption2`; a word under 4
+letters is left as typed (`fc27`, `ps4`), and a suggestion that would lose any digit of the query is dropped.) The speller runs only when a
 query has fewer than `search.suggest_min_results` keyword hits, and a
 suggestion is returned only if it has more hits than the literal query (with no
 literal hit, its results are served; see `did_you_mean_applied` in

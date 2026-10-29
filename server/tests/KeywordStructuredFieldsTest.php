@@ -137,13 +137,13 @@ final class KeywordStructuredFieldsTest extends DatabaseTestCase
         self::assertTrue($hits[0]['name_all']);
     }
 
-    public function testShortTokensTakeTheLikePathOverTagsToo(): void
+    public function testShortTokensAreWholeWordsOfTheTagsToo(): void
     {
         $hits = (new ProductLoader($this->pdo, 'products'))->load([
             ['product_id' => 20, 'title' => 'بازی', 'tags' => 'GTA V Online', 'popularity' => 1],
         ]);
 
-        // The 1-character token "v" (never a numeral) forces the LIKE scan.
+        // The 1-character token "v" (never a numeral) is a whole word of the tags: no substring scan.
         self::assertSame(1, $hits);
         self::assertSame([20], array_column($this->keyword()->search('gta v'), 'product_id'));
     }

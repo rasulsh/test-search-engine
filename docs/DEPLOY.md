@@ -242,7 +242,7 @@ bundle (no vectors since M42) and packs one `release.zip`, laid out relative to 
 
 | in the zip | what |
 | --- | --- |
-| `data_incoming/` | the bundle: `products.load.sql`, `meta.json`, `spellcheck.txt`, `synonyms.json`, `intent_map.json`, `keymap.json` |
+| `data_incoming/` | the bundle: `products.load.sql`, `meta.json`, `spellcheck.txt`, `synonyms.json`, `intent_map.json`, `keymap.json`, `token_df.json`, `entities.json` (the last two since M44) |
 | `bootstrap.php`, `src/`, `public/`, `tools/config-check.php`, `tools/logs-export.php` | the server code (including `public/install.php` and `public/test.html`), the config doctor and the [log export](SEARCH-API.md#log-export) (M36) |
 | `config.example.php`, `db/schema.sql` | the installer's config template and schema |
 
@@ -475,6 +475,23 @@ folder next to `admin.php` inside your document root (public/); nothing outside 
 web-exposed. No schema or config change. The alias fix ships in the code too (`Synonyms` merges owner
 alias groups that share a term), so no bundle rebuild is needed for it, only the new code and a `/reload`
 (or any worker restart) so the cached alias map is rebuilt.
+
+<a id="upgrading-to-m44"></a>**Upgrading to M44 (query understanding).** Server code first, then the bundle:
+
+1. Upload the new `release.zip` over the service directory (`unzip -o`). `config.php` needs no edit: the new keys
+   (`search.generic_df_ratio`, `search.stopwords`, `search.entities_enabled`, `search.entity_boost`,
+   `search.entity_demote`) default in `App\Config` ([CHANGELOG.md](CHANGELOG.md)).
+2. **Rebuild and upload the bundle** (`release.py`, [TRAINING-COLAB.md](TRAINING-COLAB.md)): it adds `token_df.json` and
+   `entities.json`. The old bundle still loads and searches (short tokens are whole words either way), but without
+   the two files no word is generic except the stopwords, and no brand or platform is recognized.
+3. `POST /reload` (or the panel's operations page). A present but invalid `token_df.json` / `entities.json` is refused
+   with `invalid_token_df` / `invalid_entities`.
+4. **Flush the result cache** (operations page): the cache key does not carry the new settings, so answers computed
+   before the upgrade would otherwise live out their TTL.
+5. Add the `brand_unmatched` column to `search_logs`: `mysql DB < db/migrations/2026-10-28_search_logs_brand_unmatched.sql`
+   (idempotent; the logger also adds it itself on its first write when its database user may ALTER).
+6. Open the status page's effective configuration: the five keys appear with their source. Misspelled brands that matter
+   (`شیامی`) still need an alias in the alias manager.
 
 <a id="upgrading-to-m42"></a>**Upgrading to M42 (no vectors on cPanel, panel polish).** Server code only on the
 cPanel side; nothing to migrate and no `.htaccess` change:
@@ -750,17 +767,18 @@ M0–M5. Verify each item on the production host before wide rollout.
   (M6). On a synthetic 20k catalog (32k-term dictionary) on local MariaDB, a
   warm zero-result request took about **15–20 ms**; the same data on the old
   path took about **350–500 ms**. Check `latency_ms` for zero-result rows in
-  `search_logs` on the host. Short Persian tokens (shorter than
-  `innodb_ft_min_token_size`) use the LIKE fallback, about 150 ms on the same
-  data.
-- [ ] **Specs and the LIKE fallback (M13).** A query with a token shorter than
-  `search.min_token_size` scans every row's title, specs and indexed
-  description. On a synthetic 20k catalog with about 550 characters of specs
-  per product, with the table in memory on local MariaDB 10.11, that path took
-  about **220 ms** (about 105–120 ms without specs); with the table larger
-  than the buffer pool (128 MB default) it was I/O-bound at 600–800 ms. The
-  FULLTEXT path stayed at about 50–60 ms. Measure `latency_ms` for short-token
-  queries on the host with the real specs size.
+  `search_logs` on the host.
+- [ ] **Short-token queries (M44; replaces the LIKE fallback of M13).** A token
+  shorter than `search.min_token_size` is a whole word of the title or tags and
+  never a substring scan: with FULLTEXT-sized words the engine narrows the rows
+  and the short token is a regex on them (about 20-40 ms on a synthetic 20k
+  catalog), a query of short tokens only is one scan of the covering title
+  index (about 10 ms), and a partial (any-terms) search with a short token adds
+  the title-index rows to the engine's (about 120 ms for the strict + partial
+  pair, against 90 ms without the short token; `KeywordLatencyGuardTest`
+  `testShortTokenQueriesStayWithinBudget`). The old scan took 150-800 ms.
+  Measure `latency_ms` for short-token queries on the host with the real specs
+  size.
 - [ ] **APCu availability.** Check `php -m | grep apcu` on the host (CLI and web
   SAPI can differ) and that `apc.shm_size` holds about 3 MB for the spellcheck
   dictionary. Without APCu, each cold worker parses the file once, which is

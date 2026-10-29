@@ -195,6 +195,72 @@ def load_intent_map(path: str | Path) -> dict[str, dict[str, list[str]]]:
     return intents
 
 
+# token_df.json / entities.json format versions; the server (TokenStats::VERSION,
+# QueryEntities::VERSION) rejects a file of another version, and meta.json records both.
+TOKEN_DF_VERSION = 1
+ENTITIES_VERSION = 1
+
+# A token seen in fewer products is left out of token_df.json: an absent token weighs as the rarest.
+TOKEN_DF_MIN_PRODUCTS = 2
+
+# Gaming platforms a query can name: key -> spellings (normalized here). The server adds the
+# owner's alias groups of every spelling at query time, so these only need the canonical names.
+# Short on purpose.
+PLATFORM_SEEDS: dict[str, list[str]] = {
+    "ps5": ["ps5", "playstation 5", "پلی استیشن 5"],
+    "ps4": ["ps4", "playstation 4", "پلی استیشن 4"],
+    "ps3": ["ps3", "playstation 3", "پلی استیشن 3"],
+    "xbox_one": ["xbox one", "ایکس باکس وان"],
+    "xbox_series": ["xbox series", "ایکس باکس سری"],
+    "switch": ["switch", "nintendo switch", "نینتندو سوییچ"],
+    "pc": ["pc"],
+}
+
+
+def build_token_df(rows: Iterable[dict[str, Any]]) -> dict[str, Any]:
+    """Per-token document frequency over the normalized titles and tags: the number of products
+    containing the token (once per product). The server weights a query token by its inverse
+    document frequency and treats a token held by more than search.generic_df_ratio of the
+    catalog as generic."""
+    counts: Counter[str] = Counter()
+    total = 0
+    for row in rows:
+        total += 1
+        counts.update(
+            set(tokenize(str(row.get("normalized_title") or "")))
+            | set(tokenize(str(row.get("normalized_tags") or "")))
+        )
+    return {
+        "version": TOKEN_DF_VERSION,
+        "n": total,
+        "df": {t: n for t, n in sorted(counts.items()) if n >= TOKEN_DF_MIN_PRODUCTS},
+    }
+
+
+def build_entities(rows: Iterable[dict[str, Any]]) -> dict[str, Any]:
+    """The brands the catalog carries (normalized `brand` values, with their product counts) and
+    the platform seeds. Owner aliases ("شیامی" = "xiaomi") are applied by the server at query
+    time: they live in server/storage/aliases.json, not in the bundle (M41). No used / new
+    condition is derived: nothing in the export reliably marks it."""
+    counts: Counter[str] = Counter()
+    for row in rows:
+        brand = " ".join(tokenize(normalize(str(row.get("brand") or ""))))
+        if len(brand) >= 2 and not brand.isdigit():
+            counts[brand] += 1
+    platforms = {
+        key: list(dict.fromkeys(" ".join(tokenize(normalize(term))) for term in terms))
+        for key, terms in PLATFORM_SEEDS.items()
+    }
+    return {
+        "version": ENTITIES_VERSION,
+        "brands": [
+            {"name": name, "count": n}
+            for name, n in sorted(counts.items(), key=lambda item: (-item[1], item[0]))
+        ],
+        "platforms": platforms,
+    }
+
+
 def build_keymap() -> dict[str, dict[str, str]]:
     """Return the bidirectional keyboard-layout map for the bundle."""
     en_to_fa = dict(PERSIAN_KEYBOARD)

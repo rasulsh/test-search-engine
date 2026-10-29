@@ -293,6 +293,20 @@ final class Config
             // Terms (comma separated, normalized): a build-derived synonym group holding one is dropped.
             // Owner aliases are never filtered; add a term here to remove a bad generated group.
             'search.synonym_blocklist'        => ['string', ''],
+            // M44: a token held by more than this share of the catalog's titles and tags is GENERIC
+            // ("بازی", "کارت"): it never qualifies a product by itself and only adds a little score.
+            'search.generic_df_ratio'         => ['float', 0.15],
+            // Words that are generic whatever the catalog says (comma separated, normalized). Keep it to
+            // words no product is named by; "play", "one", "pro" are product words and stay out.
+            'search.stopwords'                => [
+                'string',
+                'خرید,قیمت,مدل,نوع,یک,با,برای,و,از,buy,price,for,with,and,the',
+            ],
+            // M44: a brand / platform the query names lifts its products by entity_boost and demotes the
+            // other brands' / platforms' by entity_demote, after the relevance floor. Both 0 turns it off.
+            'search.entities_enabled'         => ['bool', true],
+            'search.entity_boost'             => ['float', 0.15],
+            'search.entity_demote'            => ['float', 0.10],
             // A longer query is cut before the spell correction and the VPS call.
             'search.query_max_chars'          => ['int', 100],
             'search.query_max_tokens'         => ['int', 8],

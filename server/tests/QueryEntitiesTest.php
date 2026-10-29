@@ -64,7 +64,7 @@ final class QueryEntitiesTest extends TestCase
     public function testAQueryWithNoEntityRecognizesNone(): void
     {
         self::assertSame(
-            ['brands' => [], 'platforms' => [], 'rest' => []],
+            ['brands' => [], 'typed' => [], 'platforms' => [], 'rest' => []],
             $this->entities()->recognize(self::variants('کیبورد مکانیکال'))
         );
     }
@@ -131,6 +131,49 @@ final class QueryEntitiesTest extends TestCase
         self::assertSame([12, 14, 11, 10, 13], QueryEntities::reorder([10, 11, 12, 13, 14], $entity));
         $inactive = ['active' => ['brand' => false, 'platform' => false]] + $entity;
         self::assertSame([10, 11, 12, 13, 14], QueryEntities::reorder([10, 11, 12, 13, 14], $inactive));
+    }
+
+    /** Live evidence: brands reached through a platform term, a publisher suffix or a generic word. */
+    private function liveEntities(): QueryEntities
+    {
+        return new QueryEntities(
+            ['playstation studios', 'xbox game studios', 'nintendo', 'sony'],
+            ['playstation' => ['playstation'], 'xbox' => ['xbox']],
+            new Synonyms([
+                ['playstation', 'پلی استیشن', 'playstation studios'],
+                ['xbox', 'ایکس باکس', 'xbox game studios'],
+                ['گیفت کارت', 'gift card', 'nintendo'],
+                ['نینتندو', 'nintendo'],
+            ])
+        );
+    }
+
+    public function testBrandsReachedFromAPlatformOrGenericWordAreNotRecognizedOrTyped(): void
+    {
+        $generic = static fn (string $phrase): bool => in_array($phrase, ['گیفت کارت', 'دسته'], true);
+        $entities = $this->liveEntities();
+
+        foreach (['پلی استیشن', 'دسته ایکس باکس'] as $query) {
+            $found = $entities->recognize(self::variants($query), $generic);
+            self::assertSame([], $found['brands'], $query);
+            self::assertSame([], $found['typed'], $query);
+            self::assertNotSame([], $found['platforms'], $query);
+        }
+        $found = $entities->recognize(self::variants('گیفت کارت'), $generic);
+        self::assertSame(['nintendo'], $found['brands'], 'still recognized for ranking');
+        self::assertSame([], $found['typed']);
+    }
+
+    public function testATypedBrandOrItsAliasIsReported(): void
+    {
+        $entities = $this->liveEntities();
+
+        self::assertSame(['nintendo'], $entities->recognize(self::variants('نینتندو'))['typed']);
+        self::assertSame(['nintendo'], $entities->recognize(self::variants('nintendo switch'))['typed']);
+        self::assertSame(
+            ['xiaomi'],
+            $this->entities()->recognize(self::variants('مانیتور شیامی'))['typed']
+        );
     }
 
     public function testTheFileIsParsedAndValidated(): void

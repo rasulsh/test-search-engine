@@ -143,15 +143,21 @@ final class QueryEntities
      * The brands and platforms a query names, from its tokens and the alias variants of them, and `rest`:
      * the words of the query that are not that brand / platform ("مانیتور" in "مانیتور شیامی").
      *
+     * `typed` is the subset of `brands` the shopper wrote: the brand phrase, or an alias of it, in the literal
+     * query. A brand reached only through a platform term or a generic word ("گیفت کارت") is not typed.
+     * A publisher-suffix brand ("... studios") is dropped when the query names a platform.
+     *
      * @param list<list<string>> $variants the query's token lists, the literal one first
-     * @return array{brands: list<string>, platforms: list<string>, rest: list<string>}
+     * @param (callable(string): bool)|null $isGeneric true for a phrase made only of generic words
+     * @return array{brands: list<string>, typed: list<string>, platforms: list<string>, rest: list<string>}
      */
-    public function recognize(array $variants): array
+    public function recognize(array $variants, ?callable $isGeneric = null): array
     {
         $brands = [];
+        $typed = [];
         $platforms = [];
         $rest = null;
-        foreach ($variants as $tokens) {
+        foreach ($variants as $index => $tokens) {
             $count = count($tokens);
             $outside = [];
             $any = false;
@@ -160,10 +166,14 @@ final class QueryEntities
                 for ($length = min($this->longest, $count - $start); $length > 0 && $matched === 0; $length--) {
                     $phrase = implode(' ', array_slice($tokens, $start, $length));
                     $found = false;
+                    $viaAlias = isset($this->platformTerms[$phrase]) || ($isGeneric !== null && $isGeneric($phrase));
                     foreach (array_merge([$phrase], $this->synonyms?->alternativesOf($phrase) ?? []) as $term) {
                         if (isset($this->brands[$term])) {
                             $brands[$term] = true;
                             $found = true;
+                            if ($index === 0 && ($term === $phrase || !$viaAlias)) {
+                                $typed[$term] = true;
+                            }
                         }
                     }
                     if (isset($this->platformTerms[$phrase])) {
@@ -183,8 +193,18 @@ final class QueryEntities
             }
         }
 
+        if ($platforms !== []) {
+            $brands = array_filter(
+                $brands,
+                static fn ($_, $name): bool => !str_ends_with((string) $name, ' studios'),
+                ARRAY_FILTER_USE_BOTH
+            );
+        }
+        $typed = array_intersect_key($typed, $brands);
+
         return [
             'brands'    => array_map('strval', array_keys($brands)),
+            'typed'     => array_map('strval', array_keys($typed)),
             'platforms' => array_map('strval', array_keys($platforms)),
             'rest'      => $rest ?? [],
         ];

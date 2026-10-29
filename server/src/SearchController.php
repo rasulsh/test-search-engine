@@ -764,7 +764,10 @@ final class SearchController
         ) {
             return null;
         }
-        $recognized = $this->entities->recognize($this->keyword->variants($query));
+        $recognized = $this->entities->recognize(
+            $this->keyword->variants($query),
+            fn (string $phrase): bool => $this->keyword->isGenericOnly($phrase)
+        );
 
         return $recognized['brands'] === [] && $recognized['platforms'] === [] ? null : $recognized;
     }
@@ -773,7 +776,7 @@ final class SearchController
      * Without the semantic tier: the keyword hits, those of another brand / platform than the query's
      * after the rest (exact-SKU hits stay first), and the brand the query names when none of them carries it.
      *
-     * @param array{brands: list<string>, platforms: list<string>} $recognized
+     * @param array{brands: list<string>, typed?: list<string>, platforms: list<string>} $recognized
      * @param list<int> $keywordIds
      * @param list<int> $skuIds
      * @return array{0: list<int>, 1: array<string, mixed>}
@@ -791,7 +794,7 @@ final class SearchController
     }
 
     /**
-     * @param array{brands: list<string>, platforms: list<string>} $recognized
+     * @param array{brands: list<string>, typed?: list<string>, platforms: list<string>} $recognized
      * @param array<string, mixed> $entity QueryEntities::statuses()
      * @param array<int, mixed> $signals the candidates
      * @return array<string, mixed>
@@ -805,8 +808,9 @@ final class SearchController
             'platforms'       => $recognized['platforms'],
             'active'          => $active,
             // The brand was asked for and no candidate carries it: asked for, not stocked.
-            'brand_unmatched' => $recognized['brands'] !== [] && !$active['brand'] && $signals !== []
-                ? $recognized['brands']
+            'brand_unmatched' => ($recognized['typed'] ?? $recognized['brands']) !== [] && !$active['brand']
+                && $signals !== []
+                ? ($recognized['typed'] ?? $recognized['brands'])
                 : [],
         ];
     }

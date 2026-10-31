@@ -31,7 +31,12 @@ final class Logger
     /** Rows written by this code carry log_version 2; older rows keep the column default 1. */
     public const LOG_VERSION = 2;
 
-    private const DUPLICATE_SECONDS = 30;
+    /** Default window of the repeat-submit flag; config `log.duplicate_seconds`. */
+    public const DUPLICATE_SECONDS = 120;
+
+    /** This many identical page-1 rows of one session within BURST_SECONDS are a burst: the last ones are flagged. */
+    public const BURST_ROWS = 4;
+    public const BURST_SECONDS = 60;
 
     /** A run of this many digits (any script) is phone / ID-like. */
     public const MASK_DIGITS = 7;
@@ -45,9 +50,11 @@ final class Logger
 
     private PDO $pdo;
     private string $table;
+    private int $duplicateSeconds;
 
-    public function __construct(PDO $pdo, string $searchLogsTable)
+    public function __construct(PDO $pdo, string $searchLogsTable, int $duplicateSeconds = self::DUPLICATE_SECONDS)
     {
+        $this->duplicateSeconds = max(0, $duplicateSeconds);
         $this->pdo = $pdo;
         $this->table = Identifier::quote($searchLogsTable);
     }
@@ -76,7 +83,8 @@ final class Logger
      *     lat_vector_ms?: ?int,
      *     lat_spell_ms?: ?int,
      *     is_suspicious?: bool,
-     *     brand_unmatched?: ?string
+     *     brand_unmatched?: ?string,
+     *     is_burst?: bool
      * } $entry
      */
     public function log(array $entry): void
@@ -132,6 +140,7 @@ final class Logger
                 ? mb_substr((string) $entry['brand_unmatched'], 0, self::BRAND_LIMIT)
                 : null,
             'is_duplicate'   => $this->isDuplicate($session, $values['normalized_q'], $page) ? 1 : 0,
+            'is_burst'       => $this->isBurst($session, $values['normalized_q'], $page) ? 1 : 0,
         ];
 
         // Fewest columns last: the full row, then without v2, then without M26, then the original.
@@ -166,22 +175,47 @@ final class Logger
 
     /**
      * The same session searched the same normalized query on the same page in the
-     * last DUPLICATE_SECONDS (a double submit, a refresh): it still gets a row, flagged,
+     * last `log.duplicate_seconds` (a double submit, a refresh): it still gets a row, flagged,
      * so counts can leave it out. Best effort: a table without the v2 columns says no.
      */
     private function isDuplicate(?string $sessionId, string $normalizedQuery, int $page): bool
     {
-        if ($sessionId === null || $sessionId === '' || $normalizedQuery === '') {
+        if ($this->duplicateSeconds === 0 || $sessionId === null || $sessionId === '' || $normalizedQuery === '') {
             return false;
         }
         try {
             $stmt = $this->pdo->prepare(
                 "SELECT 1 FROM {$this->table} WHERE session_id = :session AND normalized_q = :query"
-                . ' AND page = :page AND ts >= NOW() - INTERVAL ' . self::DUPLICATE_SECONDS . ' SECOND LIMIT 1'
+                . ' AND page = :page AND ts >= NOW() - INTERVAL ' . $this->duplicateSeconds . ' SECOND LIMIT 1'
             );
             $stmt->execute(['session' => $sessionId, 'query' => $normalizedQuery, 'page' => $page]);
 
             return $stmt->fetchColumn() !== false;
+        } catch (PDOException) {
+            return false;
+        }
+    }
+
+    /**
+     * This row would be the BURST_ROWS-th or later identical page-1 row within BURST_SECONDS: of one
+     * session, or, without a session, of the same normalized query. Rows already flagged count, so every
+     * row after the third is marked. Best effort: a table without the columns says no.
+     */
+    private function isBurst(?string $sessionId, string $normalizedQuery, int $page): bool
+    {
+        if ($page !== 1 || $normalizedQuery === '') {
+            return false;
+        }
+        $hasSession = $sessionId !== null && $sessionId !== '';
+        try {
+            $stmt = $this->pdo->prepare(
+                "SELECT COUNT(*) FROM {$this->table} WHERE normalized_q = :query AND page = 1"
+                . ($hasSession ? ' AND session_id = :session' : " AND (session_id IS NULL OR session_id = '')")
+                . ' AND ts >= NOW() - INTERVAL ' . self::BURST_SECONDS . ' SECOND'
+            );
+            $stmt->execute(['query' => $normalizedQuery] + ($hasSession ? ['session' => $sessionId] : []));
+
+            return (int) $stmt->fetchColumn() >= self::BURST_ROWS - 1;
         } catch (PDOException) {
             return false;
         }
@@ -224,7 +258,8 @@ final class Logger
                     ADD COLUMN IF NOT EXISTS lat_spell_ms INT UNSIGNED DEFAULT NULL,
                     ADD COLUMN IF NOT EXISTS is_suspicious TINYINT(1) NOT NULL DEFAULT 0,
                     ADD COLUMN IF NOT EXISTS is_duplicate TINYINT(1) NOT NULL DEFAULT 0,
-                    ADD COLUMN IF NOT EXISTS brand_unmatched VARCHAR(190) DEFAULT NULL"
+                    ADD COLUMN IF NOT EXISTS brand_unmatched VARCHAR(190) DEFAULT NULL,
+                    ADD COLUMN IF NOT EXISTS is_burst TINYINT(1) NOT NULL DEFAULT 0"
             );
         } catch (PDOException) {
             // Another request added them first, or the user cannot alter.

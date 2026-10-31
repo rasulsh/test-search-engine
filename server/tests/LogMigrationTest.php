@@ -152,6 +152,26 @@ final class LogMigrationTest extends DatabaseTestCase
         self::assertSame('old row', $this->pdo->query('SELECT raw_q FROM search_logs')->fetchColumn());
     }
 
+    private function isBurst(string $suffix): string
+    {
+        return (string) file_get_contents(
+            self::repoRoot() . '/db/migrations/2026-10-31_search_logs_is_burst' . $suffix . '.sql'
+        );
+    }
+
+    public function testTheIsBurstMigrationRunsTwiceAndItsDownFileRemovesTheColumn(): void
+    {
+        $this->pdo->exec($this->isBurst(''));
+        $this->pdo->exec($this->isBurst(''));
+        self::assertContains('is_burst', $this->columns());
+        self::assertDoesNotMatchRegularExpression('/DROP\s+(COLUMN|INDEX)/i', $this->isBurst(''));
+
+        $this->pdo->exec($this->isBurst('.down'));
+        $this->pdo->exec($this->isBurst('.down'));
+        self::assertSame(self::OLD_COLUMNS, $this->columns());
+        self::assertSame('old row', $this->pdo->query('SELECT raw_q FROM search_logs')->fetchColumn());
+    }
+
     public function testSchemaSqlMatchesTheMigration(): void
     {
         $this->pdo->exec('DROP TABLE search_logs');
@@ -164,6 +184,7 @@ final class LogMigrationTest extends DatabaseTestCase
         $this->setUp();
         $this->pdo->exec($this->up());
         $this->pdo->exec($this->brandUnmatched(''));
+        $this->pdo->exec($this->isBurst(''));
 
         self::assertEqualsCanonicalizing($fromSchema, $this->columns());
         self::assertEqualsCanonicalizing($schemaIndexes, array_merge($this->indexes(), ['idx_ts_result']));

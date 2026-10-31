@@ -100,7 +100,7 @@ final class AnalyticsInsightsTest extends DatabaseTestCase
 
         $report = $this->report();
 
-        self::assertSame(4, $report['summary']['total'], 'probes count nowhere, repeats in plain counts');
+        self::assertSame(3, $report['summary']['total'], 'probes and repeats count nowhere (SearchRows)');
         self::assertSame(['searches' => 2, 'sessions' => 2, 'searches_per_session' => 1.0], $report['unique']);
         self::assertSame(50.0, $report['zero_result']['rate']);
         self::assertSame('wolverine', $report['zero_result']['queries'][0]['query']);

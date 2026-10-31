@@ -68,6 +68,17 @@ no new PII surface (it shows queries, never customer ids).
 | `format` | `json` | the same data as JSON instead of the HTML dashboard |
 | `compare` | `1` | adds `compare`: the headline figures against the previous window of the same length (not for `all`) |
 
+**What counts as a search.** Every figure of the report (and the zero-rate trend) counts only rows that are not a
+repeat submit (`is_duplicate = 0`, the same session, query and page within `log.duplicate_seconds`, default 120 s), are
+page 1 (`page = 1`), were not a storefront reload of the same search (`source <> 'filter'`) and are not part of a burst
+(`is_burst = 0`: the 4th and later identical page-1 rows of one session, or of one query without a session, within 60 s).
+A condition whose column the table lacks is left out. The raw log list is not filtered. `requests` is
+`{requests, searches, filtered}`: all log rows of the window, the rows counted as searches, and the difference.
+
+The `source` values the storefront sends (anything else is stored as `page`): `page` (a search submitted on the search
+page, the default), `autocomplete` (typeahead), `paging` (a later page of the same search; also `page > 1`) and `filter`
+(a sort / limit / warehouse reload of the same search: logged, never counted as a new search).
+
 **Log-v2 keys (added beside the older ones, which are unchanged).** Flagged probes
 (`is_suspicious = 1`) count nowhere; a metric that needs a v2 column reads only
 `log_version = 2` rows; "unique" metrics also leave out repeats (`is_duplicate = 1`).
@@ -89,6 +100,7 @@ columns) the report carries `log_v2: {available: false}` and none of the keys be
 | `brand_unmatched` | `[{brand, searches, example, last_seen}]` (M44): brands a query named that none of the returned candidates carried ("asked for, not stocked"); from `search_logs.brand_unmatched`, empty without the column |
 | `demand_gap` | zero-result queries that appear in no alias candidate (likely products missing from the catalog) |
 | `trending` | `[{query, searches, previous, growth, growth_pct}]` against the previous window |
+| `requests` | `{requests, searches, filtered}`: log rows of the window against the rows counted as searches (see "What counts as a search") |
 | `suspicious` | `{count, samples[]}`: the probes the service refused |
 | `compare` | with `compare=1`: `{previous_since, previous_until, metrics: {name: {current, previous, change, change_pct}}}` for searches, unique searches, zero rate, CTR, cold p95, hybrid share and cache hit rate |
 

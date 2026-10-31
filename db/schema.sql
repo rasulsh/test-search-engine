@@ -93,6 +93,8 @@ CREATE TABLE IF NOT EXISTS search_logs (
     is_duplicate   TINYINT(1)      NOT NULL DEFAULT 0,
     -- M44: the brand(s) the query named that none of the candidates carries ("asked for, not stocked").
     brand_unmatched VARCHAR(190)   DEFAULT NULL,
+    -- 4th and later identical page-1 rows of one session (or query) within 60 s; left out of "a search".
+    is_burst       TINYINT(1)      NOT NULL DEFAULT 0,
     PRIMARY KEY (id),
     KEY idx_ts (ts),
     -- M31: keeps the analytics zero-result window scan and grouped counts cheap.

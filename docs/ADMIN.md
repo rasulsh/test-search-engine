@@ -66,7 +66,7 @@ plain cPanel hosting (no proxy in front), leave it empty.
 | `aliases` | The alias manager (M41), below. |
 | `synonyms` | Read-only `synonyms.json`; "which groups hold term X" across alias and synonym groups with the merged result; "copy to aliases". Hand edits of `synonyms.json` are lost on the next build; to drop a bad generated group, put a term of it in `search.synonym_blocklist` in `config.php` (owner aliases are never filtered). |
 | `tester` | A search without a log row and without the result cache: tier, did-you-mean, the top 10 titles with match type. |
-| `analytics` | The M35/M38 dashboard. `?p=analytics&format=json` is the same JSON as before (byte-identical, covered by `AnalyticsJsonCompatTest`), now needing a session: 401 `{"error":"unauthorized"}` without one. |
+| `analytics` | The M35/M38 dashboard. It counts a row as a search only when it is not a repeat submit, is page 1, is not a `source = 'filter'` reload and not part of a burst; the tile "requests logged / counted as searches" shows how many rows were left out (the logs page still lists them all). `?p=analytics&format=json` is the same JSON as before (byte-identical, covered by `AnalyticsJsonCompatTest`), now needing a session: 401 `{"error":"unauthorized"}` without one. |
 | `logs` | Recent / zero-result / slowest `search_logs` rows, paginated. |
 | `audit` | The audit trail. |
 | `help` | The full guide. Every page also has a collapsible help box: what it is for, how to use it, the effect on live search, when a change takes effect and the risks. |

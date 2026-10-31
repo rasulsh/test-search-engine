@@ -407,6 +407,7 @@
       tile(T.tiles.cache, P(r.cache.hit_rate), 'tile_cache'), tile(T.tiles.hybrid, P(r.tier.hybrid_share), 'tile_hybrid'),
       tile(T.tiles.avg, M(L.avg), 'tile_avg'), tile(T.tiles.p95, M(L.p95), 'tile_p95'),
       tile(T.tiles.repeat, P(r.repeat_queries.rate), 'tile_repeat'),
+      tile(T.tiles.requests, fmt.n(r.requests.requests) + ' / ' + fmt.n(r.requests.searches), 'tile_requests'),
     ]);
     var tileHelpHolder = el('div', { id: 'tilehelp' }, tileHelp ? [helpPanel(tileHelp)] : []);
 

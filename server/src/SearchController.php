@@ -208,7 +208,11 @@ final class SearchController
 
         return new self(
             $keyword,
-            $record ? new Logger($pdo, $config['db']['search_logs_table']) : null,
+            $record ? new Logger(
+                $pdo,
+                $config['db']['search_logs_table'],
+                (int) $config['log']['duplicate_seconds']
+            ) : null,
             $spellerFactory,
             null,
             10,

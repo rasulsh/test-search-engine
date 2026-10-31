@@ -493,6 +493,11 @@ alias groups that share a term), so no bundle rebuild is needed for it, only the
 6. Open the status page's effective configuration: the five keys appear with their source. Misspelled brands that matter
    (`شیامی`) still need an alias in the alias manager.
 
+**Upgrading to the analytics "what counts as a search" change.** Server code only, no bundle rebuild. Add the burst column:
+`mysql DB < db/migrations/2026-10-31_search_logs_is_burst.sql` (idempotent, rollback `.down.sql`; the logger also adds it
+itself on its first write when its database user may ALTER). Until it exists the analytics skip the burst condition. The
+duplicate window is now `log.duplicate_seconds` (default 120 s, was 30 s). Old rows keep `is_burst = 0`.
+
 <a id="upgrading-to-m42"></a>**Upgrading to M42 (no vectors on cPanel, panel polish).** Server code only on the
 cPanel side; nothing to migrate and no `.htaccess` change:
 

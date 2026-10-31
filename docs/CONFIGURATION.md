@@ -176,6 +176,7 @@ missing until the TTL or the next reload.
 | --- | --- | --- |
 | `debug.token` | empty | enables `"debug": 1` on `/search` (`X-Debug-Token`), see [SEARCH-API.md](SEARCH-API.md#search-logs-and-ranking-debug) |
 | `logs.token` | empty | **deprecated (M39)**: unused, the logs and analytics pages need the admin login; the doctor warns while it is set |
+| `log.duplicate_seconds` | `120` | a repeat of the same session's normalized query on the same page within this many seconds gets `search_logs.is_duplicate = 1` and is not counted as a search by the analytics (the raw log list still shows it); `0` turns the flag off. Was a fixed 30 s |
 | `logs.page_size` | 50 | default rows per page of the panel's logs page (the page also offers 25 / 50 / 100 / 200) |
 | `logs.scan_limit` | 200000 | the logs page's search and unindexed sorts read this many of the newest rows (0 = all); the page says when older rows were left out |
 | `logs.refresh_seconds` | `30` | how often the analytics dashboard re-fetches its JSON (M35); `0` disables the auto-refresh |

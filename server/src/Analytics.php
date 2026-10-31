@@ -229,16 +229,9 @@ final class Analytics
     public function zeroRateTrend(?string $since, string $bucket = 'day'): array
     {
         $format = self::bucketFormat($bucket);
-        $unique = array_filter([
-            $this->hasColumn('is_duplicate') ? 'is_duplicate = 0' : '',
-            $this->hasColumn('page') ? 'page = 1' : '',
-        ]);
         [$where, $params] = $this->bound(
             $since,
-            implode(' AND ', array_filter([
-                $bucket === 'day' ? 'ts >= NOW() - INTERVAL ' . self::TREND_DAYS . ' DAY' : '',
-                ...$unique,
-            ]))
+            $bucket === 'day' ? 'ts >= NOW() - INTERVAL ' . self::TREND_DAYS . ' DAY' : ''
         );
         $stmt = $this->pdo->prepare(
             "SELECT DATE_FORMAT(ts, '{$format}') AS bucket, COUNT(*) AS n,"
@@ -450,6 +443,7 @@ final class Analytics
             'query_length' => $this->queryLengthDistribution($since),
             'top_brands_categories' => $this->topBrandsCategories($since, 10),
             'repeat_queries' => $this->repeatQueryRate($since),
+            'requests' => $this->requestsVsSearches($since),
         ];
         $insights = $this->insights->report($since, null, $previous, $limit);
         $report['did_you_mean'] += $insights['did_you_mean'] ?? [];
@@ -600,6 +594,7 @@ final class Analytics
         if ($this->hasColumn('is_suspicious')) {
             $conditions[] = 'is_suspicious = 0';
         }
+        array_push($conditions, ...SearchRows::conditions($this->hasColumn(...)));
         $params = [];
         if ($since !== null) {
             $conditions[] = 'ts >= :since';
@@ -607,6 +602,26 @@ final class Analytics
         }
 
         return [$conditions === [] ? '' : ' WHERE ' . implode(' AND ', $conditions), $params];
+    }
+
+    /**
+     * Log rows of the window against the rows counted as searches (see SearchRows).
+     *
+     * @return array{requests: int, searches: int, filtered: int}
+     */
+    public function requestsVsSearches(?string $since): array
+    {
+        $params = $since === null ? [] : ['since' => $since];
+        $time = $since === null ? '' : ' WHERE ts >= :since';
+        $stmt = $this->pdo->prepare("SELECT COUNT(*) FROM {$this->table}{$time}");
+        $stmt->execute($params);
+        $requests = (int) $stmt->fetchColumn();
+        [$where, $bound] = $this->bound($since, '');
+        $stmt = $this->pdo->prepare("SELECT COUNT(*) FROM {$this->table}{$where}");
+        $stmt->execute($bound);
+        $searches = (int) $stmt->fetchColumn();
+
+        return ['requests' => $requests, 'searches' => $searches, 'filtered' => max(0, $requests - $searches)];
     }
 
     private function hasColumn(string $name): bool

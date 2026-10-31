@@ -10,6 +10,20 @@ holds overrides). A **renamed** key keeps working for two releases (its value is
 config doctor / status page warn with the new name. A **removed** key is ignored; the doctor says why and that the
 line can be deleted. `php server/tools/config-check.php` lists all of it.
 
+## Analytics: what counts as a search
+
+- **Added**: `log.duplicate_seconds` = `120`: the repeat-submit window of `search_logs.is_duplicate` (the same session, normalized
+  query and page). It was a fixed 30 s; `0` turns the flag off.
+- **Removed / renamed**: none.
+- **Changed defaults**: none (the window above was not configurable before).
+- **Database**: `search_logs.is_burst` (`db/migrations/2026-10-31_search_logs_is_burst.sql` with a `.down.sql`; the logger also
+  adds it when it may ALTER). Set on the 4th and later identical page-1 rows of one session (without a session: one
+  normalized query) within 60 s; `is_suspicious` keeps meaning SQL-probe text.
+- **Behaviour**: the analytics count a row as a search only when `is_duplicate = 0 AND page = 1 AND source <> 'filter' AND
+  is_burst = 0` (one definition, `App\SearchRows`, used by `Analytics` and `AnalyticsInsights`, the zero-rate trend
+  included); a condition whose column the table lacks is left out. The raw log list is unchanged. The analytics JSON gains
+  the additive key `requests` (`{requests, searches, filtered}`), shown as a tile on the dashboard.
+
 ## Keyboard-layout recovery
 
 - **Config**: no key added, removed, renamed or re-defaulted.

@@ -150,7 +150,7 @@ final class AnalyticsInsights
      */
     public function unique(?string $from, ?string $to): array
     {
-        [$where, $params] = $this->v2($from, $to, ['is_duplicate = 0']);
+        [$where, $params] = $this->v2($from, $to, $this->search());
         $stmt = $this->pdo->prepare(
             "SELECT COUNT(*) AS n, COUNT(session_id) AS with_session, COUNT(DISTINCT session_id) AS sessions"
             . " FROM {$this->logs}{$where}"
@@ -170,15 +170,15 @@ final class AnalyticsInsights
     public function zeroRate(?string $from, ?string $to): float
     {
         return self::pct(
-            $this->count($this->v2($from, $to, ['is_duplicate = 0', 'result_count = 0'])),
-            $this->count($this->v2($from, $to, ['is_duplicate = 0']))
+            $this->count($this->v2($from, $to, [...$this->search(), 'result_count = 0'])),
+            $this->count($this->v2($from, $to, $this->search()))
         );
     }
 
     /** @return list<array{query: string, searches: int, last_seen: string}> */
     public function zeroResultQueries(?string $from, ?string $to, int $limit): array
     {
-        return $this->grouped($this->v2($from, $to, ['is_duplicate = 0', 'result_count = 0']), $limit);
+        return $this->grouped($this->v2($from, $to, [...$this->search(), 'result_count = 0']), $limit);
     }
 
     /**
@@ -196,7 +196,7 @@ final class AnalyticsInsights
             'mean_click_position' => 0.0, 'mrr' => 0.0,
         ];
         try {
-            [$where, $params] = $this->v2($from, $to, ['l.is_duplicate = 0', 'l.result_count > 0'], 'l.');
+            [$where, $params] = $this->v2($from, $to, [...$this->search('l.'), 'l.result_count > 0'], 'l.');
             $stmt = $this->pdo->prepare(
                 'SELECT COUNT(*) AS n, COALESCE(SUM(e.clicks > 0), 0) AS clicked,'
                 . ' COALESCE(SUM(CASE WHEN e.clicks > 0 THEN 1 / e.first_pos END), 0) AS rr'
@@ -336,14 +336,14 @@ final class AnalyticsInsights
      */
     public function suggestions(?string $from, ?string $to, int $limit): array
     {
-        $unique = ['is_duplicate = 0'];
+        $unique = $this->search();
         $total = $this->count($this->v2($from, $to, $unique));
         $shown = $this->count($this->v2($from, $to, array_merge($unique, ['dym_shown = 1'])));
         $top = [];
         $clicked = 0;
         $zeroSuggestions = 0;
         try {
-            [$where, $params] = $this->v2($from, $to, ['l.is_duplicate = 0', 'l.dym_shown = 1'], 'l.');
+            [$where, $params] = $this->v2($from, $to, [...$this->search('l.'), 'l.dym_shown = 1'], 'l.');
             $limit = min(100, max(1, $limit));
             $stmt = $this->pdo->prepare(
                 'SELECT l.normalized_q AS q, l.did_you_mean AS s, COUNT(*) AS shown,'
@@ -387,7 +387,7 @@ final class AnalyticsInsights
     public function aliasPairs(?string $from, ?string $to, int $limit): array
     {
         [$where, $params] = $this->v2($from, $to, [
-            'a.result_count = 0', 'a.is_duplicate = 0', 'a.session_id IS NOT NULL', "a.normalized_q <> ''",
+            'a.result_count = 0', ...$this->search('a.'), 'a.session_id IS NOT NULL', "a.normalized_q <> ''",
         ], 'a.');
         $limit = min(500, max(1, $limit));
         $seconds = self::FOLLOW_UP_SECONDS;
@@ -398,7 +398,8 @@ final class AnalyticsInsights
                 . "SELECT a.id AS aid, MIN(b.id) AS bid FROM {$this->logs} a JOIN {$this->logs} b"
                 . ' ON b.session_id = a.session_id AND b.id > a.id'
                 . " AND b.ts <= a.ts + INTERVAL {$seconds} SECOND AND b.result_count > 0 AND b.is_suspicious = 0"
-                . " AND b.is_duplicate = 0 AND b.normalized_q <> a.normalized_q{$where} GROUP BY a.id) m"
+                . ' AND ' . implode(' AND ', $this->search('b.'))
+                . " AND b.normalized_q <> a.normalized_q{$where} GROUP BY a.id) m"
                 . " JOIN {$this->logs} a ON a.id = m.aid JOIN {$this->logs} f ON f.id = m.bid"
                 . " LEFT JOIN (SELECT search_uuid, COUNT(*) AS clicks FROM {$this->events} WHERE action = 'click'"
                 . ($from === null ? '' : ' AND ts >= :efrom')
@@ -440,7 +441,7 @@ final class AnalyticsInsights
         [$where, $params] = $this->v2(
             $from,
             $to,
-            ['l.is_duplicate = 0', 'l.result_count > 0', "l.normalized_q <> ''"],
+            [...$this->search('l.'), 'l.result_count > 0', "l.normalized_q <> ''"],
             'l.'
         );
         $min = self::MIN_SILENT_SEARCHES;
@@ -535,7 +536,7 @@ final class AnalyticsInsights
         if (!$this->hasColumn('brand_unmatched')) {
             return [];
         }
-        [$where, $params] = $this->v2($from, $to, ['is_duplicate = 0', 'brand_unmatched IS NOT NULL']);
+        [$where, $params] = $this->v2($from, $to, [...$this->search(), 'brand_unmatched IS NOT NULL']);
         $limit = min(100, max(1, $limit));
         try {
             $stmt = $this->pdo->prepare(
@@ -665,6 +666,16 @@ final class AnalyticsInsights
      * @param list<string> $extra
      * @return array{string, array<string, string>}
      */
+    /**
+     * The conditions that make a log row "a search" (SearchRows), for the table alias given.
+     *
+     * @return list<string>
+     */
+    private function search(string $alias = ''): array
+    {
+        return SearchRows::conditions($this->hasColumn(...), $alias);
+    }
+
     private function v2(?string $from, ?string $to, array $extra = [], string $alias = ''): array
     {
         return $this->range(
@@ -682,7 +693,7 @@ final class AnalyticsInsights
      */
     private function plain(?string $from, ?string $to): array
     {
-        return $this->range($from, $to, ['is_suspicious = 0', 'is_duplicate = 0']);
+        return $this->range($from, $to, ['is_suspicious = 0', ...$this->search()]);
     }
 
     /**

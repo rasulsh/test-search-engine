@@ -343,6 +343,9 @@ final class Config
             'events.allowed_origin' => ['string', ''],
 
             'debug.token'     => ['string', ''],
+            // A repeat of the same session's query on the same page within this many seconds is flagged
+            // is_duplicate; 0 turns the flag off.
+            'log.duplicate_seconds' => ['int', 120],
             'logs.page_size'  => ['int', 50],
             'logs.refresh_seconds' => ['int', 30],
             // The logs page's search and unindexed sorts read this many of the newest rows (a full

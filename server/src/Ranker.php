@@ -45,6 +45,8 @@ namespace App;
  * by entity_boost and one carrying another brand / platform demoted by entity_demote (both after the floor,
  * as a factor on the relevance; nothing is removed by them), and a solid keyword hit of another brand than the
  * recognized one loses its floor exemption. A dimension counts only when some candidate carries the entity.
+ * The used / new condition is one more dimension of the same kind (always active when the bundle has condition
+ * data), with the same two factors.
  *
  * Tail cap (M43): after the sort, every solid row is kept but only the first `tail_cap` of the
  * other rows (semantic-only neighbours and weak keyword hits), so a broad query does not trail
@@ -129,8 +131,8 @@ final class Ranker
      *        names the query's intent words map to (IntentMap, M34): they count as if the query
      *        had named that category / tag, through the same boosts (no extra knob)
      * @param array{
-     *     active?: array{brand: bool, platform: bool},
-     *     status?: array<int, array{brand: int, platform: int}>
+     *     active?: array{brand: bool, platform: bool, condition?: bool},
+     *     status?: array<int, array{brand: int, platform: int, condition?: int}>
      * } $entity QueryEntities::statuses() of the candidates; empty when the query names no brand / platform
      * @return list<array{
      *     product_id: int, score: float, keyword: bool, detail?: array<string, mixed>
@@ -160,7 +162,7 @@ final class Ranker
             $maxPopularity = max($maxPopularity, $signal['popularity']);
         }
 
-        $active = $entity['active'] ?? ['brand' => false, 'platform' => false];
+        $active = $entity['active'] ?? ['brand' => false, 'platform' => false, 'condition' => false];
         $status = $entity['status'] ?? [];
         // A solid hit of another brand than the one the query names is no longer safe from the floor.
         $exempt = array_flip(array_values(array_filter(
@@ -190,8 +192,8 @@ final class Ranker
             ];
             $lifted = 0;
             $demoted = 0;
-            foreach (['brand', 'platform'] as $dimension) {
-                $value = $active[$dimension] ? ($status[$id][$dimension] ?? 0) : 0;
+            foreach (['brand', 'platform', 'condition'] as $dimension) {
+                $value = ($active[$dimension] ?? false) ? ($status[$id][$dimension] ?? 0) : 0;
                 $lifted += $value > 0 ? 1 : 0;
                 $demoted += $value < 0 ? 1 : 0;
             }
@@ -214,12 +216,15 @@ final class Ranker
                     'boosts'    => array_map(static fn (float $b): float => round($b, 4), $boosts),
                     'score'     => round($score, 4),
                 ];
-                if ($active['brand'] || $active['platform']) {
+                if ($active['brand'] || $active['platform'] || ($active['condition'] ?? false)) {
                     $row['detail']['entity'] = [
                         'brand'    => $status[$id]['brand'] ?? 0,
                         'platform' => $status[$id]['platform'] ?? 0,
                         'factor'   => round($entityFactor, 4),
                     ];
+                    if ($active['condition'] ?? false) {
+                        $row['detail']['entity']['condition'] = $status[$id]['condition'] ?? 0;
+                    }
                 }
             }
             $rows[] = $row;

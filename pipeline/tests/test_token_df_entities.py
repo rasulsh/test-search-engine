@@ -130,3 +130,41 @@ def test_ambiguous_key_is_absent_when_false() -> None:
     entries = kw.build_entities([_row("a", "Sony")])["brands"]
 
     assert entries == [{"name": "sony", "count": 1}]
+
+
+# --- used condition (entities.json "used") -------------------------------------
+
+
+def _product_rows(products: list[dict]) -> list[dict]:
+    return [build.to_server_row(p) for p in products]
+
+
+def test_used_ids_come_from_the_name_and_from_meta_title() -> None:
+    rows = _product_rows([
+        {"id": 7, "title_fa": "کنسول پلی استیشن 4 کارکرده", "title_en": ""},
+        # meta_title is exported as title_en
+        {"id": 3, "title_fa": "کنسول پلی استیشن 4", "title_en": "PS4 Slim کارکرده"},
+        {"id": 5, "title_fa": "کنسول پلی استیشن 4", "title_en": "PS4 Slim"},
+        {"id": 9, "title_fa": "بازی کارکردهای جدید", "title_en": ""},  # a different word
+    ])
+
+    data = kw.build_entities(rows)
+
+    assert data["version"] == 2, "the version stays 2: `used` is an optional key"
+    assert data["used"] == [3, 7]
+
+
+def test_used_accepts_the_spaced_and_zwnj_spellings() -> None:
+    rows = _product_rows([
+        {"id": 1, "title_fa": "هدست کار کرده", "title_en": ""},
+        {"id": 2, "title_fa": "هدست کار‌کرده", "title_en": ""},
+        {"id": 3, "title_fa": "هدست آکبند", "title_en": ""},
+    ])
+
+    assert kw.build_entities(rows)["used"] == [1, 2]
+
+
+def test_used_is_an_empty_list_when_nothing_is_used_and_ignores_rows_without_an_id() -> None:
+    rows = _product_rows([{"id": 1, "title_fa": "ماوس", "title_en": ""}])
+    assert kw.build_entities(rows)["used"] == []
+    assert kw.build_entities([_row("ماوس کارکرده", "")])["used"] == []

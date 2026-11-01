@@ -476,6 +476,11 @@ web-exposed. No schema or config change. The alias fix ships in the code too (`S
 alias groups that share a term), so no bundle rebuild is needed for it, only the new code and a `/reload`
 (or any worker restart) so the cached alias map is rebuilt.
 
+<a id="upgrading-to-m45"></a>**Upgrading to M45 (used / new condition).** Upload the new `release.zip`; `config.php` needs no edit
+(`search.condition_enabled` defaults to `true`). Rebuild the bundle (it adds `used` to `entities.json`, and the
+ambiguous flags), upload it, `POST /reload`, flush the result cache (the key does not carry the new setting), and check the
+status page's effective configuration. An old bundle still works: without `used` the condition logic does nothing.
+
 <a id="upgrading-to-m44"></a>**Upgrading to M44 (query understanding).** Server code first, then the bundle:
 
 1. Upload the new `release.zip` over the service directory (`unzip -o`). `config.php` needs no edit: the new keys

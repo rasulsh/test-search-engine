@@ -118,6 +118,33 @@ recognized brand `carried` / `mentioned` / `ambiguous` / `unmatched` (`brand_sta
 `search_logs.brand_unmatched` and in the analytics page's "brand asked for, not in the results" table. Setting both
 `entity_boost` and `entity_demote` to 0 (or `search.entities_enabled` to 0) turns it all off.
 
+**Brand evidence (M45).** A candidate whose `brand` field is a *different* brand is demoted (-1) only when it does
+not mention the recognized brand either. One that mentions it as a whole-word phrase in its title, tags or category
+(the `mentioned` evidence above) is **neutral (0)**: about 25 Deadskull products sit under the OpenCart manufacturer
+"سایر" (Other) and only 6 under "Deadskull", and `deadskull ...` must not demote the 25. It never gets +1 and the
+active-brand rule (some carrier that also holds the rest of the query) is unchanged, as is `brand_unmatched`. A
+product of a truly different brand that does not mention the brand is still demoted.
+
+<a id="condition"></a>**Condition: used / new (M45).** The owner's rule: a product is **used** when its normalized
+name or `meta_title` (exported as `title_en` and part of the indexed title) holds the whole-word phrase `کارکرده` or
+`کار کرده`; every other product is **new**. The build writes the sorted ids as the optional `used` key of
+`entities.json` (the version stays 2; a file without the key means "no condition data" and the logic does nothing).
+The query names a condition through the literal words (normalized; a phrase of the literal query):
+
+| Query holds | Condition | Used products | Other products |
+| --- | --- | --- | --- |
+| `کارکرده`, `کار کرده`, `دست دوم`, `used`, `second hand`, `secondhand` | used | `+1` (`1 + entity_boost`) | `-1` (`1 - entity_demote`) |
+| `آکبند`, `sealed` | new | `-1` | `0` |
+| none of them | none (the default product is new) | `-1` | `0` |
+
+`new` and `نو` are **not** condition words (ordinary title words). When both kinds appear, used wins. The condition
+words stay in the keyword query exactly as before (nothing is made required, nothing is removed); they are only left out
+of the "rest of the query" that a brand / platform carrier must hold. It is one more dimension of the same
+mechanism (after the floor, the two existing factors, no new weight; without the semantic tier the keyword hits are
+reordered the same way) and is always active when the bundle has `used`. `search.condition_enabled=0` disables only
+this logic. The debug block shows the recognized `condition` and each row's `blend.entity.condition`; the admin
+tester page shows it in Persian.
+
 <a id="soft-and"></a>**Soft AND (M23).** Strict all-words returned nothing as
 soon as one word matched no field: `مدرن وارفار` for the product titled `Call of
 Duty Modern Warfare` (the transliteration `وارفار` is nowhere in the catalog).

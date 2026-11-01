@@ -214,6 +214,11 @@ AMBIGUOUS_BRAND_SEEDS: tuple[str, ...] = (
     "نارنجی",
 )
 
+# The owner's rule for a used product: its normalized name (which holds meta_title, the secondary
+# name) names the condition as a whole-word phrase. Normalized here, so the spaced and the
+# ZWNJ spellings both collapse to "کار کرده".
+USED_PHRASES: tuple[str, ...] = ("کارکرده", "کار کرده")
+
 # A brand is also ambiguous when products of OTHER brands carry its phrase this often.
 AMBIGUOUS_MIN_OTHER = 5
 AMBIGUOUS_OTHER_FACTOR = 2
@@ -255,8 +260,11 @@ def build_token_df(rows: Iterable[dict[str, Any]]) -> dict[str, Any]:
 def build_entities(rows: Iterable[dict[str, Any]]) -> dict[str, Any]:
     """The brands the catalog carries (normalized `brand` values, with their product counts) and
     the platform seeds. Owner aliases ("شیامی" = "xiaomi") are applied by the server at query
-    time: they live in server/storage/aliases.json, not in the bundle (M41). No used / new
-    condition is derived: nothing in the export reliably marks it.
+    time: they live in server/storage/aliases.json, not in the bundle (M41).
+
+    `used` (optional key, always written by this build) is the sorted list of product ids whose
+    normalized title names the used condition (USED_PHRASES); every other product is new. A file
+    without the key means "no condition data" to the server.
 
     A brand is `ambiguous` (true; the key is absent otherwise) when its phrase is a seed colour /
     common word, or when products of OTHER brands hold the phrase as whole words in their title or
@@ -264,7 +272,12 @@ def build_entities(rows: Iterable[dict[str, Any]]) -> dict[str, Any]:
     rows = list(rows)
     counts: Counter[str] = Counter()
     texts: list[tuple[str, str]] = []
+    used_needles = [f" {' '.join(tokenize(normalize(p)))} " for p in USED_PHRASES]
+    used: list[int] = []
     for row in rows:
+        title_text = " " + " ".join(tokenize(str(row.get("normalized_title") or ""))) + " "
+        if row.get("product_id") is not None and any(n in title_text for n in used_needles):
+            used.append(int(row["product_id"]))
         brand = " ".join(tokenize(normalize(str(row.get("brand") or ""))))
         if len(brand) >= 2 and not brand.isdigit():
             counts[brand] += 1
@@ -284,7 +297,12 @@ def build_entities(rows: Iterable[dict[str, Any]]) -> dict[str, Any]:
         key: list(dict.fromkeys(" ".join(tokenize(normalize(term))) for term in terms))
         for key, terms in PLATFORM_SEEDS.items()
     }
-    return {"version": ENTITIES_VERSION, "brands": entries, "platforms": platforms}
+    return {
+        "version": ENTITIES_VERSION,
+        "brands": entries,
+        "platforms": platforms,
+        "used": sorted(set(used)),
+    }
 
 
 def build_keymap() -> dict[str, dict[str, str]]:

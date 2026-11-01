@@ -45,6 +45,25 @@ final class AdminTesterEntitiesTest extends TestCase
         self::assertStringContainsString('کلمهٔ کامل در عنوان', $html, 'the new match type has a Persian label');
     }
 
+    public function testTheRecognizedConditionIsShownInPersian(): void
+    {
+        $base = ['brands' => [], 'platforms' => ['ps4'], 'brand_unmatched' => []];
+        $active = ['brand' => false, 'platform' => true, 'condition' => true];
+
+        $used = $this->page($base + ['condition' => 'used', 'active' => $active]);
+        self::assertStringContainsString('وضعیت کالا در عبارت', $used);
+        self::assertStringContainsString('کارکرده: محصولات کارکرده بالاتر', $used);
+
+        $new = $this->page($base + ['condition' => 'new', 'active' => $active]);
+        self::assertStringContainsString('آکبند: محصولات کارکرده پایین‌تر', $new);
+
+        $none = $this->page($base + ['condition' => null, 'active' => $active]);
+        self::assertStringContainsString('بدون واژهٔ وضعیت (پیش‌فرض نو)', $none);
+
+        $off = $this->page($base + ['condition' => null, 'active' => ['brand' => false, 'platform' => true]]);
+        self::assertStringNotContainsString('وضعیت کالا در عبارت', $off, 'no condition data: no row');
+    }
+
     public function testNothingIsShownWhenTheQueryNamedNoEntity(): void
     {
         $html = $this->page(null);

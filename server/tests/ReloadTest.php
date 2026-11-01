@@ -287,6 +287,24 @@ final class ReloadTest extends DatabaseTestCase
         self::assertFileExists($dataDir . '/' . \App\TokenStats::FILE);
     }
 
+    public function testAnEntitiesFileWithOrWithoutTheOptionalUsedListIsAccepted(): void
+    {
+        foreach ([', "used": [1, 2]', ''] as $used) {
+            $this->createStaging(2);
+            $dataDir = $this->newTempDir('_data');
+            $this->tempDirs[] = $dataDir . '_old';
+            $incomingDir = $this->makeIncoming(2);
+            file_put_contents(
+                $incomingDir . '/' . \App\QueryEntities::FILE,
+                '{"version": 2, "brands": [{"name": "asus", "count": 2}], "platforms": {"ps4": ["ps4"]}' . $used . '}'
+            );
+
+            $result = (new Reload($this->pdo, $this->config($dataDir, $incomingDir)))->run();
+
+            self::assertSame(2, $result['count'], $used);
+        }
+    }
+
     public function testATokenDfFileForAnotherProductCountIsRejected(): void
     {
         $this->createStaging(2);
@@ -332,6 +350,12 @@ final class ReloadTest extends DatabaseTestCase
         ];
         yield 'entities platform not a list' => [
             $entities, '{"version": 1, "brands": [], "platforms": {"ps4": "x"}}', 'invalid_entities',
+        ];
+        yield 'entities used not a list' => [
+            $entities, '{"version": 2, "brands": [], "platforms": {}, "used": "3"}', 'invalid_entities',
+        ];
+        yield 'entities used id not an integer' => [
+            $entities, '{"version": 2, "brands": [], "platforms": {}, "used": ["3"]}', 'invalid_entities',
         ];
         yield 'synonym term not a string' => [Synonyms::SYNONYMS_FILE, '[["laptop", 5]]', 'invalid_synonyms'];
     }

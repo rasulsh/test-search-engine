@@ -24,7 +24,12 @@ namespace App;
  * entities.json, or listed in `search.brand_blocklist`) is recognized only when the whole query (stopwords
  * aside) is that brand alone; a blocklisted name is never recognized (v2 of the file; v1 has no flags).
  *
- * A used / new condition is not recognized: nothing in the catalog export reliably marks it (needs the owner).
+ * Condition (owner's rule): entities.json may carry `used`, the ids of the products whose name or meta_title
+ * says "کارکرده". A query naming the used condition ("کارکرده", "کار کرده", "دست دوم", "used", "second hand",
+ * "secondhand") lifts the used products and lowers the others; one naming the new condition ("آکبند",
+ * "sealed" only: "new" / "نو" are ordinary title words) lowers the used ones; a query with no condition word
+ * lowers the used ones too (the default product is new). Without `used` (or with search.condition_enabled
+ * off) there is no condition data and this dimension does nothing.
  */
 final class QueryEntities
 {
@@ -33,7 +38,13 @@ final class QueryEntities
     /** File versions the reader accepts: 1 has no `ambiguous` flags. */
     public const ACCEPTED_VERSIONS = [1, 2];
 
-    /** @var array<string, array{brands: list<string>, ambiguous: list<string>, platforms: array<string, list<string>>}> by file identity */
+    /** Condition words; normalized at use. "new" / "نو" are deliberately absent. */
+    private const USED_TERMS = ['کارکرده', 'کار کرده', 'دست دوم', 'used', 'second hand', 'secondhand'];
+    private const NEW_TERMS = ['آکبند', 'sealed'];
+
+    /** @var array<string, array{
+     *     brands: list<string>, ambiguous: list<string>, platforms: array<string, list<string>>, used?: list<int>
+     * }> by file identity */
     private static array $cache = [];
 
     /** @var array<string, true> brand phrase => true */
@@ -48,6 +59,10 @@ final class QueryEntities
     private array $platformPhrases = [];
     private int $longest = 1;
     private ?Synonyms $synonyms;
+    /** @var array<int, true>|null used product ids; null = no condition data */
+    private ?array $used;
+    /** @var array<string, string> condition phrase => 'used' | 'new' */
+    private array $conditionTerms = [];
 
     /**
      * @param list<string> $brands normalized brand names
@@ -55,6 +70,7 @@ final class QueryEntities
      * @param list<string> $ambiguous brand names flagged ambiguous by the build
      * @param string $brandBlocklist `search.brand_blocklist`: comma separated names never recognized as brands
      * @param string $stopwordsCsv `search.stopwords`
+     * @param list<int>|null $used ids of the used products; null = no condition data (the condition is ignored)
      */
     public function __construct(
         array $brands,
@@ -62,8 +78,15 @@ final class QueryEntities
         ?Synonyms $synonyms = null,
         array $ambiguous = [],
         string $brandBlocklist = '',
-        string $stopwordsCsv = ''
+        string $stopwordsCsv = '',
+        ?array $used = null
     ) {
+        $this->used = $used === null ? null : array_fill_keys($used, true);
+        foreach (['used' => self::USED_TERMS, 'new' => self::NEW_TERMS] as $condition => $terms) {
+            foreach ($terms as $term) {
+                $this->conditionTerms[implode(' ', Tokenizer::split(Normalizer::normalize($term)))] = $condition;
+            }
+        }
         $blocked = array_flip(self::phrases($brandBlocklist));
         foreach ($brands as $brand) {
             $phrase = implode(' ', Tokenizer::split(Normalizer::normalize($brand)));
@@ -120,7 +143,8 @@ final class QueryEntities
         string $dataDir,
         ?Synonyms $synonyms = null,
         string $brandBlocklist = '',
-        string $stopwordsCsv = ''
+        string $stopwordsCsv = '',
+        bool $conditionEnabled = true
     ): self {
         $path = $dataDir . '/' . self::FILE;
         clearstatcache(true, $path);
@@ -141,7 +165,8 @@ final class QueryEntities
             $synonyms,
             $file['ambiguous'],
             $brandBlocklist,
-            $stopwordsCsv
+            $stopwordsCsv,
+            $conditionEnabled ? ($file['used'] ?? null) : null
         );
     }
 
@@ -153,9 +178,13 @@ final class QueryEntities
 
     /**
      * Parse the file: {"version": 2, "brands": [{"name": "xiaomi", "count": 14, "ambiguous"?: true}, ...],
-     * "platforms": {"ps4": ["ps4", "playstation 4"], ...}}. Null when the JSON or its shape is invalid.
+     * "platforms": {"ps4": ["ps4", "playstation 4"], ...}, "used"?: [12, 40, ...]}. `used` is optional (a file
+     * without it has no condition data; the result then has no `used` key). Null when the JSON or its shape is
+     * invalid.
      *
-     * @return array{brands: list<string>, ambiguous: list<string>, platforms: array<string, list<string>>}|null
+     * @return array{
+     *     brands: list<string>, ambiguous: list<string>, platforms: array<string, list<string>>, used?: list<int>
+     * }|null
      */
     public static function parse(string $json): ?array
     {
@@ -194,12 +223,58 @@ final class QueryEntities
             $platforms[$key] = $spellings;
         }
 
-        return ['brands' => $brands, 'ambiguous' => $ambiguous, 'platforms' => $platforms];
+        $parsed = ['brands' => $brands, 'ambiguous' => $ambiguous, 'platforms' => $platforms];
+        if (array_key_exists('used', $data)) {
+            if (!is_array($data['used']) || !array_is_list($data['used'])) {
+                return null;
+            }
+            foreach ($data['used'] as $id) {
+                if (!is_int($id)) {
+                    return null;
+                }
+            }
+            $parsed['used'] = $data['used'];
+        }
+
+        return $parsed;
     }
 
     public function isEmpty(): bool
     {
-        return $this->brands === [] && $this->platformTerms === [];
+        return $this->brands === [] && $this->platformTerms === [] && $this->used === null;
+    }
+
+    /** True when the bundle carries `used` and the condition is enabled. */
+    public function hasCondition(): bool
+    {
+        return $this->used !== null;
+    }
+
+    /**
+     * The condition a query names: 'used', 'new' or null. A phrase of the literal token list; a used term wins
+     * over a new one.
+     *
+     * @param list<string> $tokens
+     * @return array{0: ?string, 1: list<string>} the condition and the tokens of the phrases that named it
+     */
+    private function condition(array $tokens): array
+    {
+        $found = [];
+        $count = count($tokens);
+        for ($start = 0; $start < $count; $start++) {
+            for ($length = min(2, $count - $start); $length > 0; $length--) {
+                $slice = array_slice($tokens, $start, $length);
+                $condition = $this->conditionTerms[implode(' ', $slice)] ?? null;
+                if ($condition !== null) {
+                    $found[$condition] = array_merge($found[$condition] ?? [], $slice);
+                    $start += $length - 1;
+                    break;
+                }
+            }
+        }
+        $named = isset($found['used']) ? 'used' : (isset($found['new']) ? 'new' : null);
+
+        return [$named, array_values(array_unique(array_merge($found['used'] ?? [], $found['new'] ?? [])))];
     }
 
     /**
@@ -209,12 +284,14 @@ final class QueryEntities
      * `typed` is the subset of `brands` the shopper wrote: the brand phrase, or an alias of it, in the literal
      * query. A brand reached only through a platform term or a generic word ("گیفت کارت") is not typed.
      * A publisher-suffix brand ("... studios") is dropped when the query names a platform.
+     * `condition` is 'used' / 'new' when the literal query names it (only with condition data), else null; its
+     * words are not part of `rest`.
      *
      * @param list<list<string>> $variants the query's token lists, the literal one first
      * @param (callable(string): bool)|null $isGeneric true for a phrase made only of generic words
      * @return array{
      *     brands: list<string>, typed: list<string>, ambiguous: list<string>,
-     *     platforms: list<string>, rest: list<string>
+     *     platforms: list<string>, rest: list<string>, condition: ?string
      * }
      */
     public function recognize(array $variants, ?callable $isGeneric = null): array
@@ -224,6 +301,7 @@ final class QueryEntities
         $ambiguousHit = [];
         $platforms = [];
         $rest = null;
+        [$condition, $conditionTokens] = $this->hasCondition() ? $this->condition($variants[0] ?? []) : [null, []];
         foreach ($variants as $index => $tokens) {
             $count = count($tokens);
             $whole = implode(' ', array_filter($tokens, fn (string $t): bool => !isset($this->stopwords[$t])));
@@ -278,7 +356,8 @@ final class QueryEntities
             'typed'     => array_map('strval', array_keys($typed)),
             'ambiguous' => array_map('strval', array_keys(array_intersect_key($ambiguousHit, $brands))),
             'platforms' => array_map('strval', array_keys($platforms)),
-            'rest'      => $rest ?? [],
+            'rest'      => array_values(array_diff($rest ?? [], $conditionTokens)),
+            'condition' => $condition,
         ];
     }
 
@@ -288,15 +367,21 @@ final class QueryEntities
      * and also holds the rest of the query (a Xiaomi phone does not answer "مانیتور شیامی": nothing of the
      * brand matches the rest, so the other brands' monitors keep their places).
      *
-     * @param array{brands: list<string>, platforms: list<string>, rest?: list<string>} $recognized
+     * The `condition` dimension (+1 / -1 / 0, see the class comment) exists only when the bundle has condition data
+     * and is then always active: it needs no candidate to carry anything.
+     *
+     * A candidate whose brand field is another brand but whose title, tags or category name the recognized brand
+     * as a whole-word phrase (a Deadskull product filed under the manufacturer "سایر") is neutral (0), not -1.
+     *
+     * @param array{brands: list<string>, platforms: list<string>, rest?: list<string>, condition?: ?string} $recognized
      * @param array<int, array<string, mixed>> $signals product_id => normalized `brand`, `title`, `tags`, `category`
      * `brands` is the per recognized brand evidence over all candidates, independent of the rest of the query:
      * `carried` (a candidate's brand field is it) and `mentioned` (it is a whole-word phrase in a candidate's
      * title, tags or category). It never feeds the boost / demotion, only the "asked for, not stocked" report.
      *
      * @return array{
-     *     active: array{brand: bool, platform: bool},
-     *     status: array<int, array{brand: int, platform: int}>,
+     *     active: array{brand: bool, platform: bool, condition?: bool},
+     *     status: array<int, array{brand: int, platform: int, condition?: int}>,
      *     brands: array<string, array{carried: bool, mentioned: bool}>
      * }
      */
@@ -305,6 +390,10 @@ final class QueryEntities
         $brands = array_flip($recognized['brands']);
         $platforms = array_flip($recognized['platforms']);
         $active = ['brand' => false, 'platform' => false];
+        if ($this->used !== null) {
+            $active['condition'] = true;
+        }
+        $asked = $recognized['condition'] ?? null;
         $status = [];
         $evidence = [];
         foreach ($recognized['brands'] as $name) {
@@ -317,12 +406,14 @@ final class QueryEntities
                 $named = ' ' . implode(' ', Tokenizer::split(
                     ($signal['title'] ?? '') . ' ' . ($signal['tags'] ?? '') . ' ' . ($signal['category'] ?? '')
                 )) . ' ';
+                $mentionsRecognized = false;
                 foreach ($evidence as $candidate => $_) {
+                    $mentions = str_contains($named, ' ' . $candidate . ' ');
+                    $mentionsRecognized = $mentionsRecognized || $mentions;
                     $evidence[$candidate]['carried'] = $evidence[$candidate]['carried'] || $name === $candidate;
-                    $evidence[$candidate]['mentioned'] = $evidence[$candidate]['mentioned']
-                        || str_contains($named, ' ' . $candidate . ' ');
+                    $evidence[$candidate]['mentioned'] = $evidence[$candidate]['mentioned'] || $mentions;
                 }
-                $brand = $name === '' ? 0 : (isset($brands[$name]) ? 1 : -1);
+                $brand = $name === '' ? 0 : (isset($brands[$name]) ? 1 : ($mentionsRecognized ? 0 : -1));
             }
             $platform = 0;
             if ($platforms !== []) {
@@ -334,6 +425,10 @@ final class QueryEntities
                 $active['platform'] = $active['platform'] || $platform === 1;
             }
             $status[(int) $id] = ['brand' => $brand, 'platform' => $platform];
+            if ($this->used !== null) {
+                $isUsed = isset($this->used[(int) $id]);
+                $status[(int) $id]['condition'] = $asked === 'used' ? ($isUsed ? 1 : -1) : ($isUsed ? -1 : 0);
+            }
         }
 
         return ['active' => $active, 'status' => $status, 'brands' => $evidence];
@@ -345,8 +440,8 @@ final class QueryEntities
      *
      * @param list<int> $ids
      * @param array{
-     *     active: array{brand: bool, platform: bool},
-     *     status: array<int, array{brand: int, platform: int}>
+     *     active: array{brand: bool, platform: bool, condition?: bool},
+     *     status: array<int, array{brand: int, platform: int, condition?: int}>
      * } $entity
      * @return list<int>
      */
@@ -355,8 +450,8 @@ final class QueryEntities
         $rank = static function (int $id) use ($entity): int {
             $positive = 0;
             $negative = 0;
-            foreach (['brand', 'platform'] as $dimension) {
-                $value = $entity['active'][$dimension] ? ($entity['status'][$id][$dimension] ?? 0) : 0;
+            foreach (['brand', 'platform', 'condition'] as $dimension) {
+                $value = ($entity['active'][$dimension] ?? false) ? ($entity['status'][$id][$dimension] ?? 0) : 0;
                 $positive += $value > 0 ? 1 : 0;
                 $negative += $value < 0 ? 1 : 0;
             }

@@ -46,6 +46,35 @@ final class SearchControllerEntitiesTest extends DatabaseTestCase
         TokenStats::clearCache();
     }
 
+    /** @param list<int>|null $used ids for the file's optional `used` key; null leaves the key out */
+    private function entitiesWithUsed(?array $used, array $extraBrands = []): void
+    {
+        $file = [
+            'version' => 2,
+            'brands' => array_merge(
+                [['name' => 'xiaomi', 'count' => 1], ['name' => 'deadskull', 'count' => 1]],
+                array_map(static fn (string $name): array => ['name' => $name, 'count' => 1], $extraBrands)
+            ),
+            'platforms' => ['ps4' => ['ps4', 'playstation 4']],
+        ];
+        if ($used !== null) {
+            $file['used'] = $used;
+        }
+        file_put_contents($this->dataDir . '/' . QueryEntities::FILE, json_encode($file, JSON_UNESCAPED_UNICODE));
+        QueryEntities::clearCache();
+    }
+
+    private function loadConsoles(): void
+    {
+        // The used consoles are the most popular, so any order change comes from the condition.
+        (new ProductLoader($this->pdo, 'products'))->load([
+            ['product_id' => 1, 'title' => 'کنسول ps4 کارکرده', 'popularity' => 100],
+            ['product_id' => 2, 'title' => 'کنسول ps4 اسلیم', 'popularity' => 10],
+            ['product_id' => 3, 'title' => 'کنسول ps4 پرو', 'popularity' => 5],
+            ['product_id' => 4, 'title' => 'کنسول ps4 دست دوم', 'popularity' => 90],
+        ]);
+    }
+
     private function entities(bool $present): void
     {
         $path = $this->dataDir . '/' . QueryEntities::FILE;
@@ -353,5 +382,113 @@ final class SearchControllerEntitiesTest extends DatabaseTestCase
         $off = $this->controller(['brand_blocklist' => 'Xiaomi, other'])->search(['q' => 'xiaomi monitor'], true);
 
         self::assertNull($off['debug']['entities'], 'no brand left to recognize');
+    }
+
+    public function testAUsedQueryPutsUsedItemsBeforeNewOnes(): void
+    {
+        $this->loadConsoles();
+        $this->entitiesWithUsed([1, 4]);
+
+        foreach (['ps4 کارکرده', 'ps4 کار کرده', 'ps4 used'] as $query) {
+            $out = $this->controller()->search(['q' => $query], true);
+            self::assertSame('used', $out['debug']['entities']['condition'], $query);
+            self::assertTrue($out['debug']['entities']['active']['condition'], $query);
+        }
+
+        // Popularity alone would put 1, 4 first too, so the proof is the plain query below and the
+        // flipped case here: the new items are the popular ones.
+        $this->pdo->exec('UPDATE products SET popularity = 100 - popularity');
+        $ids = $this->controller()->search(['q' => 'ps4 کارکرده'])['product_ids'];
+        self::assertSame([1, 4], array_slice($ids, 0, 2), 'used first although less popular now');
+        self::assertSame([], array_diff([1, 2, 3, 4], $ids), 'nothing is removed');
+    }
+
+    public function testAUsedQueryOrdersTheHybridAnswerAndExplainsIt(): void
+    {
+        $this->loadConsoles();
+        $this->entitiesWithUsed([1, 4]);
+        $same = [1.0, 0.0, 0.0];
+        $controller = $this->controller([], [1 => $same, 2 => $same, 3 => $same, 4 => $same]);
+
+        $out = $controller->search(['q' => 'ps4 کارکرده'], true);
+
+        $rows = array_column($out['debug']['results'], null, 'product_id');
+        self::assertSame(1, $rows[1]['blend']['entity']['condition']);
+        self::assertSame(-1, $rows[2]['blend']['entity']['condition']);
+        self::assertContains($out['product_ids'][0], [1, 4]);
+        self::assertSame([], array_diff([1, 2, 3, 4], $out['product_ids']), 'nothing is removed');
+    }
+
+    public function testAPlainQueryDemotesUsedItems(): void
+    {
+        $this->loadConsoles();
+        $this->entitiesWithUsed([1, 4]);
+
+        $out = $this->controller()->search(['q' => 'ps4'], true);
+
+        $ids = $out['product_ids'];
+        self::assertNull($out['debug']['entities']['condition']);
+        self::assertSame([2, 3], array_slice($ids, 0, 2), 'new items first');
+        self::assertSame([], array_diff([1, 2, 3, 4], $ids), 'used items stay in the list');
+    }
+
+    public function testASealedQueryDemotesUsedItems(): void
+    {
+        $this->loadConsoles();
+        $this->entitiesWithUsed([1, 4]);
+
+        foreach (['ps4 آکبند', 'ps4 sealed'] as $query) {
+            $out = $this->controller()->search(['q' => $query], true);
+            self::assertSame('new', $out['debug']['entities']['condition'], $query);
+            self::assertSame([], array_diff([1, 4], array_slice($out['product_ids'], 2)), "$query: used last");
+        }
+    }
+
+    public function testAFileWithoutUsedMeansNoConditionLogic(): void
+    {
+        $this->loadConsoles();
+        $this->entitiesWithUsed(null);
+
+        $out = $this->controller()->search(['q' => 'ps4'], true);
+
+        self::assertSame([1, 4, 2, 3], $out['product_ids'], 'the popularity order, untouched');
+        self::assertFalse($out['debug']['entities']['active']['condition'] ?? false);
+        $asked = $this->controller()->search(['q' => 'ps4 کارکرده'], true);
+        self::assertNull($asked['debug']['entities']['condition'] ?? null);
+    }
+
+    public function testConditionDisabledIsANoOp(): void
+    {
+        $this->loadConsoles();
+        $this->entitiesWithUsed([1, 4]);
+
+        $off = $this->controller(['condition_enabled' => false])->search(['q' => 'ps4'], true);
+        $hybrid = $this->controller(['condition_enabled' => false], [1 => [1.0, 0.0, 0.0]])
+            ->search(['q' => 'ps4'], true);
+
+        self::assertSame([1, 4, 2, 3], $off['product_ids']);
+        self::assertFalse($off['debug']['entities']['active']['condition'] ?? false);
+        self::assertSame(1, $hybrid['product_ids'][0]);
+    }
+
+    public function testABrandMentioningProductInAnotherManufacturerIsNotDemoted(): void
+    {
+        // The Deadskull fixture: filed under the manufacturer "سایر" (Other) but Deadskull by name.
+        (new ProductLoader($this->pdo, 'products'))->load([
+            ['product_id' => 1, 'title' => 'کاور کنترلر deadskull آبی', 'brand' => 'Deadskull', 'popularity' => 1],
+            ['product_id' => 2, 'title' => 'کاور کنترلر deadskull قرمز', 'brand' => 'سایر', 'popularity' => 50],
+            ['product_id' => 3, 'title' => 'کاور کنترلر دوال شاک', 'brand' => 'Xiaomi', 'popularity' => 100],
+        ]);
+        $this->entitiesWithUsed(null);
+        $same = [1.0, 0.0, 0.0];
+
+        $out = $this->controller([], [1 => $same, 2 => $same, 3 => $same])
+            ->search(['q' => 'deadskull کاور'], true);
+
+        $rows = array_column($out['debug']['results'], null, 'product_id');
+        self::assertSame(1, $rows[1]['blend']['entity']['brand']);
+        self::assertSame(0, $rows[2]['blend']['entity']['brand'], 'neutral, not demoted');
+        self::assertSame(-1, $rows[3]['blend']['entity']['brand'], 'a truly different brand still is');
+        self::assertSame([1, 2], array_slice($out['product_ids'], 0, 2));
     }
 }

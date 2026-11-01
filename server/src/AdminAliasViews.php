@@ -526,8 +526,16 @@ final class AdminAliasViews
             return '';
         }
         $named = array_merge($entities['brands'] ?? [], $entities['platforms'] ?? []);
-        $html = '<dt>' . self::e($t['entities']) . '</dt><dd><bdi class="ltr">'
-            . self::e(implode(AdminStrings::fa()['ui']['list_sep'], $named)) . '</bdi></dd>';
+        $html = '';
+        if ($named !== []) {
+            $html .= '<dt>' . self::e($t['entities']) . '</dt><dd><bdi class="ltr">'
+                . self::e(implode(AdminStrings::fa()['ui']['list_sep'], $named)) . '</bdi></dd>';
+        }
+        if (($entities['active']['condition'] ?? false) === true) {
+            $asked = $entities['condition'] ?? null;
+            $key = 'condition_' . ($asked === 'used' || $asked === 'new' ? $asked : 'none');
+            $html .= '<dt>' . self::e($t['condition']) . '</dt><dd>' . self::e($t[$key]) . '</dd>';
+        }
         if (($entities['brand_status'] ?? []) !== []) {
             $html .= '<dt>' . self::e($t['brand_status']) . '</dt><dd>';
             foreach ($entities['brand_status'] as $name => $state) {

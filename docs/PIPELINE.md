@@ -50,7 +50,10 @@ it (`keyword.py` `build_token_df`). The server weights a query token by `log(N /
 `entities.json` is `{"version": 2, "brands": [{"name", "count", "ambiguous"?: true}], "platforms": {key: [spellings]}}` (version 1, without `ambiguous`, is still read): the normalized
 `brand` values of the catalog and the short platform seed list in `keyword.py` (`PLATFORM_SEEDS`; edit it and rebuild to
 add a platform). The owner's alias groups are applied by the server at query time (they live in `server/storage`, not in
-the bundle), so a misspelled brand needs an alias, not a rebuild ([SEARCH-BEHAVIOR.md](SEARCH-BEHAVIOR.md#entities)). Both files are optional for
+the bundle), so a misspelled brand needs an alias, not a rebuild ([SEARCH-BEHAVIOR.md](SEARCH-BEHAVIOR.md#entities)).
+Since M45 the file also carries `"used": [product ids]` (optional, sorted): the products whose normalized name or
+`meta_title` (the export's `title_en` column) holds the whole-word phrase `کارکرده` or `کار کرده`
+(`keyword.py` `USED_PHRASES`); a file without the key means no condition data ([SEARCH-BEHAVIOR.md](SEARCH-BEHAVIOR.md#condition)). Both files are optional for
 `/reload` (a pre-M44 bundle has neither) and validated when present (`invalid_token_df`, `invalid_entities`; `token_df.json`'s `n`
 must equal `meta.count`, and the versions in `meta.json` must match the code's).
 

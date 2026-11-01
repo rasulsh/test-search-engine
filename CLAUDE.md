@@ -458,6 +458,13 @@ wait for review before starting the next.
   name's digits; analytics silent failures show the first result's title; the intent map starter is `docs/INTENT-MAP-TODO.md`
   (the catalog export is not in the repo). `/reload` validates both new files and tolerates their absence.
 
+- **M45 — Used / new condition + brand-mention fix:** `entities.json` gains the optional `used` key (sorted ids whose
+  normalized name or `meta_title` holds `کارکرده` / `کار کرده`; version stays 2, absent = no condition data);
+  `QueryEntities` recognizes `کارکرده` / `کار کرده` / `دست دوم` / `used` / `second hand` / `secondhand` (used) and `آکبند` /
+  `sealed` (new) and reuses `search.entity_boost` / `entity_demote` after the floor (used query: used up, others down;
+  new query or none: used down); `search.condition_enabled`; a candidate of another brand field that mentions the
+  recognized brand in its title, tags or category is neutral, not demoted.
+
 **Definition of Done (per PR):** code + tests pass in CI; docs updated;
 KISS respected (no unused abstraction); PR description complete; no secrets or
 data files committed. **A PR that touches config** (adds, removes, renames or re-defaults a

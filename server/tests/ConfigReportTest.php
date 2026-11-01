@@ -53,6 +53,15 @@ final class ConfigReportTest extends TestCase
         self::assertSame('mouse', $rows['search.synonym_blocklist']['value']);
     }
 
+    public function testTheConditionSwitchShowsOnTheStatusPageList(): void
+    {
+        $rows = self::byKey([]);
+        self::assertSame('true', $rows['search.condition_enabled']['value']);
+
+        $rows = self::byKey(['search' => ['condition_enabled' => false]]);
+        self::assertSame('false', $rows['search.condition_enabled']['value']);
+    }
+
     public function testEveryKnownKeyHasARowWithItsEffectiveValueAndSource(): void
     {
         $rows = self::byKey(self::overrides());

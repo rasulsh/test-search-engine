@@ -125,6 +125,7 @@ The cPanel bundle carries no vectors and no model since M42 (the semantic tier's
 | `search.entities_enabled` | 1 | M44: master switch of brand / platform recognition ([SEARCH-BEHAVIOR.md](SEARCH-BEHAVIOR.md#entities)). Needs the bundle's `entities.json`; without it nothing is recognized |
 | `search.entity_boost` | 0.15 | M44: a candidate carrying the brand / platform the query names is lifted by this factor (`1 + boost` per dimension), after the floor |
 | `search.entity_demote` | 0.10 | M44: a candidate carrying another brand / platform is lowered by this factor (`1 - demote` per dimension); nothing is removed. Both knobs at `0` (or `entities_enabled=0`) disable the feature, including the loss of the floor exemption |
+| `search.condition_enabled` | 1 | M45: the used / new condition logic ([SEARCH-BEHAVIOR.md](SEARCH-BEHAVIOR.md#condition)). Uses `entity_boost` / `entity_demote` and the bundle's `entities.json` `used` list; `0` disables only this logic (brand / platform stay). Without a `used` list in the file it does nothing. Not part of the result-cache key: flush the cache after changing it |
 | `search.latency_budget_ms` | 800 | the documented server-side latency target per request (M43; was 200). **The runtime never enforces it**: nothing is cut or timed out at this number; it is a target for the go-live measurements and a reference value, not a limit. The CI latency guards keep their own fixed 200 ms bar |
 
 ### VPS client (`vps` section)

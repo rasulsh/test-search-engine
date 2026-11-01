@@ -310,6 +310,10 @@ final class Config
             'search.entities_enabled'         => ['bool', true],
             'search.entity_boost'             => ['float', 0.15],
             'search.entity_demote'            => ['float', 0.10],
+            // Used / new condition (needs `used` in entities.json): a query asking for used lifts the used
+            // products and lowers the others, one asking for new (آکبند / sealed) or naming no condition lowers
+            // the used ones, with the two factors above. false disables only this condition logic.
+            'search.condition_enabled'        => ['bool', true],
             // A longer query is cut before the spell correction and the VPS call.
             'search.query_max_chars'          => ['int', 100],
             'search.query_max_tokens'         => ['int', 8],

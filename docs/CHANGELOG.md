@@ -46,6 +46,23 @@ line can be deleted. `php server/tools/config-check.php` lists all of it.
   text; an applied correction is what the VPS embeds. `keymap.json` in the bundle now lists 33 keys; rebuild to refresh it
   (the server does not read that file).
 
+## M45: used / new condition and brand-mention fix
+
+- **Added**: `search.condition_enabled` = `true`: the used / new condition logic (it reuses `search.entity_boost` /
+  `search.entity_demote`). `false` disables only this logic.
+- **Removed / renamed**: none.
+- **Changed defaults**: none.
+- **Behaviour** (no other key):
+  - `entities.json` gains the optional `used` key (sorted product ids whose name or `meta_title` says `کارکرده` /
+    `کار کرده`); the version stays 2, a file without the key is valid and means no condition data. `/reload` validates
+    the key when present (`invalid_entities`).
+  - A query asking for used (`کارکرده`, `کار کرده`, `دست دوم`, `used`, `second hand`, `secondhand`) lifts used products and
+    lowers the others; `آکبند` / `sealed` and a query with no condition word lower the used ones. Nothing is removed.
+  - A candidate of another brand field that mentions the recognized brand in its title, tags or category is neutral,
+    no longer demoted (the products filed under the manufacturer "سایر").
+- **After deploying**: build the bundle (adds `used` and the ambiguous flags), upload it, `/reload`, flush the result
+  cache, check the status page (`search.condition_enabled` in the effective configuration).
+
 ## M44: query understanding and evaluation
 
 - **Added**:

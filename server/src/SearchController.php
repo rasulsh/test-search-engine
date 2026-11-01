@@ -248,7 +248,8 @@ final class SearchController
                 $config['paths']['data'],
                 $synonyms,
                 (string) $search['brand_blocklist'],
-                (string) $search['stopwords']
+                (string) $search['stopwords'],
+                (bool) $search['condition_enabled']
             ) : null
         );
     }
@@ -779,7 +780,10 @@ final class SearchController
             fn (string $phrase): bool => $this->keyword->isGenericOnly($phrase)
         );
 
-        return $recognized['brands'] === [] && $recognized['platforms'] === [] ? null : $recognized;
+        // With condition data every query has a condition status (new unless it asks for used).
+        return $recognized['brands'] === [] && $recognized['platforms'] === [] && !$this->entities->hasCondition()
+            ? null
+            : $recognized;
     }
 
     /**
@@ -811,7 +815,7 @@ final class SearchController
      */
     private static function entityInfo(array $recognized, array $entity, array $signals): array
     {
-        $active = $entity['active'] ?? ['brand' => false, 'platform' => false];
+        $active = $entity['active'] ?? ['brand' => false, 'platform' => false, 'condition' => false];
         $typed = array_flip($recognized['typed'] ?? $recognized['brands']);
         $ambiguous = array_flip($recognized['ambiguous'] ?? []);
         $brands = [];
@@ -836,6 +840,7 @@ final class SearchController
             'brands'          => $recognized['brands'],
             'platforms'       => $recognized['platforms'],
             'active'          => $active,
+            'condition'       => $recognized['condition'] ?? null,
             'brand_status'    => $brands,
             'brand_unmatched' => $unmatched,
         ];

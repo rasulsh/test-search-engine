@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Tests;
 
+use App\Normalizer;
 use App\QueryEntities;
 use App\Synonyms;
 use PHPUnit\Framework\TestCase;
@@ -33,7 +34,7 @@ final class QueryEntitiesTest extends TestCase
     /** @return list<list<string>> */
     private static function variants(string ...$queries): array
     {
-        return array_map(static fn (string $q): array => explode(' ', $q), $queries);
+        return array_map(static fn (string $q): array => explode(' ', Normalizer::normalize($q)), $queries);
     }
 
     public function testAMisspelledBrandResolvesThroughTheOwnersAliasGroup(): void
@@ -64,7 +65,8 @@ final class QueryEntitiesTest extends TestCase
     public function testAQueryWithNoEntityRecognizesNone(): void
     {
         self::assertSame(
-            ['brands' => [], 'typed' => [], 'ambiguous' => [], 'platforms' => [], 'rest' => []],
+            ['brands' => [], 'typed' => [], 'ambiguous' => [], 'platforms' => [], 'rest' => [],
+                'condition' => null],
             $this->entities()->recognize(self::variants('کیبورد مکانیکال'))
         );
     }
@@ -258,7 +260,12 @@ final class QueryEntitiesTest extends TestCase
         self::assertSame(['carried' => false, 'mentioned' => true], $result['brands']['xiaomi']);
         self::assertSame(['carried' => true, 'mentioned' => true], $result['brands']['asus']);
         self::assertSame(['brand' => 0, 'platform' => 0], $result['status'][1], 'empty brand stays neutral');
-        self::assertSame(['brand' => -1, 'platform' => 0], $result['status'][2]);
+        self::assertSame(
+            ['brand' => 0, 'platform' => 0],
+            $result['status'][2],
+            'another brand field, but the tags name asus: neutral, not demoted'
+        );
+        self::assertSame(['brand' => -1, 'platform' => 0], $result['status'][4], 'another brand, no mention');
         self::assertSame(
             ['brand' => false, 'platform' => false],
             $result['active'],
@@ -273,5 +280,120 @@ final class QueryEntitiesTest extends TestCase
     public function testNoFileMeansNoEntities(): void
     {
         self::assertTrue(QueryEntities::fromDirectory('/nonexistent/dir')->isEmpty());
+    }
+
+    /** @param list<int>|null $used */
+    private function withCondition(?array $used): QueryEntities
+    {
+        $platforms = ['ps4' => ['ps4', 'playstation 4']];
+
+        return new QueryEntities(['xiaomi', 'deadskull'], $platforms, null, [], '', '', $used);
+    }
+
+    public function testTheConditionWordsAreRecognizedAndLeaveTheRest(): void
+    {
+        $entities = $this->withCondition([1]);
+        $used = ['ps4 کارکرده', 'ps4 کار کرده', 'ps4 دست دوم', 'ps4 used', 'ps4 second hand', 'ps4 secondhand'];
+        foreach ($used as $query) {
+            $found = $entities->recognize(self::variants($query));
+            self::assertSame('used', $found['condition'], $query);
+            self::assertSame(['ps4'], $found['platforms'], $query);
+            self::assertSame([], $found['rest'], "$query: the condition words are not the rest of the query");
+        }
+        foreach (['ps4 آکبند', 'ps4 sealed'] as $query) {
+            self::assertSame('new', $entities->recognize(self::variants($query))['condition'], $query);
+        }
+        // "new" and "نو" are ordinary title words, not a condition.
+        foreach (['ps4 new', 'ps4 نو', 'ps4', 'ps4 pro'] as $query) {
+            self::assertNull($entities->recognize(self::variants($query))['condition'], $query);
+        }
+        self::assertSame('used', $entities->recognize(self::variants('ps4 sealed used'))['condition'], 'used wins');
+    }
+
+    public function testNoConditionDataMeansNoConditionAtAll(): void
+    {
+        $entities = $this->withCondition(null);
+
+        self::assertNull($entities->recognize(self::variants('ps4 کارکرده'))['condition']);
+        self::assertFalse($entities->hasCondition());
+        $result = $entities->statuses(['brands' => [], 'platforms' => []], [
+            1 => ['brand' => '', 'title' => 'ps4', 'tags' => '', 'category' => ''],
+        ]);
+        self::assertSame(['brand' => false, 'platform' => false], $result['active']);
+        self::assertSame(['brand' => 0, 'platform' => 0], $result['status'][1]);
+        self::assertFalse($entities->isEmpty(), 'brands and platforms alone still make it non-empty');
+        self::assertTrue((new QueryEntities([], [], null))->isEmpty());
+        self::assertTrue((new QueryEntities([], [], null, [], '', '', []))->hasCondition(), 'an empty list is data');
+    }
+
+    public function testConditionStatuses(): void
+    {
+        $entities = $this->withCondition([1, 3]);
+        $signals = [
+            1 => ['brand' => '', 'title' => 'a', 'tags' => '', 'category' => ''],
+            2 => ['brand' => '', 'title' => 'b', 'tags' => '', 'category' => ''],
+            3 => ['brand' => '', 'title' => 'c', 'tags' => '', 'category' => ''],
+        ];
+        $base = ['brands' => [], 'platforms' => [], 'rest' => []];
+
+        $used = $entities->statuses($base + ['condition' => 'used'], $signals);
+        self::assertTrue($used['active']['condition']);
+        self::assertSame([1, -1, 1], array_column($used['status'], 'condition'));
+        $new = $entities->statuses($base + ['condition' => 'new'], $signals);
+        self::assertSame([-1, 0, -1], array_column($new['status'], 'condition'));
+        $none = $entities->statuses($base + ['condition' => null], $signals);
+        self::assertSame([-1, 0, -1], array_column($none['status'], 'condition'));
+    }
+
+    public function testReorderPutsUsedItemsFirstOnlyWhenAskedAndLastOtherwise(): void
+    {
+        $entities = $this->withCondition([2]);
+        $signals = [
+            1 => ['brand' => '', 'title' => 'a', 'tags' => '', 'category' => ''],
+            2 => ['brand' => '', 'title' => 'b', 'tags' => '', 'category' => ''],
+            3 => ['brand' => '', 'title' => 'c', 'tags' => '', 'category' => ''],
+        ];
+        $base = ['brands' => [], 'platforms' => [], 'rest' => []];
+
+        $asked = $entities->statuses($base + ['condition' => 'used'], $signals);
+        self::assertSame([2, 1, 3], QueryEntities::reorder([1, 2, 3], $asked));
+        $default = $entities->statuses($base + ['condition' => null], $signals);
+        self::assertSame([1, 3, 2], QueryEntities::reorder([1, 2, 3], $default));
+    }
+
+    public function testTheUsedListIsParsedAndValidatedAndStaysOptional(): void
+    {
+        $head = '{"version": 2, "brands": [], "platforms": {}';
+        self::assertSame([3, 9], QueryEntities::parse($head . ', "used": [3, 9]}')['used']);
+        self::assertSame([], QueryEntities::parse($head . ', "used": []}')['used']);
+        self::assertArrayNotHasKey('used', QueryEntities::parse($head . '}'), 'no key: no condition data');
+        self::assertArrayNotHasKey('used', QueryEntities::parse('{"version": 1, "brands": [], "platforms": {}}'));
+        foreach (['"used": "3"', '"used": {"a": 1}', '"used": ["3"]', '"used": [1.5]', '"used": null'] as $bad) {
+            self::assertNull(QueryEntities::parse($head . ', ' . $bad . '}'), $bad);
+        }
+    }
+
+    public function testABrandMentionedInTheTitleTagsOrCategoryIsNeutralNotDemoted(): void
+    {
+        $entities = $this->withCondition(null);
+        $result = $entities->statuses(['brands' => ['deadskull'], 'platforms' => [], 'rest' => []], [
+            1 => ['brand' => 'deadskull', 'title' => 'کاور', 'tags' => '', 'category' => ''],
+            // Filed under the manufacturer "سایر" (Other) but a Deadskull product by name / tags / category.
+            2 => ['brand' => 'سایر', 'title' => 'کاور deadskull ps5', 'tags' => '', 'category' => ''],
+            3 => ['brand' => 'سایر', 'title' => 'کاور', 'tags' => 'deadskull', 'category' => ''],
+            4 => ['brand' => 'سایر', 'title' => 'کاور', 'tags' => '', 'category' => 'deadskull'],
+            // A truly different brand that does not mention it, and a look-alike word, are still demoted.
+            5 => ['brand' => 'sony', 'title' => 'کاور', 'tags' => '', 'category' => ''],
+            6 => ['brand' => 'سایر', 'title' => 'deadskulls cover', 'tags' => '', 'category' => ''],
+        ]);
+
+        self::assertSame(1, $result['status'][1]['brand']);
+        foreach ([2, 3, 4] as $id) {
+            self::assertSame(0, $result['status'][$id]['brand'], "product $id");
+        }
+        self::assertSame(-1, $result['status'][5]['brand']);
+        self::assertSame(-1, $result['status'][6]['brand']);
+        self::assertTrue($result['active']['brand'], 'the active-brand rule is unchanged');
+        self::assertSame(['carried' => true, 'mentioned' => true], $result['brands']['deadskull']);
     }
 }

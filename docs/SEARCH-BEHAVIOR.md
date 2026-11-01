@@ -105,7 +105,16 @@ dimension multiplies the score by `1 + search.entity_boost` (carries it) or `1 -
 nothing is removed. One more rule: a **solid** keyword hit of another brand than the named one is no longer exempt from
 the relevance floor. Without the semantic tier the keyword hits are reordered the same way (carriers first,
 the neutral ones next, the others last). When the brand is named and no candidate carries it, the brand is
-reported as `brand_unmatched`: in the debug breakdown (`debug.entities`), on the admin tester page, in
+reported as `brand_unmatched`. That report is judged **per brand**, independent of the other query words: a brand is
+unmatched only when no candidate **carries** it (its `brand` field) and none **mentions** it (the brand is a whole-word
+phrase in its title, tags or category), so a product that names the brand only in its title counts. (The boost and the
+demotion stay based on the brand field and on `active`.) The build flags a brand `ambiguous` when its name is a seed
+colour / common word (`blue`, `black`, `pro`, `plus`, `one`, `max`, `mini`, `air`, Persian colour names, ...) or when
+products of other brands hold its phrase as whole words in title or tags at least `max(5, 2 x its own product count)` times;
+an ambiguous brand is recognized only when the whole query (stopwords removed) is that brand, so `navy blue` or
+`astro bot` name no brand. `search.brand_blocklist` removes a name from recognition altogether. The debug block lists per
+recognized brand `carried` / `mentioned` / `ambiguous` / `unmatched` (`brand_status`; shown in Persian on the tester page).
+`brand_unmatched` appears in the debug breakdown (`debug.entities`), on the admin tester page, in
 `search_logs.brand_unmatched` and in the analytics page's "brand asked for, not in the results" table. Setting both
 `entity_boost` and `entity_demote` to 0 (or `search.entities_enabled` to 0) turns it all off.
 

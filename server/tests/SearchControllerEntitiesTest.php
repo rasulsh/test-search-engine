@@ -87,9 +87,13 @@ final class SearchControllerEntitiesTest extends DatabaseTestCase
         ]);
     }
 
-    public function testABrandNoCandidateCarriesWithTheRestOfTheQueryIsReportedUnmatched(): void
+    public function testABrandNoCandidateCarriesOrNamesIsReportedUnmatchedAndLogged(): void
     {
-        $this->load();
+        (new ProductLoader($this->pdo, 'products'))->load([
+            ['product_id' => 1, 'title' => 'مانیتور گیمینگ ایسوس ۲۷ اینچ', 'brand' => 'Asus', 'stock' => 1,
+                'popularity' => 100],
+            ['product_id' => 2, 'title' => 'مانیتور ال جی ۲۷ اینچ', 'brand' => 'LG', 'stock' => 1, 'popularity' => 90],
+        ]);
 
         $out = $this->controller()->search(['q' => 'مانیتور شیامی'], true);
 
@@ -101,6 +105,17 @@ final class SearchControllerEntitiesTest extends DatabaseTestCase
             'xiaomi',
             $this->pdo->query('SELECT brand_unmatched FROM search_logs ORDER BY id DESC LIMIT 1')->fetchColumn()
         );
+    }
+
+    public function testACandidateCarryingTheBrandMeansNotUnmatchedWhateverTheRestOfTheQuery(): void
+    {
+        $this->load();
+
+        // The Xiaomi phone is a candidate and carries the brand (M44 reported it unmatched: it is no monitor).
+        $out = $this->controller()->search(['q' => 'مانیتور شیامی'], true);
+
+        self::assertSame([], $out['debug']['entities']['brand_unmatched']);
+        self::assertTrue($out['debug']['entities']['brand_status']['xiaomi']['carried']);
     }
 
     public function testNoBrandRecognizedMeansNoEntityInfo(): void
@@ -209,5 +224,134 @@ final class SearchControllerEntitiesTest extends DatabaseTestCase
 
         self::assertSame([], $without['product_ids'], 'no keyword answer, and no substring scan, for generic words');
         self::assertSame([2], $with['product_ids']);
+    }
+
+    /** @param list<array{name: string, count: int, ambiguous?: bool}> $brands */
+    private function entityFile(array $brands, int $version = 2): void
+    {
+        file_put_contents($this->dataDir . '/' . QueryEntities::FILE, json_encode([
+            'version' => $version,
+            'brands' => $brands,
+            'platforms' => ['ps5' => ['ps5', 'playstation 5']],
+        ], JSON_UNESCAPED_UNICODE));
+        QueryEntities::clearCache();
+    }
+
+    private function loadLiveCatalog(): void
+    {
+        (new ProductLoader($this->pdo, 'products'))->load([
+            ['product_id' => 1, 'title' => 'dobe stand for ps5 slim', 'brand' => 'Dobe', 'stock' => 1],
+            ['product_id' => 2, 'title' => 'dobe cooling fan ps5 slim', 'brand' => '', 'stock' => 1],
+            ['product_id' => 3, 'title' => 'deadskull ps5 slim skin cover', 'brand' => '', 'stock' => 1],
+            ['product_id' => 4, 'title' => 'quest pro vr headset', 'brand' => 'Meta', 'stock' => 1],
+            ['product_id' => 5, 'title' => 'logitech g29 racing wheel', 'brand' => '', 'stock' => 1],
+            ['product_id' => 6, 'title' => 'case ps5 slim bag navy', 'brand' => 'Nahl', 'stock' => 1],
+            ['product_id' => 7, 'title' => 'ps5 slim case Midnight Blue', 'brand' => 'Hori', 'stock' => 1],
+            ['product_id' => 8, 'title' => 'dualsense astro bot limited edition', 'brand' => 'Sony', 'stock' => 1],
+            ['product_id' => 9, 'title' => 'astro a50 wireless headset', 'brand' => 'Astro', 'stock' => 1],
+            ['product_id' => 10, 'title' => 'asus gaming monitor 27 inch', 'brand' => 'Asus', 'stock' => 1],
+            ['product_id' => 11, 'title' => 'lg gaming monitor 27 inch', 'brand' => 'LG', 'stock' => 1],
+        ]);
+    }
+
+    /** @return list<string> the live queries of the "brand asked for, not in results" card */
+    public static function liveQueries(): array
+    {
+        return [
+            'nahl case ps5 slim bag navy blue',
+            'dualsense astro bot joyful limited edition',
+            'dobe ps5 slim stand',
+            'deadskull ps5 slim skin',
+            'meta quest pro',
+            'logitech g29 racing wheel',
+        ];
+    }
+
+    public function testTheLiveQueriesNeverReportABrandTheResultsShow(): void
+    {
+        $this->loadLiveCatalog();
+        // "blue" and "astro" flagged ambiguous by the build; all others are plain brands.
+        $this->entityFile([
+            ['name' => 'blue', 'count' => 1, 'ambiguous' => true],
+            ['name' => 'astro', 'count' => 1, 'ambiguous' => true],
+            ['name' => 'dobe', 'count' => 1], ['name' => 'deadskull', 'count' => 1], ['name' => 'meta', 'count' => 1],
+            ['name' => 'logitech', 'count' => 1], ['name' => 'nahl', 'count' => 1], ['name' => 'sony', 'count' => 1],
+        ]);
+
+        foreach (self::liveQueries() as $query) {
+            $out = $this->controller()->search(['q' => $query], true);
+
+            self::assertNotEmpty($out['product_ids'], $query);
+            self::assertSame([], $out['debug']['entities']['brand_unmatched'] ?? [], $query);
+            self::assertNotContains('blue', $out['debug']['entities']['brands'] ?? [], $query);
+            self::assertNotContains('astro', $out['debug']['entities']['brands'] ?? [], $query);
+        }
+    }
+
+    public function testEvidenceInTheTitleAloneMakesABrandMentionedNotUnmatched(): void
+    {
+        $this->loadLiveCatalog();
+        $this->entityFile([
+            ['name' => 'deadskull', 'count' => 1], ['name' => 'logitech', 'count' => 1],
+        ]);
+
+        $out = $this->controller()->search(['q' => 'deadskull ps5 slim skin'], true);
+        $status = $out['debug']['entities']['brand_status']['deadskull'];
+
+        // Product 3 has an empty brand field and names the brand in its title only.
+        self::assertSame(
+            ['carried' => false, 'mentioned' => true, 'ambiguous' => false, 'unmatched' => false],
+            $status
+        );
+        self::assertSame([], $out['debug']['entities']['brand_unmatched']);
+    }
+
+    public function testAnUnflaggedBrandWordIsStillNotUnmatchedWhenCandidatesCarryOrNameIt(): void
+    {
+        $this->loadLiveCatalog();
+        // A version 1 style file: no flags. "blue" is named by a Hori title, "astro" carried by the headset.
+        $this->entityFile([['name' => 'blue', 'count' => 1], ['name' => 'astro', 'count' => 1]], 1);
+
+        $blue = $this->controller()->search(['q' => 'nahl case ps5 slim bag navy blue'], true);
+        $astro = $this->controller()->search(['q' => 'dualsense astro bot joyful limited edition'], true);
+
+        self::assertSame([], $blue['debug']['entities']['brand_unmatched']);
+        self::assertTrue($blue['debug']['entities']['brand_status']['blue']['mentioned']);
+        self::assertSame([], $astro['debug']['entities']['brand_unmatched']);
+        self::assertFalse($astro['debug']['entities']['brand_status']['astro']['ambiguous']);
+    }
+
+    public function testABrandNoCandidateCarriesOrNamesIsStillReported(): void
+    {
+        $this->loadLiveCatalog();
+        $this->entityFile([['name' => 'xiaomi', 'count' => 1], ['name' => 'asus', 'count' => 1]]);
+
+        $out = $this->controller()->search(['q' => 'xiaomi monitor'], true);
+
+        self::assertNotEmpty($out['product_ids']);
+        self::assertSame(['xiaomi'], $out['debug']['entities']['brand_unmatched']);
+        self::assertTrue($out['debug']['entities']['brand_status']['xiaomi']['unmatched']);
+    }
+
+    public function testAnAmbiguousBrandIsReportedWhenItIsTheWholeQuery(): void
+    {
+        $this->loadLiveCatalog();
+        $this->entityFile([['name' => 'astro', 'count' => 1, 'ambiguous' => true]]);
+
+        $out = $this->controller()->search(['q' => 'astro'], true);
+
+        self::assertSame(['astro'], $out['debug']['entities']['brands']);
+        self::assertTrue($out['debug']['entities']['brand_status']['astro']['ambiguous']);
+        self::assertTrue($out['debug']['entities']['brand_status']['astro']['carried']);
+    }
+
+    public function testTheBrandBlocklistKeepsANameFromBeingRecognized(): void
+    {
+        $this->loadLiveCatalog();
+        $this->entityFile([['name' => 'xiaomi', 'count' => 1], ['name' => 'asus', 'count' => 1]]);
+
+        $off = $this->controller(['brand_blocklist' => 'Xiaomi, other'])->search(['q' => 'xiaomi monitor'], true);
+
+        self::assertNull($off['debug']['entities'], 'no brand left to recognize');
     }
 }

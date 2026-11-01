@@ -528,6 +528,23 @@ final class AdminAliasViews
         $named = array_merge($entities['brands'] ?? [], $entities['platforms'] ?? []);
         $html = '<dt>' . self::e($t['entities']) . '</dt><dd><bdi class="ltr">'
             . self::e(implode(AdminStrings::fa()['ui']['list_sep'], $named)) . '</bdi></dd>';
+        if (($entities['brand_status'] ?? []) !== []) {
+            $html .= '<dt>' . self::e($t['brand_status']) . '</dt><dd>';
+            foreach ($entities['brand_status'] as $name => $state) {
+                $labels = [];
+                foreach (['carried', 'mentioned', 'ambiguous'] as $flag) {
+                    if (!empty($state[$flag])) {
+                        $labels[] = $t['brand_' . $flag];
+                    }
+                }
+                if (!empty($state['unmatched'])) {
+                    $labels[] = $t['brand_unmatched'];
+                }
+                $text = $labels === [] ? $t['brand_none'] : implode(AdminStrings::fa()['ui']['list_sep'], $labels);
+                $html .= '<div><bdi class="ltr">' . self::e((string) $name) . '</bdi>: ' . self::e($text) . '</div>';
+            }
+            $html .= '</dd>';
+        }
         if (($entities['brand_unmatched'] ?? []) !== []) {
             $html .= '<dt>' . self::e($t['brand_unmatched']) . '</dt><dd><bdi class="ltr">'
                 . self::e(implode(AdminStrings::fa()['ui']['list_sep'], $entities['brand_unmatched'])) . '</bdi></dd>';

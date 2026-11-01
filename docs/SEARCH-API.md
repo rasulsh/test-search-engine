@@ -40,7 +40,7 @@ only `SELECT`s.
 
 `POST /search` with `"debug": 1` and the header `X-Debug-Token:
 $SEARCH_DEBUG_TOKEN` (off until that is set; `403 debug_forbidden` otherwise)
-adds `debug: {tier, settings, entities, results[]}` to the response (`entities`, M44: `null`, or `{brands, platforms, active, brand_unmatched}` when the query names a brand / platform; `coverage` is weighted by token rarity): per result its rank,
+adds `debug: {tier, settings, entities, results[]}` to the response (`entities`, M44: `null`, or `{brands, platforms, active, brand_status, brand_unmatched}` (`brand_status`: per brand `carried` / `mentioned` / `ambiguous` / `unmatched`) when the query names a brand / platform; `coverage` is weighted by token rarity): per result its rank,
 keyword hit (match type, score, whether the title / a structured field / a name
 matched), whether it was pinned by an exact SKU, and, for hybrid results, the
 blend: raw and normalized keyword score, cosine and normalized cosine, the

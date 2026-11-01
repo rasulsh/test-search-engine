@@ -64,7 +64,7 @@ final class QueryEntitiesTest extends TestCase
     public function testAQueryWithNoEntityRecognizesNone(): void
     {
         self::assertSame(
-            ['brands' => [], 'typed' => [], 'platforms' => [], 'rest' => []],
+            ['brands' => [], 'typed' => [], 'ambiguous' => [], 'platforms' => [], 'rest' => []],
             $this->entities()->recognize(self::variants('کیبورد مکانیکال'))
         );
     }
@@ -180,11 +180,12 @@ final class QueryEntitiesTest extends TestCase
     {
         $good = '{"version": 1, "brands": [{"name": "asus", "count": 5}], "platforms": {"ps4": ["ps4"]}}';
         self::assertSame(
-            ['brands' => ['asus'], 'platforms' => ['ps4' => ['ps4']]],
+            ['brands' => ['asus'], 'ambiguous' => [], 'platforms' => ['ps4' => ['ps4']]],
             QueryEntities::parse($good)
         );
         foreach (
-            ['', '[]', '{"version": 2, "brands": [], "platforms": {}}',
+            ['', '[]', '{"version": 3, "brands": [], "platforms": {}}',
+            '{"version": 2, "brands": [{"name": "a", "count": 1, "ambiguous": "yes"}], "platforms": {}}',
             '{"version": 1, "brands": [{"name": "a"}], "platforms": {}}',
             '{"version": 1, "brands": ["a"], "platforms": {}}',
             '{"version": 1, "brands": [], "platforms": {"ps4": "ps4"}}',
@@ -192,6 +193,81 @@ final class QueryEntitiesTest extends TestCase
         ) {
             self::assertNull(QueryEntities::parse($bad), $bad);
         }
+    }
+
+    public function testAVersionTwoFileCarriesTheAmbiguousFlagsAndVersionOneStillLoads(): void
+    {
+        $v2 = '{"version": 2, "brands": [{"name": "blue", "count": 2, "ambiguous": true},'
+            . ' {"name": "dobe", "count": 9}], "platforms": {}}';
+        self::assertSame(['blue', 'dobe'], QueryEntities::parse($v2)['brands']);
+        self::assertSame(['blue'], QueryEntities::parse($v2)['ambiguous']);
+
+        $v1 = '{"version": 1, "brands": [{"name": "blue", "count": 2}], "platforms": {}}';
+        self::assertSame(['blue'], QueryEntities::parse($v1)['brands']);
+        self::assertSame([], QueryEntities::parse($v1)['ambiguous'], 'a version 1 file has no flags');
+    }
+
+    private function ambiguousEntities(string $blocklist = ''): QueryEntities
+    {
+        return new QueryEntities(
+            ['blue', 'astro', 'dobe'],
+            [],
+            null,
+            ['blue', 'astro'],
+            $blocklist,
+            'for,with'
+        );
+    }
+
+    public function testAnAmbiguousBrandIsRecognizedOnlyWhenItIsTheWholeQuery(): void
+    {
+        $entities = $this->ambiguousEntities();
+
+        self::assertSame([], $entities->recognize(self::variants('case navy blue'))['brands']);
+        self::assertSame([], $entities->recognize(self::variants('dualsense astro bot'))['brands']);
+        self::assertSame(['blue'], $entities->recognize(self::variants('blue'))['brands']);
+        self::assertSame(['blue'], $entities->recognize(self::variants('blue'))['ambiguous']);
+        self::assertSame(['astro'], $entities->recognize(self::variants('astro for'))['brands'], 'stopwords aside');
+        // A normal brand next to an ambiguous word is still found, and the ambiguous one stays out.
+        $both = $entities->recognize(self::variants('dobe stand navy blue'));
+        self::assertSame(['dobe'], $both['brands']);
+        self::assertSame([], $both['ambiguous']);
+    }
+
+    public function testTheBrandBlocklistNeverRecognizesAName(): void
+    {
+        $entities = $this->ambiguousEntities('Dobe, other');
+
+        self::assertSame([], $entities->recognize(self::variants('dobe stand'))['brands']);
+        self::assertSame(['blue'], $entities->recognize(self::variants('blue'))['brands']);
+        self::assertSame(['dobe'], $this->ambiguousEntities()->recognize(self::variants('dobe stand'))['brands']);
+    }
+
+    public function testStatusesReportCarriedAndMentionedPerBrandWithoutChangingTheBoostSemantics(): void
+    {
+        $entities = $this->entities();
+        $recognized = ['brands' => ['xiaomi', 'asus'], 'platforms' => [], 'rest' => ['مانیتور']];
+        $result = $entities->statuses($recognized, [
+            // Empty brand, named in the title only: neutral for the boost, but mentioned.
+            1 => ['brand' => '', 'title' => 'xiaomi mi monitor', 'tags' => '', 'category' => ''],
+            2 => ['brand' => 'lg', 'title' => 'monitor', 'tags' => 'asus rog', 'category' => ''],
+            3 => ['brand' => 'asus', 'title' => 'کابل', 'tags' => '', 'category' => ''],
+            4 => ['brand' => 'lg', 'title' => 'xiaomis', 'tags' => '', 'category' => ''],
+        ]);
+
+        self::assertSame(['carried' => false, 'mentioned' => true], $result['brands']['xiaomi']);
+        self::assertSame(['carried' => true, 'mentioned' => true], $result['brands']['asus']);
+        self::assertSame(['brand' => 0, 'platform' => 0], $result['status'][1], 'empty brand stays neutral');
+        self::assertSame(['brand' => -1, 'platform' => 0], $result['status'][2]);
+        self::assertSame(
+            ['brand' => false, 'platform' => false],
+            $result['active'],
+            'the only carrier does not hold the rest of the query'
+        );
+        $none = $entities->statuses(['brands' => ['xiaomi'], 'platforms' => []], [
+            1 => ['brand' => 'lg', 'title' => 'xiaomis phone', 'tags' => '', 'category' => ''],
+        ]);
+        self::assertSame(['carried' => false, 'mentioned' => false], $none['brands']['xiaomi'], 'whole words only');
     }
 
     public function testNoFileMeansNoEntities(): void

@@ -239,11 +239,17 @@ final class SearchController
             $record ? ($cache ?? Cache::fromConfig($config)) : null,
             IntentMap::fromDirectory($config['paths']['data']),
             (int) $search['intent_max_terms'],
-            $synonyms->version(),
+            $synonyms->version() . ((string) $search['brand_blocklist'] === ''
+                ? '' : ':b' . substr(md5((string) $search['brand_blocklist']), 0, 8)),
             (int) $search['query_max_chars'],
             (int) $search['query_max_tokens'],
             (int) $search['result_cap'],
-            $entitiesOn ? QueryEntities::fromDirectory($config['paths']['data'], $synonyms) : null
+            $entitiesOn ? QueryEntities::fromDirectory(
+                $config['paths']['data'],
+                $synonyms,
+                (string) $search['brand_blocklist'],
+                (string) $search['stopwords']
+            ) : null
         );
     }
 
@@ -806,16 +812,32 @@ final class SearchController
     private static function entityInfo(array $recognized, array $entity, array $signals): array
     {
         $active = $entity['active'] ?? ['brand' => false, 'platform' => false];
+        $typed = array_flip($recognized['typed'] ?? $recognized['brands']);
+        $ambiguous = array_flip($recognized['ambiguous'] ?? []);
+        $brands = [];
+        $unmatched = [];
+        foreach ($recognized['brands'] as $name) {
+            $seen = $entity['brands'][$name] ?? ['carried' => false, 'mentioned' => false];
+            // Asked for and no candidate carries (brand field) or mentions (title / tags / category) it: not
+            // stocked. Judged per brand, whatever the other query words are.
+            $missing = isset($typed[$name]) && $signals !== [] && !$seen['carried'] && !$seen['mentioned'];
+            $brands[$name] = [
+                'carried'   => $seen['carried'],
+                'mentioned' => $seen['mentioned'],
+                'ambiguous' => isset($ambiguous[$name]),
+                'unmatched' => $missing,
+            ];
+            if ($missing) {
+                $unmatched[] = $name;
+            }
+        }
 
         return [
             'brands'          => $recognized['brands'],
             'platforms'       => $recognized['platforms'],
             'active'          => $active,
-            // The brand was asked for and no candidate carries it: asked for, not stocked.
-            'brand_unmatched' => ($recognized['typed'] ?? $recognized['brands']) !== [] && !$active['brand']
-                && $signals !== []
-                ? ($recognized['typed'] ?? $recognized['brands'])
-                : [],
+            'brand_status'    => $brands,
+            'brand_unmatched' => $unmatched,
         ];
     }
 

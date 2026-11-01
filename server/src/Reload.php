@@ -400,7 +400,11 @@ final class Reload
         if (
             is_file($entitiesPath)
             && (QueryEntities::parse((string) file_get_contents($entitiesPath)) === null
-                || (int) ($meta['entities_version'] ?? QueryEntities::VERSION) !== QueryEntities::VERSION)
+                || !in_array(
+                    (int) ($meta['entities_version'] ?? QueryEntities::VERSION),
+                    QueryEntities::ACCEPTED_VERSIONS,
+                    true
+                ))
         ) {
             throw new ReloadException('invalid_entities', ['file' => QueryEntities::FILE]);
         }

@@ -121,6 +121,7 @@ The cPanel bundle carries no vectors and no model since M42 (the semantic tier's
 | `search.brand_match_boost` / `search.category_match_boost` / `search.tag_match_boost` | 0.15 / 0.1 / 0.1 | M21 match boosts (0 disables one) |
 | `search.intent_max_terms` | `4` | most intent-map keys applied to one query ([intent map](SEARCH-BEHAVIOR.md#intent-map), M34). The mapped categories / tags use the two boosts above; there is no separate knob |
 | `search.tag_match_min_tokens` | 2 | shortest query that phrase-matches tags |
+| `search.brand_blocklist` | empty | comma-separated normalized brand names never recognized as a brand in a query (a manufacturer name that is also a common word). Part of the result-cache version. See [SEARCH-BEHAVIOR.md](SEARCH-BEHAVIOR.md#entities) |
 | `search.entities_enabled` | 1 | M44: master switch of brand / platform recognition ([SEARCH-BEHAVIOR.md](SEARCH-BEHAVIOR.md#entities)). Needs the bundle's `entities.json`; without it nothing is recognized |
 | `search.entity_boost` | 0.15 | M44: a candidate carrying the brand / platform the query names is lifted by this factor (`1 + boost` per dimension), after the floor |
 | `search.entity_demote` | 0.10 | M44: a candidate carrying another brand / platform is lowered by this factor (`1 - demote` per dimension); nothing is removed. Both knobs at `0` (or `entities_enabled=0`) disable the feature, including the loss of the floor exemption |

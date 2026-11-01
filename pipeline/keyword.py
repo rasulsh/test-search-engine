@@ -200,10 +200,23 @@ def load_intent_map(path: str | Path) -> dict[str, dict[str, list[str]]]:
 # token_df.json / entities.json format versions; the server (TokenStats::VERSION,
 # QueryEntities::VERSION) rejects a file of another version, and meta.json records both.
 TOKEN_DF_VERSION = 1
-ENTITIES_VERSION = 1
+ENTITIES_VERSION = 2
 
 # A token seen in fewer products is left out of token_df.json: an absent token weighs as the rarest.
 TOKEN_DF_MIN_PRODUCTS = 2
+
+# Brand names that are also colour or common product-line words: flagged ambiguous in
+# entities.json, so the server recognizes them only as the whole query (normalized at use).
+AMBIGUOUS_BRAND_SEEDS: tuple[str, ...] = (
+    "blue", "black", "white", "red", "green", "gold", "silver", "pink", "purple", "orange",
+    "pro", "plus", "one", "max", "mini", "air",
+    "آبی", "مشکی", "سیاه", "سفید", "قرمز", "سبز", "طلایی", "نقره ای", "صورتی", "بنفش",
+    "نارنجی",
+)
+
+# A brand is also ambiguous when products of OTHER brands carry its phrase this often.
+AMBIGUOUS_MIN_OTHER = 5
+AMBIGUOUS_OTHER_FACTOR = 2
 
 # Gaming platforms a query can name: key -> spellings (normalized here). The server adds the
 # owner's alias groups of every spelling at query time, so these only need the canonical names.
@@ -243,24 +256,35 @@ def build_entities(rows: Iterable[dict[str, Any]]) -> dict[str, Any]:
     """The brands the catalog carries (normalized `brand` values, with their product counts) and
     the platform seeds. Owner aliases ("شیامی" = "xiaomi") are applied by the server at query
     time: they live in server/storage/aliases.json, not in the bundle (M41). No used / new
-    condition is derived: nothing in the export reliably marks it."""
+    condition is derived: nothing in the export reliably marks it.
+
+    A brand is `ambiguous` (true; the key is absent otherwise) when its phrase is a seed colour /
+    common word, or when products of OTHER brands hold the phrase as whole words in their title or
+    tags at least max(5, 2 x the brand's own product count) times ("blue" in "Midnight Blue")."""
+    rows = list(rows)
     counts: Counter[str] = Counter()
+    texts: list[tuple[str, str]] = []
     for row in rows:
         brand = " ".join(tokenize(normalize(str(row.get("brand") or ""))))
         if len(brand) >= 2 and not brand.isdigit():
             counts[brand] += 1
+        words = tokenize(str(row.get("normalized_title") or ""))
+        words += tokenize(str(row.get("normalized_tags") or ""))
+        texts.append((brand, " " + " ".join(words) + " "))
+    seeds = {" ".join(tokenize(normalize(term))) for term in AMBIGUOUS_BRAND_SEEDS}
+    entries: list[dict[str, Any]] = []
+    for name, n in sorted(counts.items(), key=lambda item: (-item[1], item[0])):
+        needle = f" {name} "
+        others = sum(1 for brand, text in texts if brand != name and needle in text)
+        entry: dict[str, Any] = {"name": name, "count": n}
+        if name in seeds or others >= max(AMBIGUOUS_MIN_OTHER, AMBIGUOUS_OTHER_FACTOR * n):
+            entry["ambiguous"] = True
+        entries.append(entry)
     platforms = {
         key: list(dict.fromkeys(" ".join(tokenize(normalize(term))) for term in terms))
         for key, terms in PLATFORM_SEEDS.items()
     }
-    return {
-        "version": ENTITIES_VERSION,
-        "brands": [
-            {"name": name, "count": n}
-            for name, n in sorted(counts.items(), key=lambda item: (-item[1], item[0]))
-        ],
-        "platforms": platforms,
-    }
+    return {"version": ENTITIES_VERSION, "brands": entries, "platforms": platforms}
 
 
 def build_keymap() -> dict[str, dict[str, str]]:

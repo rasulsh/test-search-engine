@@ -172,7 +172,7 @@ final class EvidenceQueriesTest extends DatabaseTestCase
         self::assertGreaterThan(0.9, $hits[EvidenceCatalog::GAME_A_WAY_OUT]['coverage']);
     }
 
-    public function testAMisspelledBrandKeepsTheMonitorsAndReportsTheBrandAsUnmatched(): void
+    public function testAMisspelledBrandKeepsTheMonitorsAndJudgesTheBrandPerBrand(): void
     {
         $out = $this->search('مانیتور شیامی');
 
@@ -181,7 +181,9 @@ final class EvidenceQueriesTest extends DatabaseTestCase
             array_slice($out['product_ids'], 0, 3)
         );
         self::assertSame(['xiaomi'], $out['debug']['entities']['brands']);
-        self::assertSame(['xiaomi'], $out['debug']['entities']['brand_unmatched']);
+        // A Xiaomi product is among the candidates (not a monitor): the brand is stocked, so not unmatched (M44 fix).
+        self::assertTrue($out['debug']['entities']['brand_status']['xiaomi']['carried']);
+        self::assertSame([], $out['debug']['entities']['brand_unmatched']);
     }
 
     public function testAnOffTopicShooterQueryStaysEmpty(): void

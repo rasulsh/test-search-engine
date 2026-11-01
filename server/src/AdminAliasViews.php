@@ -540,9 +540,8 @@ final class AdminAliasViews
                 if (!empty($state['unmatched'])) {
                     $labels[] = $t['brand_unmatched'];
                 }
-                $html .= '<div><bdi class="ltr">' . self::e((string) $name) . '</bdi>: '
-                    . self::e($labels === [] ? $t['brand_none'] : implode(AdminStrings::fa()['ui']['list_sep'], $labels))
-                    . '</div>';
+                $text = $labels === [] ? $t['brand_none'] : implode(AdminStrings::fa()['ui']['list_sep'], $labels);
+                $html .= '<div><bdi class="ltr">' . self::e((string) $name) . '</bdi>: ' . self::e($text) . '</div>';
             }
             $html .= '</dd>';
         }

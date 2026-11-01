@@ -121,8 +121,7 @@ final class QueryEntities
         ?Synonyms $synonyms = null,
         string $brandBlocklist = '',
         string $stopwordsCsv = ''
-    ): self
-    {
+    ): self {
         $path = $dataDir . '/' . self::FILE;
         clearstatcache(true, $path);
         $stat = @stat($path);
@@ -130,7 +129,8 @@ final class QueryEntities
         if (!isset(self::$cache[$key])) {
             $json = is_file($path) ? @file_get_contents($path) : false;
             self::$cache = []; // only the live bundle's entry is worth keeping
-            self::$cache[$key] = ($json === false ? null : self::parse($json)) ?? ['brands' => [], 'ambiguous' => [], 'platforms' => []];
+            $empty = ['brands' => [], 'ambiguous' => [], 'platforms' => []];
+            self::$cache[$key] = ($json === false ? null : self::parse($json)) ?? $empty;
         }
 
         $file = self::$cache[$key];
@@ -212,7 +212,10 @@ final class QueryEntities
      *
      * @param list<list<string>> $variants the query's token lists, the literal one first
      * @param (callable(string): bool)|null $isGeneric true for a phrase made only of generic words
-     * @return array{brands: list<string>, typed: list<string>, ambiguous: list<string>, platforms: list<string>, rest: list<string>}
+     * @return array{
+     *     brands: list<string>, typed: list<string>, ambiguous: list<string>,
+     *     platforms: list<string>, rest: list<string>
+     * }
      */
     public function recognize(array $variants, ?callable $isGeneric = null): array
     {

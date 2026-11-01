@@ -87,9 +87,13 @@ final class SearchControllerEntitiesTest extends DatabaseTestCase
         ]);
     }
 
-    public function testABrandNoCandidateCarriesWithTheRestOfTheQueryIsReportedUnmatched(): void
+    public function testABrandNoCandidateCarriesOrNamesIsReportedUnmatchedAndLogged(): void
     {
-        $this->load();
+        (new ProductLoader($this->pdo, 'products'))->load([
+            ['product_id' => 1, 'title' => 'مانیتور گیمینگ ایسوس ۲۷ اینچ', 'brand' => 'Asus', 'stock' => 1,
+                'popularity' => 100],
+            ['product_id' => 2, 'title' => 'مانیتور ال جی ۲۷ اینچ', 'brand' => 'LG', 'stock' => 1, 'popularity' => 90],
+        ]);
 
         $out = $this->controller()->search(['q' => 'مانیتور شیامی'], true);
 
@@ -101,6 +105,17 @@ final class SearchControllerEntitiesTest extends DatabaseTestCase
             'xiaomi',
             $this->pdo->query('SELECT brand_unmatched FROM search_logs ORDER BY id DESC LIMIT 1')->fetchColumn()
         );
+    }
+
+    public function testACandidateCarryingTheBrandMeansNotUnmatchedWhateverTheRestOfTheQuery(): void
+    {
+        $this->load();
+
+        // The Xiaomi phone is a candidate and carries the brand (M44 reported it unmatched: it is no monitor).
+        $out = $this->controller()->search(['q' => 'مانیتور شیامی'], true);
+
+        self::assertSame([], $out['debug']['entities']['brand_unmatched']);
+        self::assertTrue($out['debug']['entities']['brand_status']['xiaomi']['carried']);
     }
 
     public function testNoBrandRecognizedMeansNoEntityInfo(): void
@@ -257,7 +272,8 @@ final class SearchControllerEntitiesTest extends DatabaseTestCase
         $this->loadLiveCatalog();
         // "blue" and "astro" flagged ambiguous by the build; all others are plain brands.
         $this->entityFile([
-            ['name' => 'blue', 'count' => 1, 'ambiguous' => true], ['name' => 'astro', 'count' => 1, 'ambiguous' => true],
+            ['name' => 'blue', 'count' => 1, 'ambiguous' => true],
+            ['name' => 'astro', 'count' => 1, 'ambiguous' => true],
             ['name' => 'dobe', 'count' => 1], ['name' => 'deadskull', 'count' => 1], ['name' => 'meta', 'count' => 1],
             ['name' => 'logitech', 'count' => 1], ['name' => 'nahl', 'count' => 1], ['name' => 'sony', 'count' => 1],
         ]);

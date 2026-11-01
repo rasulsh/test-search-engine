@@ -293,6 +293,9 @@ final class Config
             // Terms (comma separated, normalized): a build-derived synonym group holding one is dropped.
             // Owner aliases are never filtered; add a term here to remove a bad generated group.
             'search.synonym_blocklist'        => ['string', ''],
+            // Brand names (comma separated, normalized) never recognized as a brand in a query: the way to
+            // silence a manufacturer name that is also a common word, without editing build output.
+            'search.brand_blocklist'          => ['string', ''],
             // M44: a token held by more than this share of the catalog's titles and tags is GENERIC
             // ("بازی", "کارت"): it never qualifies a product by itself and only adds a little score.
             'search.generic_df_ratio'         => ['float', 0.15],

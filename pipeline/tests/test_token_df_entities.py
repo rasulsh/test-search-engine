@@ -91,3 +91,42 @@ def test_the_bundle_ships_both_files_and_versions_them(tmp_path: Path) -> None:
     assert df["n"] == meta["count"] == len(products)
     assert entities["version"] == kw.ENTITIES_VERSION
     assert {b["name"] for b in entities["brands"]} >= {"sony"}
+
+
+def _row(title: str, brand: str) -> dict:
+    return {"normalized_title": normalize(title), "normalized_tags": "", "brand": brand}
+
+
+def _flags(rows: list[dict]) -> dict[str, bool]:
+    return {b["name"]: b.get("ambiguous", False) for b in kw.build_entities(rows)["brands"]}
+
+
+def test_a_seed_colour_or_common_word_brand_is_ambiguous() -> None:
+    flags = _flags([_row("x", "Blue"), _row("y", "Sony"), _row("z", "آبی"), _row("w", "Pro")])
+
+    assert flags == {"blue": True, "sony": False, normalize("آبی"): True, "pro": True}
+
+
+def test_a_brand_is_ambiguous_when_other_brands_titles_hold_its_phrase_often() -> None:
+    # Not a seed word: only the other-brand count (5 >= max(5, 2 * 1)) flags it.
+    five = [_row(f"Astro Bot {i}", "Sony") for i in range(5)]
+    assert _flags([_row("Astro headset", "Astro"), *five])["astro"]
+    # 4 other-brand products are below the floor of 5.
+    assert not _flags([_row("Astro headset", "Astro"), *five[:4]])["astro"]
+    # The threshold scales with the brand's own count: 2 own products need 5 others, 3 need 6.
+    own = [_row(f"Astro headset {i}", "Astro") for i in range(3)]
+    assert not _flags([*own, *[_row(f"Astro Bot {i}", "Sony") for i in range(5)]])["astro"]
+    assert _flags([*own, *[_row(f"Astro Bot {i}", "Sony") for i in range(6)]])["astro"]
+
+
+def test_a_phrase_match_is_whole_words_and_ignores_the_brands_own_products() -> None:
+    rows = [_row("Astroboy figure", "Sony")] * 6 + [_row("Astro A50", "Astro")] * 2
+
+    assert not _flags(rows)["astro"], "'astroboy' is not the whole word 'astro'"
+    assert not _flags([_row("Dobe stand", "Dobe")] * 9)["dobe"], "own products never count"
+
+
+def test_ambiguous_key_is_absent_when_false() -> None:
+    entries = kw.build_entities([_row("a", "Sony")])["brands"]
+
+    assert entries == [{"name": "sony", "count": 1}]

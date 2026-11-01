@@ -47,7 +47,7 @@ columns to `products.load.sql`.
 for every token of the normalized titles and tags that occurs in at least two products, the number of products holding
 it (`keyword.py` `build_token_df`). The server weights a query token by `log(N / (1 + df)) / log(N)` and treats a token in more than
 `search.generic_df_ratio` of the catalog as generic ([SEARCH-BEHAVIOR.md](SEARCH-BEHAVIOR.md#generic-tokens)).
-`entities.json` is `{"version": 1, "brands": [{"name", "count"}], "platforms": {key: [spellings]}}`: the normalized
+`entities.json` is `{"version": 2, "brands": [{"name", "count", "ambiguous"?: true}], "platforms": {key: [spellings]}}` (version 1, without `ambiguous`, is still read): the normalized
 `brand` values of the catalog and the short platform seed list in `keyword.py` (`PLATFORM_SEEDS`; edit it and rebuild to
 add a platform). The owner's alias groups are applied by the server at query time (they live in `server/storage`, not in
 the bundle), so a misspelled brand needs an alias, not a rebuild ([SEARCH-BEHAVIOR.md](SEARCH-BEHAVIOR.md#entities)). Both files are optional for

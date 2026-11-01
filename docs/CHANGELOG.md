@@ -10,6 +10,20 @@ holds overrides). A **renamed** key keeps working for two releases (its value is
 config doctor / status page warn with the new name. A **removed** key is ignored; the doctor says why and that the
 line can be deleted. `php server/tools/config-check.php` lists all of it.
 
+## Brand recognition: ambiguous brand words
+
+- **Added**: `search.brand_blocklist` = `''` (comma-separated normalized names, like `search.synonym_blocklist`): a listed name is
+  never recognized as a brand in a query. Use it for a manufacturer name the catalog also uses as an ordinary word (it
+  shows on the status page's effective configuration). Part of the result-cache version, so changing it invalidates cached
+  answers on its own.
+- **Removed / renamed**: none. **Changed defaults**: none.
+- **Behaviour** (no key): `entities.json` is version 2 and flags `"ambiguous": true` on a brand that is a colour / common
+  word seed or that other brands' titles and tags name often; the server reads version 1 files too (no flags) and `/reload`
+  accepts both. An ambiguous brand is recognized only when the whole query (stopwords aside) is that brand. `brand_unmatched`
+  is now judged per brand: a brand is unmatched only if no candidate carries it (brand field) or names it (whole-word phrase
+  in title, tags or category). Boost / demotion are unchanged.
+- **After deploying**: rebuild the bundle to get the flags (optional; an old file keeps working), `/reload`, flush the result cache.
+
 ## Analytics: what counts as a search
 
 - **Added**: `log.duplicate_seconds` = `120`: the repeat-submit window of `search_logs.is_duplicate` (the same session, normalized

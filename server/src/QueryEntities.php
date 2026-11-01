@@ -20,18 +20,28 @@ namespace App;
  * the statuses into a boost, a demotion and the loss of the floor exemption; {@see reorder()} is the
  * keyword-only equivalent.
  *
+ * A brand the catalog also uses as a colour or product-line word ("blue", "astro", flagged `ambiguous` in
+ * entities.json, or listed in `search.brand_blocklist`) is recognized only when the whole query (stopwords
+ * aside) is that brand alone; a blocklisted name is never recognized (v2 of the file; v1 has no flags).
+ *
  * A used / new condition is not recognized: nothing in the catalog export reliably marks it (needs the owner).
  */
 final class QueryEntities
 {
     public const FILE = 'entities.json';
-    public const VERSION = 1;
+    public const VERSION = 2;
+    /** File versions the reader accepts: 1 has no `ambiguous` flags. */
+    public const ACCEPTED_VERSIONS = [1, 2];
 
-    /** @var array<string, array{brands: list<string>, platforms: array<string, list<string>>}> by file identity */
+    /** @var array<string, array{brands: list<string>, ambiguous: list<string>, platforms: array<string, list<string>>}> by file identity */
     private static array $cache = [];
 
     /** @var array<string, true> brand phrase => true */
     private array $brands = [];
+    /** @var array<string, true> brand phrases recognized only when they are the whole query */
+    private array $ambiguous = [];
+    /** @var array<string, true> stopword tokens, ignored when deciding that a brand is the whole query */
+    private array $stopwords = [];
     /** @var array<string, string> platform spelling (phrase) => platform key, aliases included */
     private array $platformTerms = [];
     /** @var array<string, list<string>> platform key => its spellings, aliases included */
@@ -42,14 +52,32 @@ final class QueryEntities
     /**
      * @param list<string> $brands normalized brand names
      * @param array<string, list<string>> $platforms platform key => spellings
+     * @param list<string> $ambiguous brand names flagged ambiguous by the build
+     * @param string $brandBlocklist `search.brand_blocklist`: comma separated names never recognized as brands
+     * @param string $stopwordsCsv `search.stopwords`
      */
-    public function __construct(array $brands, array $platforms, ?Synonyms $synonyms = null)
-    {
+    public function __construct(
+        array $brands,
+        array $platforms,
+        ?Synonyms $synonyms = null,
+        array $ambiguous = [],
+        string $brandBlocklist = '',
+        string $stopwordsCsv = ''
+    ) {
+        $blocked = array_flip(self::phrases($brandBlocklist));
         foreach ($brands as $brand) {
             $phrase = implode(' ', Tokenizer::split(Normalizer::normalize($brand)));
-            if (mb_strlen($phrase) >= 2 && !ctype_digit($phrase)) {
+            if (mb_strlen($phrase) >= 2 && !ctype_digit($phrase) && !isset($blocked[$phrase])) {
                 $this->brands[$phrase] = true;
                 $this->longest = max($this->longest, count(explode(' ', $phrase)));
+            }
+        }
+        foreach ($ambiguous as $brand) {
+            $this->ambiguous[implode(' ', Tokenizer::split(Normalizer::normalize($brand)))] = true;
+        }
+        foreach (explode(',', $stopwordsCsv) as $word) {
+            foreach (Tokenizer::split(Normalizer::normalize($word)) as $token) {
+                $this->stopwords[$token] = true;
             }
         }
         foreach ($platforms as $key => $spellings) {
@@ -69,12 +97,31 @@ final class QueryEntities
         $this->synonyms = $synonyms;
     }
 
+    /** @return list<string> the normalized phrases of a comma separated list */
+    private static function phrases(string $csv): array
+    {
+        $out = [];
+        foreach (explode(',', $csv) as $item) {
+            $phrase = implode(' ', Tokenizer::split(Normalizer::normalize($item)));
+            if ($phrase !== '') {
+                $out[] = $phrase;
+            }
+        }
+
+        return $out;
+    }
+
     /**
      * The entities of the bundle in $dataDir; a missing or unreadable file means none (/reload validates a
      * present one). The parsed file is cached per worker by its identity; the alias group lookups use
      * $synonyms, which changes with the owner's alias file.
      */
-    public static function fromDirectory(string $dataDir, ?Synonyms $synonyms = null): self
+    public static function fromDirectory(
+        string $dataDir,
+        ?Synonyms $synonyms = null,
+        string $brandBlocklist = '',
+        string $stopwordsCsv = ''
+    ): self
     {
         $path = $dataDir . '/' . self::FILE;
         clearstatcache(true, $path);
@@ -83,10 +130,19 @@ final class QueryEntities
         if (!isset(self::$cache[$key])) {
             $json = is_file($path) ? @file_get_contents($path) : false;
             self::$cache = []; // only the live bundle's entry is worth keeping
-            self::$cache[$key] = ($json === false ? null : self::parse($json)) ?? ['brands' => [], 'platforms' => []];
+            self::$cache[$key] = ($json === false ? null : self::parse($json)) ?? ['brands' => [], 'ambiguous' => [], 'platforms' => []];
         }
 
-        return new self(self::$cache[$key]['brands'], self::$cache[$key]['platforms'], $synonyms);
+        $file = self::$cache[$key];
+
+        return new self(
+            $file['brands'],
+            $file['platforms'],
+            $synonyms,
+            $file['ambiguous'],
+            $brandBlocklist,
+            $stopwordsCsv
+        );
     }
 
     /** Drop the cached file (POST /reload, after the swap). */
@@ -96,27 +152,34 @@ final class QueryEntities
     }
 
     /**
-     * Parse the file: {"version": 1, "brands": [{"name": "xiaomi", "count": 14}, ...],
+     * Parse the file: {"version": 2, "brands": [{"name": "xiaomi", "count": 14, "ambiguous"?: true}, ...],
      * "platforms": {"ps4": ["ps4", "playstation 4"], ...}}. Null when the JSON or its shape is invalid.
      *
-     * @return array{brands: list<string>, platforms: array<string, list<string>>}|null
+     * @return array{brands: list<string>, ambiguous: list<string>, platforms: array<string, list<string>>}|null
      */
     public static function parse(string $json): ?array
     {
         $data = json_decode($json, true);
         if (
-            !is_array($data) || ($data['version'] ?? null) !== self::VERSION
+            !is_array($data) || !in_array($data['version'] ?? null, self::ACCEPTED_VERSIONS, true)
             || !is_array($data['brands'] ?? null) || !array_is_list($data['brands'])
             || !is_array($data['platforms'] ?? null)
         ) {
             return null;
         }
         $brands = [];
+        $ambiguous = [];
         foreach ($data['brands'] as $brand) {
-            if (!is_array($brand) || !is_string($brand['name'] ?? null) || !is_int($brand['count'] ?? null)) {
+            if (
+                !is_array($brand) || !is_string($brand['name'] ?? null) || !is_int($brand['count'] ?? null)
+                || (isset($brand['ambiguous']) && !is_bool($brand['ambiguous']))
+            ) {
                 return null;
             }
             $brands[] = $brand['name'];
+            if (($brand['ambiguous'] ?? false) === true) {
+                $ambiguous[] = $brand['name'];
+            }
         }
         $platforms = [];
         foreach ($data['platforms'] as $key => $spellings) {
@@ -131,7 +194,7 @@ final class QueryEntities
             $platforms[$key] = $spellings;
         }
 
-        return ['brands' => $brands, 'platforms' => $platforms];
+        return ['brands' => $brands, 'ambiguous' => $ambiguous, 'platforms' => $platforms];
     }
 
     public function isEmpty(): bool
@@ -149,16 +212,18 @@ final class QueryEntities
      *
      * @param list<list<string>> $variants the query's token lists, the literal one first
      * @param (callable(string): bool)|null $isGeneric true for a phrase made only of generic words
-     * @return array{brands: list<string>, typed: list<string>, platforms: list<string>, rest: list<string>}
+     * @return array{brands: list<string>, typed: list<string>, ambiguous: list<string>, platforms: list<string>, rest: list<string>}
      */
     public function recognize(array $variants, ?callable $isGeneric = null): array
     {
         $brands = [];
         $typed = [];
+        $ambiguousHit = [];
         $platforms = [];
         $rest = null;
         foreach ($variants as $index => $tokens) {
             $count = count($tokens);
+            $whole = implode(' ', array_filter($tokens, fn (string $t): bool => !isset($this->stopwords[$t])));
             $outside = [];
             $any = false;
             for ($start = 0; $start < $count;) {
@@ -168,8 +233,11 @@ final class QueryEntities
                     $found = false;
                     $viaAlias = isset($this->platformTerms[$phrase]) || ($isGeneric !== null && $isGeneric($phrase));
                     foreach (array_merge([$phrase], $this->synonyms?->alternativesOf($phrase) ?? []) as $term) {
-                        if (isset($this->brands[$term])) {
+                        if (isset($this->brands[$term]) && (!isset($this->ambiguous[$term]) || $phrase === $whole)) {
                             $brands[$term] = true;
+                            if (isset($this->ambiguous[$term])) {
+                                $ambiguousHit[$term] = true;
+                            }
                             $found = true;
                             if ($index === 0 && ($term === $phrase || !$viaAlias)) {
                                 $typed[$term] = true;
@@ -205,6 +273,7 @@ final class QueryEntities
         return [
             'brands'    => array_map('strval', array_keys($brands)),
             'typed'     => array_map('strval', array_keys($typed)),
+            'ambiguous' => array_map('strval', array_keys(array_intersect_key($ambiguousHit, $brands))),
             'platforms' => array_map('strval', array_keys($platforms)),
             'rest'      => $rest ?? [],
         ];
@@ -218,7 +287,15 @@ final class QueryEntities
      *
      * @param array{brands: list<string>, platforms: list<string>, rest?: list<string>} $recognized
      * @param array<int, array<string, mixed>> $signals product_id => normalized `brand`, `title`, `tags`, `category`
-     * @return array{active: array{brand: bool, platform: bool}, status: array<int, array{brand: int, platform: int}>}
+     * `brands` is the per recognized brand evidence over all candidates, independent of the rest of the query:
+     * `carried` (a candidate's brand field is it) and `mentioned` (it is a whole-word phrase in a candidate's
+     * title, tags or category). It never feeds the boost / demotion, only the "asked for, not stocked" report.
+     *
+     * @return array{
+     *     active: array{brand: bool, platform: bool},
+     *     status: array<int, array{brand: int, platform: int}>,
+     *     brands: array<string, array{carried: bool, mentioned: bool}>
+     * }
      */
     public function statuses(array $recognized, array $signals): array
     {
@@ -226,10 +303,22 @@ final class QueryEntities
         $platforms = array_flip($recognized['platforms']);
         $active = ['brand' => false, 'platform' => false];
         $status = [];
+        $evidence = [];
+        foreach ($recognized['brands'] as $name) {
+            $evidence[$name] = ['carried' => false, 'mentioned' => false];
+        }
         foreach ($signals as $id => $signal) {
             $brand = 0;
             if ($brands !== []) {
                 $name = implode(' ', Tokenizer::split((string) ($signal['brand'] ?? '')));
+                $named = ' ' . implode(' ', Tokenizer::split(
+                    ($signal['title'] ?? '') . ' ' . ($signal['tags'] ?? '') . ' ' . ($signal['category'] ?? '')
+                )) . ' ';
+                foreach ($evidence as $candidate => $_) {
+                    $evidence[$candidate]['carried'] = $evidence[$candidate]['carried'] || $name === $candidate;
+                    $evidence[$candidate]['mentioned'] = $evidence[$candidate]['mentioned']
+                        || str_contains($named, ' ' . $candidate . ' ');
+                }
                 $brand = $name === '' ? 0 : (isset($brands[$name]) ? 1 : -1);
             }
             $platform = 0;
@@ -244,7 +333,7 @@ final class QueryEntities
             $status[(int) $id] = ['brand' => $brand, 'platform' => $platform];
         }
 
-        return ['active' => $active, 'status' => $status];
+        return ['active' => $active, 'status' => $status, 'brands' => $evidence];
     }
 
     /**

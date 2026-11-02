@@ -124,7 +124,7 @@ final class Installer
         $this->createSchema($pdo);
         $this->writeConfig($values);
 
-        $config = Config::load($this->configPath, dirname($this->configPath));
+        $config = Config::load($this->configPath, dirname($this->configPath), false);
         if (!is_file(rtrim((string) $config['paths']['data_incoming'], '/') . '/meta.json')) {
             return ['status' => 'no_bundle'];
         }
@@ -339,7 +339,7 @@ final class Installer
      */
     private function assertBundleCompatible(array $values): void
     {
-        $paths = Config::load($this->templatePath, dirname($this->templatePath))['paths'];
+        $paths = Config::load($this->templatePath, dirname($this->templatePath), false)['paths'];
         $incoming = rtrim((string) $paths['data_incoming'], '/');
         $meta = is_file($incoming . '/meta.json')
             ? json_decode((string) file_get_contents($incoming . '/meta.json'), true)

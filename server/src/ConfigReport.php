@@ -14,20 +14,24 @@ final class ConfigReport
 {
     public const SOURCE_FILE = 'file';
     public const SOURCE_DEFAULT = 'default';
+    public const SOURCE_PANEL = 'panel';
 
     /**
-     * @param array<string, mixed> $overrides the raw array config.php returns
+     * @param array<string, mixed> $overrides config.php's raw array with the panel's values merged over it
+     *        ({@see Config::layers()} 'merged')
      * @param array<string, array<string, string>>|null $deprecated replaces {@see Config::deprecated()} (tests)
+     * @param array<string, mixed>|null $panel {@see Config::panelLayer()}: its keys get the source `panel`
      * @return list<array{key: string, value: ?string, state: string, source: string,
      *         issues: list<array{level: string, message: string}>}>
      *         state: 'value' (shown), 'set' / 'empty' (a secret), 'hidden' (an unknown key)
      */
-    public static function rows(array $overrides, ?array $deprecated = null): array
+    public static function rows(array $overrides, ?array $deprecated = null, ?array $panel = null): array
     {
         $config = Config::merge($overrides, null, $deprecated);
         $given = Config::flatten($overrides);
         $schema = Config::schema();
-        $issues = self::issuesByKey(ConfigDoctor::check($overrides, $deprecated));
+        $issues = self::issuesByKey(ConfigDoctor::check($overrides, $deprecated, $panel));
+        $fromPanel = $panel['values'] ?? [];
         // A renamed key's value was moved to its new name: that row's source is config.php too.
         $fromFile = $given;
         foreach ($deprecated ?? Config::deprecated() as $old => $rule) {
@@ -50,7 +54,9 @@ final class ConfigReport
                 'key' => $path,
                 'value' => $shown,
                 'state' => $state,
-                'source' => array_key_exists($path, $fromFile) ? self::SOURCE_FILE : self::SOURCE_DEFAULT,
+                'source' => array_key_exists($path, $fromPanel)
+                    ? self::SOURCE_PANEL
+                    : (array_key_exists($path, $fromFile) ? self::SOURCE_FILE : self::SOURCE_DEFAULT),
                 'issues' => $issues[$path] ?? [],
             ];
         }

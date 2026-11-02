@@ -10,6 +10,19 @@ holds overrides). A **renamed** key keeps working for two releases (its value is
 config doctor / status page warn with the new name. A **removed** key is ignored; the doctor says why and that the
 line can be deleted. `php server/tools/config-check.php` lists all of it.
 
+## Settings page (M46)
+
+- **Added**: `admin.settings_backups` = `20` (newest backups of `storage/settings.json` kept; same role as `admin.alias_backups`).
+- **Removed / renamed**: none. **Changed defaults**: none (no default of any key changed).
+- **New layer, not a key**: `server/storage/settings.json` (or the path in the environment variable `SEARCH_SETTINGS_FILE`),
+  written only by the admin panel's settings page. Precedence: code defaults < `config.php` < `settings.json`. It is read
+  for editable keys only (see [ADMIN.md](ADMIN.md#settings-page-m46)); credentials, `db.*`, `paths.*`, `admin.*`,
+  `reload.*` and `model.normalization_version` in it are ignored and reported. `config.php` is never rewritten.
+  The status page's source column, `/health` (`config` section) and `config-check.php` (flag `--no-panel` for `config.php`
+  alone) describe the merged result.
+- **After deploying**: upload the changed files; `server/storage/` must be writable by the PHP user. No migration, no bundle
+  rebuild, no `config.php` edit. To go back to `config.php` + defaults, delete `server/storage/settings.json`.
+
 ## Brand recognition: ambiguous brand words
 
 - **Added**: `search.brand_blocklist` = `''` (comma-separated normalized names, like `search.synonym_blocklist`): a listed name is

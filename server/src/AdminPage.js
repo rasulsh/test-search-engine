@@ -74,4 +74,40 @@
       setInterval(show, 1000);
     });
   });
+  // Settings page: a filter over the rows (key and help text) and a "changed" mark on edited fields. Without
+  // JavaScript the filter box stays hidden and every row is simply there.
+  var sfilter = document.getElementById('settings-filter');
+  if (sfilter) {
+    sfilter.hidden = false;
+    sfilter.addEventListener('input', function () {
+      var needle = sfilter.value.trim().toLowerCase();
+      Array.prototype.forEach.call(document.querySelectorAll('details.sgroup'), function (group) {
+        var rows = group.querySelectorAll('tr.srow');
+        if (!rows.length) { return; }
+        var any = false;
+        Array.prototype.forEach.call(rows, function (row) {
+          var hit = !needle || row.getAttribute('data-search').indexOf(needle) !== -1;
+          row.hidden = !hit;
+          any = any || hit;
+        });
+        group.hidden = !any;
+        if (needle && any) { group.open = true; }
+      });
+    });
+  }
+  Array.prototype.forEach.call(document.querySelectorAll('tr.srow [data-initial]'), function (field) {
+    var row = field.closest('tr');
+    var mark = row.querySelector('.mark');
+    function value() {
+      if (field.type === 'checkbox') { return field.checked ? '1' : '0'; }
+      return field.value.replace(/\s*[\r\n]+\s*/g, ',').trim();
+    }
+    function update() {
+      var dirty = value() !== field.getAttribute('data-initial');
+      row.classList.toggle('dirty', dirty);
+      if (mark) { mark.hidden = !dirty; }
+    }
+    field.addEventListener('input', update);
+    field.addEventListener('change', update);
+  });
 })();

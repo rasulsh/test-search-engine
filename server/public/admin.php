@@ -16,6 +16,8 @@ use App\AdminAliasViews;
 use App\AdminOps;
 use App\AdminOpsViews;
 use App\AdminPage;
+use App\AdminSettings;
+use App\AdminSettingsViews;
 use App\AdminStatus;
 use App\AdminStrings;
 use App\AdminViews;
@@ -94,7 +96,7 @@ try {
     $auth = new AdminAuth($admin, $audit);
     $auth->start($mount);
 
-    $pages = ['status', 'ops', 'aliases', 'synonyms', 'tester', 'analytics', 'logs', 'audit', 'help'];
+    $pages = ['status', 'ops', 'settings', 'aliases', 'synonyms', 'tester', 'analytics', 'logs', 'audit', 'help'];
     $page = (string) ($_GET['p'] ?? 'status');
     $json = $page === 'analytics' && ($_GET['format'] ?? '') === 'json';
     $state = $auth->check(time(), $json);
@@ -164,12 +166,14 @@ try {
         $redirect('p=status');
         return;
     }
-    if (!in_array($page, $pages, true) || ($method !== 'GET' && !in_array($page, ['ops', 'aliases'], true))) {
+    $writable = ['ops', 'aliases', 'settings'];
+    if (!in_array($page, $pages, true) || ($method !== 'GET' && !in_array($page, $writable, true))) {
         $unknown = !in_array($page, $pages, true);
         $refuse($unknown ? 404 : 405, $fa['errors'][$unknown ? 'not_found' : 'method']);
         return;
     }
     $aliasPost = null;
+    $settingsPost = null;
     if ($method === 'POST' && $page === 'aliases') {
         $aliasOps = new AdminAliases($config, $pdo, $audit, $ip);
         $action = (string) ($_POST['action'] ?? '');
@@ -204,6 +208,36 @@ try {
             'raw_text' => $mode === 'raw' ? (string) ($_POST['json'] ?? '') : null,
             'list' => $listState,
         ];
+    } elseif ($method === 'POST' && $page === 'settings') {
+        $layers ??= Config::layers(Config::file());
+        $settingsOps = new AdminSettings($config, $layers['file'], $audit, $ip);
+        $action = (string) ($_POST['action'] ?? '');
+        if ($action === 'settings_restore') {
+            $settingsPost = ['tab' => 'history', 'result' => $settingsOps->restore(
+                (string) ($_POST['backup'] ?? ''),
+                (string) ($_POST['version'] ?? '')
+            )];
+        } elseif ($action === 'settings_check' || $action === 'settings_save') {
+            $settingsPost = [
+                'tab' => 'settings', 'result' => $settingsOps->submit($_POST, $action === 'settings_save'),
+            ];
+        } else {
+            $refuse(400, $fa['errors']['method']);
+            return;
+        }
+        $outcome = $settingsPost['result'];
+        if ($outcome['status'] === 'rejected') {
+            $refuse(400, $fa['settings']['rejected']);
+            return;
+        }
+        if (in_array($outcome['status'], ['saved', 'restored'], true)) {
+            $redirect(http_build_query(array_filter([
+                'p' => 'settings', 'tab' => $settingsPost['tab'] === 'history' ? 'history' : '',
+                'saved' => $outcome['status'], 'flush' => !empty($outcome['flush']) ? '1' : '',
+            ])));
+            return;
+        }
+        // Not saved (a check, errors, warnings to confirm, a stale file): the page again, with what was typed.
     } elseif ($method === 'POST') {
         // The action runs to the end whatever the browser does, and must not hold the session lock meanwhile.
         session_write_close();
@@ -229,21 +263,48 @@ try {
     $css = '';
     switch ($page) {
         case 'status':
-            $status = new AdminStatus($config, $pdo, $audit, Config::overrides(Config::file()));
+            $layers = Config::layers(Config::file());
+            $status = new AdminStatus($config, $pdo, $audit, $layers['merged'], null, null, $layers['panel']);
             $body = AdminViews::status($status->collect());
             break;
         case 'ops':
-            $probe = new AdminStatus($config, $pdo, $audit, Config::overrides(Config::file()));
+            $layers = Config::layers(Config::file());
+            $probe = new AdminStatus($config, $pdo, $audit, $layers['merged'], null, null, $layers['panel']);
             $body = AdminOpsViews::page([
                 'reload' => (new Reload($pdo, $config))->describe(),
                 'vps' => $probe->vps(),
                 'redis' => $probe->redis(),
-                'doctor' => ConfigDoctor::check(Config::overrides(Config::file())),
+                'doctor' => ConfigDoctor::check($layers['merged'], null, $layers['panel']),
                 'recent' => $audit->latest(AdminOps::ACTIONS, 8),
                 'done' => (int) ($_GET['done'] ?? 0),
                 'csrf' => $csrf,
                 'prefix' => (string) $config['redis']['prefix'],
             ]);
+            break;
+        case 'settings':
+            $layers ??= Config::layers(Config::file());
+            $settingsOps ??= new AdminSettings($config, $layers['file'], $audit, $ip);
+            $settingsState = $settingsOps->state();
+            $settingsTab = (string) ($settingsPost['tab'] ?? $_GET['tab'] ?? 'settings');
+            $settingsData = [
+                'tab' => $settingsTab, 'csrf' => $csrf, 'state' => $settingsState,
+                'writable' => $settingsOps->store()->writable(),
+                'result' => $settingsPost['result'] ?? null,
+                'saved' => in_array($_GET['saved'] ?? '', ['saved', 'restored'], true) ? $_GET['saved'] : '',
+                'flush' => ($_GET['flush'] ?? '') === '1', 'backups' => [], 'diff' => null,
+            ];
+            if ($settingsTab === 'history') {
+                $settingsData['backups'] = $settingsOps->store()->backups();
+                $name = (string) ($_GET['diff'] ?? '');
+                $content = $name === '' ? null : $settingsOps->store()->backupContent($name);
+                if ($content !== null) {
+                    $settingsData['diff'] = ['name' => $name, 'rows' => AdminSettingsViews::diffRows(
+                        Config::parsePanel($content)['values'],
+                        $settingsState['stored']['values']
+                    )];
+                }
+            }
+            $body = AdminSettingsViews::page($settingsData);
             break;
         case 'aliases':
             $aliasOps ??= new AdminAliases($config, $pdo, $audit, $ip);

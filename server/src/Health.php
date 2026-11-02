@@ -53,12 +53,13 @@ final class Health
      * The config doctor's verdict for the /health `config` section: key paths
      * and statuses only, never values (the endpoint is unauthenticated).
      *
-     * @param array<string, mixed> $overrides the raw array config.php returns
+     * @param array<string, mixed> $overrides the merged overrides ({@see Config::layers()} 'merged')
+     * @param array<string, mixed>|null $panel {@see Config::panelLayer()}
      * @return array{ok: bool, errors: list<string>, warnings: list<string>}
      */
-    public static function configSection(array $overrides): array
+    public static function configSection(array $overrides, ?array $panel = null): array
     {
-        $report = ConfigDoctor::check($overrides);
+        $report = ConfigDoctor::check($overrides, null, $panel);
 
         return ['ok' => $report['errors'] === [], 'errors' => $report['errors'], 'warnings' => $report['warnings']];
     }

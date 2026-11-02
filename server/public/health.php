@@ -26,7 +26,8 @@ if (($_SERVER['REQUEST_METHOD'] ?? 'GET') !== 'GET') {
 }
 
 try {
-    $configSection = Health::configSection(Config::overrides(Config::file()));
+    $layers = Config::layers(Config::file());
+    $configSection = Health::configSection($layers['merged'], $layers['panel']);
 } catch (Throwable) {
     $configSection = ['ok' => false, 'errors' => ['config: could not be evaluated'], 'warnings' => []];
 }

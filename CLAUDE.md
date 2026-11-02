@@ -139,7 +139,8 @@ abstraction layers.
 │   │   ├── AnalyticsPage.php      # dashboard content for the panel's analytics page (M31, v2 in M35)
 │   │   ├── AnalyticsPage.js       # M35: client-side SVG dashboard + refresh (no third-party code)
 │   │   └── AnalyticsPage.css      # M35: dashboard styles (light / dark)
-│   ├── config.php                # deployer overrides only (gitignored); config.example.php committed
+│   ├── config.php                # deployer overrides only (gitignored); config.example.php committed; never rewritten by code
+│   ├── storage/settings.json     # panel overrides (M46, gitignored): written only by the admin settings page
 │   ├── tools/config-check.php    # config doctor CLI (M29): exits non-zero on an ERROR
 │   ├── tools/admin-password.php  # prompts for a password, prints the admin.password_hash (M39)
 │   ├── tools/_php-guard.php      # every tools/*.php requires it first: clear message on PHP < 8.1 (M40)
@@ -464,6 +465,17 @@ wait for review before starting the next.
   `sealed` (new) and reuses `search.entity_boost` / `entity_demote` after the floor (used query: used up, others down;
   new query or none: used down); `search.condition_enabled`; a candidate of another brand field that mentions the
   recognized brand in its title, tags or category is neutral, not demoted.
+
+- **M46 — Admin panel: settings page:** `?p=settings` (`AdminSettings`, `AdminSettingsViews`): a third config layer, `server/storage/settings.json`
+  (`SEARCH_SETTINGS_FILE` for tests), merged by `App\Config` over `config.php` over the code defaults (`Config::layers()` /
+  `panelLayer()`; a missing, corrupt or oversized file is ignored and reported, never fatal). Keys are hidden (credentials),
+  read-only (`db.*`, `paths.*`, `admin.*`, `reload.*`, `model.normalization_version`) or editable (`Config::editability()`); only
+  editable keys are honoured from the file. `SettingRules` (range / enum / format / unit) + `AdminStrings` help line per editable
+  key (a test enforces both and that every default passes), `SettingsValidator` (errors block, warnings need a confirm,
+  cross-key conflicts on the effective config, doctor reused), `SettingsStore` (lock, atomic write, version hash, backups
+  `admin.settings_backups`, restore), audit `settings_save` / `settings_restore` (key names only). **`config.php` is code and
+  is never rewritten by the panel or any tool.** The doctor, status table, `/health` and `config-check.php` describe the merged
+  result; the installer ignores `settings.json`. Recovery: delete `storage/settings.json`.
 
 **Definition of Done (per PR):** code + tests pass in CI; docs updated;
 KISS respected (no unused abstraction); PR description complete; no secrets or

@@ -70,3 +70,10 @@ form.login{width:100%;margin:0;background:var(--card);border:1px solid var(--lin
 form.login label{display:block;margin:12px 0 4px}form.login input{width:100%;padding:6px 8px;border:1px solid var(--line);border-radius:6px;background:var(--surface);color:var(--ink);font:inherit}
 form.login button{margin-top:16px;width:100%}
 @media (max-width:760px){.shell{grid-template-columns:1fr}.side{position:static;height:auto;border-inline-end:0;border-block-end:1px solid var(--line)}.side nav{flex-direction:row;flex-wrap:wrap}.bar,.content{padding-inline:16px}}
+
+.sgroup{margin-bottom:12px}.sgroup summary{cursor:pointer;padding:4px 0}.sgroup[hidden],.srow[hidden]{display:none}
+.stable td{vertical-align:top}.stable td:nth-child(2){min-width:220px}.stable td:nth-child(3){min-width:200px}
+.stable input[type=number],.stable input[type=text],.stable select,.stable textarea{width:100%;max-width:360px;font:inherit;padding:4px 8px;border:1px solid var(--line);border-radius:6px;background:var(--surface);color:var(--ink)}
+.stable .note label,.stable label.note{display:block}.srow.dirty{background:var(--card)}.srow .msg{margin:6px 0 0}
+.stable .trunc{display:inline-block;vertical-align:bottom}.confirm{display:block;margin:12px 0}
+.badge[hidden]{display:none}

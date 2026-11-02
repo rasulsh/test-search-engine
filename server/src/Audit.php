@@ -25,6 +25,8 @@ final class Audit
     public const VPS_RELOAD = 'vps_reload';
     public const ALIAS_SAVE = 'alias_save';
     public const ALIAS_RESTORE = 'alias_restore';
+    public const SETTINGS_SAVE = 'settings_save';
+    public const SETTINGS_RESTORE = 'settings_restore';
 
     private string $table;
 

@@ -23,6 +23,7 @@ Defaults are defined once. `App\Config` (`server/src/Config.php`) holds the whol
 - **Without a `config.php`** (development) the app starts on the defaults; the missing credentials show up in the doctor and in `/health`, not as a crash.
 - **Where the app lives:** `public/app_base.php` takes the app base (the folder with `bootstrap.php`, `src/`, `config.php`) from the environment variable `SEARCH_APP_BASE` (`SetEnv` in `public/.htaccess` works) and otherwise uses the parent of `public/`; a base without `bootstrap.php` answers `500 app_base_not_found`. Only needed when the web root holds just the public files ([DEPLOY.md](DEPLOY.md#layout)).
 - **Where the file lives:** `server/config.php`, or the path in `SEARCH_CONFIG_FILE` when set (a config kept outside the code directory; the test suite uses it).
+- **A third layer (M46):** `server/storage/settings.json` (or `SEARCH_SETTINGS_FILE`), written by the admin panel's settings page. Precedence: **code defaults < `config.php` < `settings.json`**. It is a flat JSON object of `"section.key": value` for editable keys only (credentials, `db.*`, `paths.*`, `admin.*`, `reload.*` and `model.normalization_version` are ignored there); values are cast like `config.php`'s, invalid ones ignored. Its path is derived from `config.php`'s `paths.storage` (or the code's `storage/`), so it is known before the config is loaded. A missing, unreadable, oversized (> 64 KB) or corrupt file is ignored and reported (doctor ERROR naming the file); `config.php` itself is code and is never rewritten by the panel. Delete the file to return to `config.php` + defaults. See [ADMIN.md](ADMIN.md#settings-page-m46).
 
 **Change a tunable:** add its key to `config.php` at the same nested path, for example
 
@@ -34,7 +35,7 @@ Defaults are defined once. `App\Config` (`server/src/Config.php`) holds the whol
 
 ### Config doctor
 
-`php server/tools/config-check.php` (run it after unzipping a release, see [DEPLOY.md](DEPLOY.md#every-catalog-update)) compares `config.php` with the schema:
+`php server/tools/config-check.php` (run it after unzipping a release, see [DEPLOY.md](DEPLOY.md#every-catalog-update)) compares `config.php` (merged with the panel's `settings.json`, as the app uses it; `--no-panel` checks `config.php` alone) with the schema:
 
 | level | what |
 | --- | --- |
@@ -206,6 +207,7 @@ reports an unset admin config as a warning and a half-set or non-hash one as an 
 | `admin.alias_max_term_chars` | 64 | longest alias term (M41); longer is an error |
 | `admin.alias_warn_matches` | 500 | an alias term matching more products than this needs a confirm (M41) |
 | `admin.alias_backups` | 20 | newest alias backups kept (M41) |
+| `admin.settings_backups` | 20 | newest backups of `storage/settings.json` kept (M46) |
 | `db.admin_audit_table` | `admin_audit` | the audit table ([migration](../db/migrations/2026-10-25_admin_audit.sql)) |
 | `storefront.store_base`, `storefront.image_base` | empty | absolute bases for `with_details` product links and images; empty keeps the exported values |
 

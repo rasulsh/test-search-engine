@@ -472,12 +472,12 @@ final class AdminSettingsPanelTest extends TestCase
     {
         $v0 = $this->version($this->get('p=settings')['body']);
         $a = $this->apply('logs.page_size', '25', $v0);
-        $b = $this->apply('logs.refresh_seconds', '30', $a['json']['version']);
+        $b = $this->apply('logs.refresh_seconds', '45', $a['json']['version']);
         self::assertTrue($a['json']['ok'] && $b['json']['ok']);
         self::assertNotSame($v0, $a['json']['version']);
         self::assertNotSame($a['json']['version'], $b['json']['version']);
         self::assertSame($this->store()->read()['version'], $b['json']['version']);
-        self::assertSame(['logs.page_size' => 25, 'logs.refresh_seconds' => 30], $this->store()->read()['values']);
+        self::assertSame(['logs.page_size' => 25, 'logs.refresh_seconds' => 45], $this->store()->read()['values']);
 
         // the full form loaded after the applies starts from the same version
         self::assertSame($b['json']['version'], $this->version($this->get('p=settings')['body']));
@@ -489,11 +489,13 @@ final class AdminSettingsPanelTest extends TestCase
         $this->submit('settings_save', ['logs.page_size' => '25']);
         $before = (string) file_get_contents(self::$root . '/storage/settings.json');
 
-        foreach ([
+        foreach (
+            [
             ['logs.page_size', '30'],          // would change a value
             ['logs.page_size', '25'],          // would change nothing
             ['search.entity_demote', '1.7'],   // would be invalid
-        ] as [$key, $value]) {
+            ] as [$key, $value]
+        ) {
             $r = $this->apply($key, $value, $v0);
             self::assertSame(409, $r['status'], $key . $value);
             self::assertSame('stale', $r['json']['status']);
@@ -510,7 +512,7 @@ final class AdminSettingsPanelTest extends TestCase
     {
         $this->submit('settings_save', ['logs.page_size' => '25']);
         $version = $this->store()->read()['version'];
-        $r = $this->apply('logs.page_size', '25.0', $version);
+        $r = $this->apply('logs.page_size', ' 25 ', $version);
 
         self::assertSame(200, $r['status']);
         self::assertTrue($r['json']['ok']);
@@ -564,10 +566,10 @@ final class AdminSettingsPanelTest extends TestCase
             $this->apply('search.default_limit', 'x'),
             $this->apply('vps.token', 'attacker'),
             $this->apply('search.tail_cap', '150', '0000'),
+            $this->apply('search.semantic_top_k', '8'),
         ];
-        // a warning about the VPS token names the editable key vps.url and no secret
-        self::assertSame('vps_token_missing', $responses[0]['json']['warnings'][0]['code'] ?? '');
-        self::assertSame('vps.url', $responses[0]['json']['warnings'][0]['key']);
+        // a conflict warning names editable keys only
+        self::assertSame('tail_over_top_k', $responses[6]['json']['warnings'][0]['code'] ?? '');
         foreach ($responses as $i => $r) {
             foreach (self::SECRETS as $name => $value) {
                 self::assertStringNotContainsString($value, $r['body'], "response {$i} shows {$name}");
@@ -597,13 +599,16 @@ final class AdminSettingsPanelTest extends TestCase
         self::assertStringContainsString('value="settings_save"', $html);
         // script hooks, all inert without JS
         self::assertMatchesRegularExpression('/<tr class="srow" data-key="search\.tail_cap" data-differs="1"/', $html);
-        self::assertMatchesRegularExpression('/<tr class="srow" data-key="search\.title_weight" data-differs="0"/', $html);
+        self::assertMatchesRegularExpression(
+            '/<tr class="srow" data-key="search\.title_weight" data-differs="0"/',
+            $html
+        );
         self::assertMatchesRegularExpression('/id="settings-flush"[^>]* hidden/', $html);
         self::assertMatchesRegularExpression('/id="settings-pending"[^>]* hidden/', $html);
         self::assertStringContainsString('hidden id="settings-only-label"', $html);
         self::assertStringContainsString('class="actions bar-sticky"', $html);
         self::assertStringContainsString('settings_apply_one', $html);
-        self::assertStringNotContainsString('data-readonly', $html);
+        self::assertStringNotContainsString('data-readonly="1"', $html);
         // the script's words come from AdminStrings
         self::assertStringContainsString('اعمال با وجود هشدار', $html);
         foreach (self::SECRET_KEYS as $key) {

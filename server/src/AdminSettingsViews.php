@@ -122,7 +122,8 @@ final class AdminSettingsViews
             . '<label class="note" hidden id="settings-only-label"><input type="checkbox" id="settings-only"> '
             . self::e($t['apply']['only_changed']) . '</label></div>'
             . $sections . self::locked($t, $state) . $confirm
-            . '<div class="actions bar-sticky"><span class="note pending" id="settings-pending" role="status" hidden></span>'
+            . '<div class="actions bar-sticky">'
+            . '<span class="note pending" id="settings-pending" role="status" hidden></span>'
             . '<button class="btn" name="action" value="settings_check">' . self::e($t['check'])
             . '</button> <button class="btn primary" name="action" value="settings_save"' . $disabled . '>'
             . self::e($t['save']) . '</button></div></form>';
@@ -152,7 +153,8 @@ final class AdminSettingsViews
         $control = match (true) {
             $type === 'bool' => self::hidden($name, '0') . '<label class="switch"><input type="checkbox" name="'
                 . self::e($name) . '" value="1"' . ($value === '1' ? ' checked' : '') . ' data-initial="'
-                . self::e($current) . '" data-on="' . self::e($t['on']) . '" data-off="' . self::e($t['off']) . '"> <span>'
+                . self::e($current) . '" data-on="' . self::e($t['on']) . '" data-off="' . self::e($t['off'])
+                . '"> <span>'
                 . self::e($t[$value === '1' ? 'on' : 'off']) . '</span></label>',
             isset($rule['enum']) => self::select($name, $rule['enum'], $value, $current),
             $type === 'int' || $type === 'float' => '<input type="number" dir="ltr" name="' . self::e($name)

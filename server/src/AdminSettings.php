@@ -172,14 +172,14 @@ final class AdminSettings
     private function reply(int $http, string $status, string $key = '', array $result = [], array $extra = []): array
     {
         $t = AdminStrings::fa()['settings'];
-        $body = [
+        $body = array_replace([
             'ok' => in_array($status, ['saved', 'no_change'], true),
             'status' => $status,
             'message' => $t['apply']['messages'][$status] ?? '',
             'errors' => [], 'warnings' => [], 'needs_confirm' => $status === 'confirm',
             'flush' => false,
             'reload' => $status === 'stale',
-        ] + $extra;
+        ], $extra);
         $describe = static function (array $items, string $codes) use ($t): array {
             $out = [];
             foreach ($items as $item) {

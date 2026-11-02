@@ -447,6 +447,29 @@ final class AdminAliasPanelTest extends TestCase
         self::assertStringContainsString('یک عبارت بنویسید', $empty);
     }
 
+    public function testTheTesterRanksAtTheStorefrontDepthAndShowsTheFirstTenOrFifty(): void
+    {
+        $rows = [];
+        for ($i = 1; $i <= 15; $i++) {
+            $rows[] = [
+                'product_id' => 7000 + $i, 'title' => "zetaword item {$i}", 'stock' => 1, 'popularity' => 100 - $i,
+            ];
+        }
+        (new \App\ProductLoader(self::$pdo, 'products'))->load($rows);
+
+        $default = $this->get('p=tester&q=zetaword')['body'];
+        self::assertStringContainsString('<td class="c">7,010</td>', $default, 'ten rows');
+        self::assertStringNotContainsString('7,011', $default);
+        self::assertStringContainsString('show=50', $default);
+
+        $more = $this->get('p=tester&q=zetaword&show=50')['body'];
+        self::assertStringContainsString('7,015', $more, 'all fifteen, ranked in one 300-deep list');
+        self::assertStringContainsString('show=10', $more);
+        $odd = $this->get('p=tester&q=zetaword&show=999')['body'];
+        self::assertStringNotContainsString('7,015', $odd, 'only 10 or 50');
+        self::assertSame(0, (int) self::$pdo->query('SELECT COUNT(*) FROM search_logs')->fetchColumn());
+    }
+
     public function testEveryPageCarriesTheThemeSwitchIncludingTheOnesWithoutTheSidebar(): void
     {
         foreach (['status', 'ops', 'aliases', 'synonyms', 'tester', 'analytics', 'logs', 'audit', 'help'] as $page) {

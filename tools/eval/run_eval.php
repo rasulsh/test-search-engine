@@ -3,11 +3,11 @@
 /**
  * Golden-set evaluation (M44, docs/EVALUATION.md).
  *
- *   php tools/eval/run_eval.php --golden=tools/eval/golden.csv [--k=10] [--out-dir=tools/eval/runs] [--no-save]
+ *   php tools/eval/run_eval.php --golden=tools/eval/golden.csv [--k=10] [--depth=300] [--out-dir=tools/eval/runs] [--no-save]
  *   php tools/eval/run_eval.php --compare runs/before.json runs/after.json
  *
  * Runs every query of the golden CSV (query, relevant_ids, note) through the same SearchController /search uses
- * (SearchController::fromConfig), with limit = k, WITHOUT logging and without the result cache, so an evaluation never
+ * (SearchController::fromConfig), asking for limit = depth (the storefront's 300) and scoring the first k, WITHOUT logging and without the result cache, so an evaluation never
  * touches search_logs. DB and VPS settings come from server/config.php or SEARCH_CONFIG_FILE; without a VPS the run
  * measures the keyword tier only. Prints success@k, MRR, nDCG@k, the zero-result rate and the rank of the first
  * relevant hit per query, and saves the run as JSON with a timestamp so two runs can be compared.
@@ -43,6 +43,12 @@ if (($argv[0] ?? '') === '--compare') {
         fwrite(STDERR, "cannot read one of the run files\n");
         exit(2);
     }
+    [$depthBefore, $depthAfter] = [GoldenEval::depthOf($runs[0]), GoldenEval::depthOf($runs[1])];
+    if ($depthBefore !== $depthAfter) {
+        fwrite(STDERR, "refusing to compare: the runs asked for different depths ({$depthBefore} and {$depthAfter}); "
+            . "rerun both with the same --depth (a run saved before --depth existed used depth = k)\n");
+        exit(2);
+    }
     $diff = GoldenEval::compare($runs[0], $runs[1]);
     printf("%-18s %9s %9s %9s\n", 'metric', 'before', 'after', 'delta');
     foreach ($diff['metrics'] as $name => $m) {
@@ -59,9 +65,14 @@ if (($argv[0] ?? '') === '--compare') {
     exit(0);
 }
 
-$options = getopt('', ['golden:', 'k:', 'out-dir:', 'no-save']);
+$options = getopt('', ['golden:', 'k:', 'depth:', 'out-dir:', 'no-save']);
 $goldenPath = (string) ($options['golden'] ?? __DIR__ . '/golden.csv');
 $k = max(1, (int) ($options['k'] ?? 10));
+$depth = (int) ($options['depth'] ?? GoldenEval::STOREFRONT_DEPTH);
+if ($depth < $k) {
+    fwrite(STDERR, "--depth ({$depth}) must be at least --k ({$k})\n");
+    exit(2);
+}
 $outDir = (string) ($options['out-dir'] ?? __DIR__ . '/runs');
 if (!is_file($goldenPath)) {
     fwrite(STDERR, "golden file not found: {$goldenPath} (copy golden.sample.csv and fill it)\n");
@@ -81,17 +92,25 @@ if ($cases === []) {
 
 $controller = SearchController::fromConfig((new Db($config['db']))->pdo(), $config, null, null, false);
 $semantic = 0;
-$report = GoldenEval::run($cases, static function (string $query) use ($controller, $k, &$semantic): array {
-    $response = $controller->search(['q' => $query, 'limit' => $k]);
+$report = GoldenEval::run($cases, static function (string $query) use ($controller, $depth, &$semantic): array {
+    $response = $controller->search(['q' => $query, 'limit' => $depth]);
     $semantic += isset($response['cosine_scores']) ? 1 : 0;
 
     return $response['product_ids'];
 }, $k);
 $report['generated_at'] = gmdate('c');
+$report['depth'] = $depth;
 $report['golden'] = basename($goldenPath);
 $report['tier'] = $config['vps']['url'] === '' ? 'keyword_only' : "hybrid ({$semantic} answered by the VPS)";
 
-printf("Golden set: %s, %d queries, k=%d, %s\n\n", $report['golden'], $report['query_count'], $k, $report['tier']);
+printf(
+    "Golden set: %s, %d queries, k=%d, depth=%d, %s\n\n",
+    $report['golden'],
+    $report['query_count'],
+    $k,
+    $depth,
+    $report['tier']
+);
 printf("%-44s %6s %6s %7s\n", 'query', 'hits', 'rank', 'nDCG');
 foreach ($report['per_query'] as $row) {
     printf(

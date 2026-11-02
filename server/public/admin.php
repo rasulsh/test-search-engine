@@ -27,6 +27,7 @@ use App\Audit;
 use App\Config;
 use App\ConfigDoctor;
 use App\Db;
+use App\GoldenEval;
 use App\LogsPage;
 use App\Paging;
 use App\ProductDetails;
@@ -363,11 +364,18 @@ try {
             break;
         case 'tester':
             $q = trim((string) ($_GET['q'] ?? ''));
-            $view = ['q' => $q, 'asked' => isset($_GET['q'])];
+            // Ranked at the storefront depth, shown to the first N: a shallower request ranks differently.
+            $show = (int) ($_GET['show'] ?? 0) === AdminAliasViews::TESTER_SHOW_MORE
+                ? AdminAliasViews::TESTER_SHOW_MORE : AdminAliasViews::TESTER_SHOW;
+            $view = ['q' => $q, 'asked' => isset($_GET['q']), 'show' => $show];
             if ($q !== '') {
                 try {
                     $found = SearchController::fromConfig($pdo, $config, null, null, false)
-                        ->search(['q' => $q, 'limit' => 10], true);
+                        ->search(['q' => $q, 'limit' => GoldenEval::STOREFRONT_DEPTH], true);
+                    $found['product_ids'] = array_slice($found['product_ids'], 0, $show);
+                    if (isset($found['debug']['results'])) {
+                        $found['debug']['results'] = array_slice($found['debug']['results'], 0, $show);
+                    }
                     $products = new ProductDetails($pdo, (string) $config['db']['products_table']);
                     $details = $products->fetch($found['product_ids']);
                     $view['result'] = $found;

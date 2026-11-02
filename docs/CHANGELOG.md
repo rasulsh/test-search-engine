@@ -10,6 +10,17 @@ holds overrides). A **renamed** key keeps working for two releases (its value is
 config doctor / status page warn with the new name. A **removed** key is ignored; the doctor says why and that the
 line can be deleted. `php server/tools/config-check.php` lists all of it.
 
+## Evaluation depth and golden-set labeling helper
+
+- **Config changes**: none (no key added, removed, renamed or re-defaulted). `/search` and every ranking default are unchanged.
+- **Behaviour**: the admin tester page and `tools/eval/run_eval.php` ask for the OpenCart storefront's `limit` (300,
+  `GoldenEval::STOREFRONT_DEPTH`) and cut the list to the first 10 / 50 (tester) or k (evaluation) afterwards. Saved runs
+  record `depth`; `--compare` refuses runs of different depth. New: `tools/eval/make_candidates.php` and
+  `finish_golden.php` (repo checkout only, [EVALUATION.md](EVALUATION.md)).
+- **After deploying**: upload `server/public/admin.php`, `server/src/AdminAliasViews.php`, `server/src/AdminStrings.php`,
+  `server/src/GoldenEval.php` (the `tools/eval/*` scripts and `server/src/GoldenLabeling.php` are not needed on cPanel). No
+  migration, no bundle rebuild.
+
 ## Status page: alias count (fix)
 
 - **Config changes**: none (no key added, removed, renamed or re-defaulted).

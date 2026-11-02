@@ -10,6 +10,14 @@ holds overrides). A **renamed** key keeps working for two releases (its value is
 config doctor / status page warn with the new name. A **removed** key is ignored; the doctor says why and that the
 line can be deleted. `php server/tools/config-check.php` lists all of it.
 
+## Status page: alias count (fix)
+
+- **Config changes**: none (no key added, removed, renamed or re-defaulted).
+- **Behaviour**: the status page's "aliases (manual)" group count reads the file the search uses, `storage/aliases.json`,
+  and falls back to the bundle's `aliases.json` only while storage is not seeded (as `Synonyms` does). Before, it read only
+  the bundle file, so it showed "file unreadable" once bundles stopped shipping one (M41). The build-derived synonyms count
+  is unchanged.
+
 ## Settings page (M46)
 
 - **Added**: `admin.settings_backups` = `20` (newest backups of `storage/settings.json` kept; same role as `admin.alias_backups`).

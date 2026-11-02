@@ -212,7 +212,7 @@ final class AdminUnitTest extends DatabaseTestCase
         file_put_contents($data . '/aliases.json', '[["a","b"],["c","d"]]');
         file_put_contents($data . '/synonyms.json', '[["x","y"]]');
         $config = Config::merge([
-            'paths' => ['data' => $data],
+            'paths' => ['data' => $data, 'storage' => $data . '_storage'],
             'vps' => ['url' => 'http://vps.test'],
             'redis' => ['enabled' => true],
         ]);
@@ -246,12 +246,39 @@ final class AdminUnitTest extends DatabaseTestCase
         self::assertSame('unreachable', $s['redis']['state']);
 
         // Not configured: reported as off, not as a failure.
-        $bare = Config::merge(['paths' => ['data' => $data . '_none']]);
+        $bare = Config::merge(['paths' => ['data' => $data . '_none', 'storage' => $data . '_none_storage']]);
         $s = (new AdminStatus($bare, $this->pdo, $this->audit(), []))->collect();
         self::assertSame('off', $s['vps']['state']);
         self::assertSame('off', $s['redis']['state']);
         self::assertSame(['present' => false], $s['bundle']);
         self::assertSame(['aliases' => null, 'synonyms' => null], $s['groups']);
+    }
+
+    public function testAliasCountFollowsTheLiveAliasSource(): void
+    {
+        $data = TempTree::path('admin_status_alias');
+        $storage = $data . '_storage';
+        mkdir($data);
+        $config = Config::merge(['paths' => ['data' => $data, 'storage' => $storage]]);
+        $groups = fn (): mixed => (new AdminStatus($config, $this->pdo, $this->audit(), []))
+            ->collect()['groups']['aliases'];
+
+        self::assertNull($groups(), 'both absent');
+
+        file_put_contents($data . '/aliases.json', '[["a","b"],["c","d"]]');
+        self::assertSame(2, $groups(), 'storage not seeded: the legacy bundle file is the source');
+
+        mkdir($storage);
+        file_put_contents($storage . '/aliases.json', '[["a","b"]]');
+        self::assertSame(1, $groups(), 'storage present wins over the legacy file');
+
+        unlink($data . '/aliases.json');
+        self::assertSame(1, $groups(), 'storage alone, no bundle file (M41+ bundles)');
+
+        file_put_contents($storage . '/aliases.json', '{broken');
+        self::assertNull($groups(), 'an unreadable live file is still reported as such');
+        TempTree::remove($storage);
+        TempTree::remove($data);
     }
 
     public function testStatusProbeUsesTheConfiguredShortTimeout(): void

@@ -197,6 +197,36 @@ installer's old limits); where the code gives no basis the page only enforces th
 is `App\SettingRules`, the Persian help line of every key is in `AdminStrings` (`settings.help_keys`); a test fails when an
 editable key lacks either, or when its own default breaks its rule.
 
+**Applying one setting (per-row Apply).** With JavaScript, a row whose value differs from its saved value (or whose "back
+to default" / "empty value" box is ticked) shows **Apply** and **Undo** next to it and the "changed" mark; Apply sends only
+that key (`POST ?p=settings`, `action=settings_apply_one`, fields `key`, `value`, `version`, the optional `reset` / `empty` /
+`confirm` flags = `1`, the CSRF token as `csrf` or the `X-CSRF-Token` header) and updates the row in place, with no
+reload. The server runs the same code as "Save all" for that one key: `SettingsValidator` on the effective config with
+just that key changed (so cross-key conflicts with other keys, including ones `config.php` sets, are still found),
+`SettingsStore::save` (version check, lock, atomic write, backup) and one `settings_save` audit row with the key name only.
+An error is shown under the row and nothing is saved; a warning is shown under the row with **Apply anyway** (the
+per-row form of the confirmation box); a value equal to the saved one saves nothing. The page keeps the file version in a
+variable and takes the new one from every answer, so applies and a later "Save all" chain without a reload; requests are
+sent one at a time. If the file changed meanwhile (another tab or user) the answer is `409` with a message and a
+"reload the page" button, and nothing is overwritten. A network or server failure leaves the typed value in place with an
+error under the row. Without JavaScript the page is the plain form below, unchanged.
+
+The JSON answer (`Content-Type: application/json`, `Cache-Control: no-store`): `ok`, `status` (`saved`, `no_change`,
+`invalid`, `confirm`, `stale`, `busy`, `io`, `rejected`), `message` (Persian), `errors[]` / `warnings[]` (`key`, `code`,
+`args`, `text`), `needs_confirm`, and for `saved` / `no_change` also `key`, `value` (new effective value), `source`
+(`default` / `config.php` / `panel`) with `source_label`, `default` (code default), `version` (the new file version) and
+`flush` (the key may change results). HTTP status: 200 for every validation outcome, 400 for a request that is not ours
+(unknown, hidden or read-only key, nested or huge value), 409 stale, 503 lock busy, 500 write failure. Only editable
+keys, their values and fixed sentences leave the server; a credential or read-only key is rejected as `rejected` without
+being named.
+
+**Long page.** The bottom bar is sticky: it shows the number of unsaved changes next to **Check** and **Save all**
+(unchanged: validate, warnings need the confirmation box). Groups start collapsed except those with an unsaved change, an
+error or (while filtering) a match; the filter box matches key and help text; "only settings that differ from the default"
+narrows the list to rows whose value is not the code default (plus rows being edited). After the first apply that may
+change results (`search.*`, `vps.url`, `vps.timeout_ms`) one notice at the top links to the Operations page to flush the
+result cache; it is not repeated per row.
+
 **After saving.** The change is live from the next request (no reload, no rebuild). If a changed key can alter which
 products a query returns (`search.*`, `vps.url`, `vps.timeout_ms`), the page says so and links to the Operations page:
 the result cache is **not** flushed automatically because its key does not carry every setting.
@@ -238,7 +268,7 @@ start with the same card size.
 | `src/AdminStatus.php` | the status data and its probes |
 | `src/AdminPage.php`, `AdminPage.css`, `AdminPage.js` | shell: side navigation, theme toggle, confirm dialogs |
 | `src/AdminViews.php` | page bodies |
-| `src/AdminSettings.php`, `AdminSettingsViews.php` | the settings page: actions (check / save / restore, audit) and HTML (M46) |
+| `src/AdminSettings.php`, `AdminSettingsViews.php` | the settings page: actions (check / save / restore / apply one key, audit) and HTML (M46) |
 | `src/SettingsValidator.php`, `SettingRules.php`, `SettingsStore.php` | per-key rules and conflicts, the rule table, the versioned atomic file with backups (M46) |
 | `src/AdminStrings.php` | **every Persian string and help text**; edit wording here only |
 

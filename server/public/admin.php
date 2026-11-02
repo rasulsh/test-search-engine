@@ -217,6 +217,12 @@ try {
                 (string) ($_POST['backup'] ?? ''),
                 (string) ($_POST['version'] ?? '')
             )];
+        } elseif ($action === 'settings_apply_one') {
+            $reply = $settingsOps->applyOne($_POST);
+            http_response_code($reply['http']);
+            header('Content-Type: application/json; charset=utf-8');
+            echo json_encode($reply['body'], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+            return;
         } elseif ($action === 'settings_check' || $action === 'settings_save') {
             $settingsPost = [
                 'tab' => 'settings', 'result' => $settingsOps->submit($_POST, $action === 'settings_save'),

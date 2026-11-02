@@ -10,6 +10,15 @@ holds overrides). A **renamed** key keeps working for two releases (its value is
 config doctor / status page warn with the new name. A **removed** key is ignored; the doctor says why and that the
 line can be deleted. `php server/tools/config-check.php` lists all of it.
 
+## Settings page: per-row Apply
+
+- **Config changes**: none (no key added, removed, renamed or re-defaulted; no change to `settings.json`'s format or to any
+  rule or default).
+- **Behaviour**: the settings page can apply one setting on its own (JavaScript, `POST ?p=settings`
+  `action=settings_apply_one`, JSON answer), with a sticky action bar, collapsed groups and a "differs from default" filter.
+  Same validation and save path as "Save all"; see [ADMIN.md](ADMIN.md#settings-page-m46).
+- **After deploying**: upload the changed files (listed in the PR). No migration, no bundle rebuild, no `config.php` edit.
+
 ## Status page: alias count (fix)
 
 - **Config changes**: none (no key added, removed, renamed or re-defaulted).

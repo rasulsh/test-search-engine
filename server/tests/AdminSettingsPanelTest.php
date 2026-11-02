@@ -302,6 +302,315 @@ final class AdminSettingsPanelTest extends TestCase
         self::assertSame(['logs.page_size' => 25], $this->store()->read()['values']);
     }
 
+    /**
+     * The per-row action as the page's script sends it.
+     *
+     * @param array<string, string> $fields
+     * @return array{status: int, headers: array<string, string>, body: string, json: array<string, mixed>}
+     */
+    private function apply(string $key, string $value, ?string $version = null, array $fields = []): array
+    {
+        $version ??= $this->store()->read()['version'];
+        $response = $this->post('p=settings', [
+            'action' => 'settings_apply_one', 'key' => $key, 'value' => $value, 'version' => $version,
+        ] + $fields);
+        $response['json'] = json_decode($response['body'], true) ?? [];
+
+        return $response;
+    }
+
+    public function testApplyOneNeedsTheLoginAndTheCsrfTokenAndAcceptsTheHeader(): void
+    {
+        $form = ['action' => 'settings_apply_one', 'key' => 'logs.page_size', 'value' => '25', 'version' => ''];
+        $anonymous = self::$server->client()->request('POST', '/admin.php?p=settings', ['csrf' => 'x'] + $form);
+        self::assertContains($anonymous['status'], [303, 403]);
+        self::assertSame(403, $this->client->request('POST', '/admin.php?p=settings', $form)['status']);
+        self::assertSame(
+            403,
+            $this->client->request('POST', '/admin.php?p=settings', $form, ['X-CSRF-Token' => 'wrong'])['status']
+        );
+        self::assertFileDoesNotExist(self::$root . '/storage/settings.json');
+
+        $viaHeader = $this->client->request('POST', '/admin.php?p=settings', $form, ['X-CSRF-Token' => $this->csrf]);
+        self::assertSame(200, $viaHeader['status']);
+        self::assertSame(true, json_decode($viaHeader['body'], true)['ok']);
+        self::assertSame(['logs.page_size' => 25], $this->store()->read()['values']);
+    }
+
+    public function testApplyOneAnswersJsonThatIsNeverCached(): void
+    {
+        $r = $this->apply('logs.page_size', '25');
+        self::assertSame(200, $r['status']);
+        self::assertStringStartsWith('application/json', $r['headers']['content-type']);
+        self::assertStringContainsString('no-store', $r['headers']['cache-control']);
+        $json = $r['json'];
+        self::assertTrue($json['ok']);
+        self::assertSame('saved', $json['status']);
+        self::assertSame('logs.page_size', $json['key']);
+        self::assertSame('25', $json['value']);
+        self::assertSame('panel', $json['source']);
+        self::assertSame('پنل', $json['source_label']);
+        self::assertSame('50', $json['default']);
+        self::assertFalse($json['needs_confirm']);
+        self::assertFalse($json['flush']);
+        self::assertSame([], $json['errors']);
+        self::assertSame($this->store()->read()['version'], $json['version']);
+        self::assertStringContainsString('ذخیره شد', $json['message']);
+    }
+
+    /** @return array<string, array<int, mixed>> */
+    public static function applyOneRefusals(): array
+    {
+        return [
+            'a secret' => ['vps.token', 'attacker'],
+            'a database credential' => ['db.dsn', 'mysql:host=evil'],
+            'a read-only table name' => ['db.products_table', 'x'],
+            'a read-only path' => ['paths.storage', '/tmp/x'],
+            'a read-only admin key' => ['admin.username', 'mallory'],
+            'the normalization version' => ['model.normalization_version', '9'],
+            'an unknown key' => ['search.nope', '1'],
+            'an empty key' => ['', '1'],
+            'a huge value' => ['search.stopwords', str_repeat('x', 9000)],
+        ];
+    }
+
+    #[\PHPUnit\Framework\Attributes\DataProvider('applyOneRefusals')]
+    public function testApplyOneRefusesWhatThePageDoesNotEditWithoutEchoingIt(string $key, string $value): void
+    {
+        $r = $this->apply($key, $value);
+        self::assertSame(400, $r['status']);
+        self::assertFalse($r['json']['ok']);
+        self::assertSame('rejected', $r['json']['status']);
+        self::assertStringNotContainsString('attacker', $r['body']);
+        if ($key !== '') {
+            self::assertStringNotContainsString($key, $r['body']);
+        }
+        self::assertFileDoesNotExist(self::$root . '/storage/settings.json');
+        self::assertSame([], $this->auditRows('settings_save'));
+    }
+
+    public function testApplyOneRefusesNestedValuesAndFlagsOnSecretKeys(): void
+    {
+        $nested = $this->post('p=settings', [
+            'action' => 'settings_apply_one', 'key' => 'search.tail_cap', 'value' => ['1'], 'version' => '',
+        ]);
+        self::assertSame(400, $nested['status']);
+        $keyArray = $this->post('p=settings', [
+            'action' => 'settings_apply_one', 'key' => ['reload.token'], 'value' => '1', 'version' => '',
+        ]);
+        self::assertSame(400, $keyArray['status']);
+        // a reset flag only ever applies to the posted editable key
+        $r = $this->apply('reload.token', '', null, ['reset' => '1']);
+        self::assertSame(400, $r['status']);
+        self::assertFileDoesNotExist(self::$root . '/storage/settings.json');
+    }
+
+    public function testApplyOneValidationErrorsAreReturnedAndNothingIsSaved(): void
+    {
+        $r = $this->apply('search.entity_demote', '1.7');
+        self::assertSame(200, $r['status']);
+        self::assertFalse($r['json']['ok']);
+        self::assertSame('invalid', $r['json']['status']);
+        self::assertSame('search.entity_demote', $r['json']['errors'][0]['key']);
+        self::assertSame('range', $r['json']['errors'][0]['code']);
+        self::assertStringContainsString('بین 0 و 1', $r['json']['errors'][0]['text']);
+        self::assertArrayNotHasKey('version', $r['json']);
+        self::assertFileDoesNotExist(self::$root . '/storage/settings.json');
+        self::assertSame([], $this->auditRows('settings_save'));
+
+        self::assertSame('int', $this->apply('search.default_limit', '2.5')['json']['errors'][0]['code']);
+        self::assertSame('url', $this->apply('vps.url', 'not a url')['json']['errors'][0]['code']);
+    }
+
+    public function testApplyOneWarningsNeedTheSecondConfirmedCall(): void
+    {
+        $first = $this->apply('search.tail_cap', '150');
+        self::assertSame(200, $first['status']);
+        self::assertFalse($first['json']['ok']);
+        self::assertTrue($first['json']['needs_confirm']);
+        self::assertSame('confirm', $first['json']['status']);
+        self::assertSame('tail_over_top_k', $first['json']['warnings'][0]['code']);
+        self::assertSame(['150', '100'], $first['json']['warnings'][0]['args']);
+        self::assertFileDoesNotExist(self::$root . '/storage/settings.json');
+        self::assertSame([], $this->auditRows('settings_save'));
+
+        $second = $this->apply('search.tail_cap', '150', null, ['confirm' => '1']);
+        self::assertTrue($second['json']['ok']);
+        self::assertTrue($second['json']['flush'], 'a search.* key may change results');
+        self::assertSame(['search.tail_cap' => 150], $this->store()->read()['values']);
+    }
+
+    public function testApplyOneChecksConflictsAgainstTheEffectiveConfigNotJustTheRow(): void
+    {
+        // config.php sets tail_cap 12: lowering semantic_top_k below it conflicts although tail_cap is not posted
+        $r = $this->apply('search.semantic_top_k', '8');
+        self::assertSame('confirm', $r['json']['status']);
+        self::assertSame('tail_over_top_k', $r['json']['warnings'][0]['code']);
+        self::assertSame('search.tail_cap', $r['json']['warnings'][0]['key']);
+    }
+
+    public function testApplyOneWritesOnlyThatKeyAndAuditsItsNameWithoutValues(): void
+    {
+        $this->submit('settings_save', ['logs.page_size' => '25']);
+        self::assertSame([], array_diff(array_keys($this->store()->read()['values']), ['logs.page_size']));
+        $this->apply('search.title_weight', '14');
+
+        self::assertSame(
+            ['logs.page_size' => 25, 'search.title_weight' => 14.0],
+            $this->store()->read()['values']
+        );
+        $rows = $this->auditRows('settings_save');
+        self::assertCount(2, $rows);
+        $detail = json_decode($rows[1]['detail'], true);
+        self::assertSame(['search.title_weight'], $detail['keys']);
+        self::assertSame(1, $detail['total']);
+        self::assertStringNotContainsString('14', $rows[1]['detail']);
+        self::assertCount(1, $this->store()->backups(), 'the replaced file was backed up');
+    }
+
+    public function testApplyOneVersionsChainAcrossConsecutiveCalls(): void
+    {
+        $v0 = $this->version($this->get('p=settings')['body']);
+        $a = $this->apply('logs.page_size', '25', $v0);
+        $b = $this->apply('logs.refresh_seconds', '30', $a['json']['version']);
+        self::assertTrue($a['json']['ok'] && $b['json']['ok']);
+        self::assertNotSame($v0, $a['json']['version']);
+        self::assertNotSame($a['json']['version'], $b['json']['version']);
+        self::assertSame($this->store()->read()['version'], $b['json']['version']);
+        self::assertSame(['logs.page_size' => 25, 'logs.refresh_seconds' => 30], $this->store()->read()['values']);
+
+        // the full form loaded after the applies starts from the same version
+        self::assertSame($b['json']['version'], $this->version($this->get('p=settings')['body']));
+    }
+
+    public function testApplyOneRefusesAStaleVersionWith409AndWritesNothing(): void
+    {
+        $v0 = $this->store()->read()['version'];
+        $this->submit('settings_save', ['logs.page_size' => '25']);
+        $before = (string) file_get_contents(self::$root . '/storage/settings.json');
+
+        foreach ([
+            ['logs.page_size', '30'],          // would change a value
+            ['logs.page_size', '25'],          // would change nothing
+            ['search.entity_demote', '1.7'],   // would be invalid
+        ] as [$key, $value]) {
+            $r = $this->apply($key, $value, $v0);
+            self::assertSame(409, $r['status'], $key . $value);
+            self::assertSame('stale', $r['json']['status']);
+            self::assertTrue($r['json']['reload']);
+            self::assertFalse($r['json']['ok']);
+            self::assertArrayNotHasKey('version', $r['json']);
+            self::assertStringContainsString('تغییر کرده', $r['json']['message']);
+        }
+        self::assertSame($before, (string) file_get_contents(self::$root . '/storage/settings.json'));
+        self::assertCount(1, $this->auditRows('settings_save'));
+    }
+
+    public function testApplyOneWithNothingToChangeSavesAndAuditsNothing(): void
+    {
+        $this->submit('settings_save', ['logs.page_size' => '25']);
+        $version = $this->store()->read()['version'];
+        $r = $this->apply('logs.page_size', '25.0', $version);
+
+        self::assertSame(200, $r['status']);
+        self::assertTrue($r['json']['ok']);
+        self::assertSame('no_change', $r['json']['status']);
+        self::assertSame($version, $r['json']['version']);
+        self::assertSame($version, $this->store()->read()['version']);
+        self::assertCount(1, $this->auditRows('settings_save'));
+        self::assertSame([], $this->store()->backups());
+    }
+
+    public function testApplyOneResetAndEmptyValueControls(): void
+    {
+        $this->apply('search.title_weight', '14');
+        $reset = $this->apply('search.title_weight', '14', null, ['reset' => '1']);
+        self::assertTrue($reset['json']['ok']);
+        self::assertSame('10', $reset['json']['value']);
+        self::assertSame('default', $reset['json']['source']);
+        self::assertSame([], $this->store()->read()['values']);
+
+        // a blank value without the flag means "inherit", like the full form
+        $this->apply('logs.page_size', '25');
+        $blank = $this->apply('logs.page_size', '');
+        self::assertSame('default', $blank['json']['source']);
+        self::assertSame([], $this->store()->read()['values']);
+
+        // the one way to blank a list the code fills: the explicit "empty value" flag
+        $empty = $this->apply('search.stopwords', '', null, ['empty' => '1']);
+        self::assertTrue($empty['json']['ok']);
+        self::assertSame('', $empty['json']['value']);
+        self::assertSame('panel', $empty['json']['source']);
+        self::assertSame(['search.stopwords' => ''], $this->store()->read()['values']);
+    }
+
+    public function testApplyOneReportsTheConfigPhpSourceAndTheCodeDefault(): void
+    {
+        // config.php sets tail_cap 12 (the code default is 40): resetting returns the config.php value
+        $this->apply('search.tail_cap', '30');
+        $r = $this->apply('search.tail_cap', '30', null, ['reset' => '1']);
+        self::assertSame('12', $r['json']['value']);
+        self::assertSame('config.php', $r['json']['source']);
+        self::assertSame('config.php', $r['json']['source_label']);
+        self::assertSame('40', $r['json']['default']);
+    }
+
+    public function testApplyOneNeverLeaksACredentialOrAHiddenKey(): void
+    {
+        $responses = [
+            $this->apply('vps.url', 'https://vps.example.com'),
+            $this->apply('vps.url', 'https://vps.example.com', null, ['confirm' => '1']),
+            $this->apply('redis.enabled', '1', null, ['confirm' => '1']),
+            $this->apply('search.default_limit', 'x'),
+            $this->apply('vps.token', 'attacker'),
+            $this->apply('search.tail_cap', '150', '0000'),
+        ];
+        // a warning about the VPS token names the editable key vps.url and no secret
+        self::assertSame('vps_token_missing', $responses[0]['json']['warnings'][0]['code'] ?? '');
+        self::assertSame('vps.url', $responses[0]['json']['warnings'][0]['key']);
+        foreach ($responses as $i => $r) {
+            foreach (self::SECRETS as $name => $value) {
+                self::assertStringNotContainsString($value, $r['body'], "response {$i} shows {$name}");
+            }
+            foreach (self::SECRET_KEYS as $key) {
+                self::assertStringNotContainsString($key, $r['body'], "response {$i} names {$key}");
+            }
+            self::assertStringNotContainsString(\App\Tests\TempConfig::ADMIN_HASH, $r['body']);
+            self::assertStringNotContainsString(self::$root, $r['body']);
+        }
+    }
+
+    public function testApplyOneIsInvisibleToAPlainRequestAndGetIsNotAnAction(): void
+    {
+        $get = $this->get('p=settings&action=settings_apply_one&key=logs.page_size&value=25');
+        self::assertSame(200, $get['status']);
+        self::assertFileDoesNotExist(self::$root . '/storage/settings.json');
+        self::assertSame(405, $this->client->request('PUT', '/admin.php?p=settings')['status']);
+    }
+
+    public function testThePageCarriesWhatTheScriptNeedsAndStaysAPlainFormWithoutIt(): void
+    {
+        $html = $this->get('p=settings')['body'];
+        // plain form intact
+        self::assertStringContainsString('<form method="post" action="?p=settings"', $html);
+        self::assertStringContainsString('value="settings_check"', $html);
+        self::assertStringContainsString('value="settings_save"', $html);
+        // script hooks, all inert without JS
+        self::assertMatchesRegularExpression('/<tr class="srow" data-key="search\.tail_cap" data-differs="1"/', $html);
+        self::assertMatchesRegularExpression('/<tr class="srow" data-key="search\.title_weight" data-differs="0"/', $html);
+        self::assertMatchesRegularExpression('/id="settings-flush"[^>]* hidden/', $html);
+        self::assertMatchesRegularExpression('/id="settings-pending"[^>]* hidden/', $html);
+        self::assertStringContainsString('hidden id="settings-only-label"', $html);
+        self::assertStringContainsString('class="actions bar-sticky"', $html);
+        self::assertStringContainsString('settings_apply_one', $html);
+        self::assertStringNotContainsString('data-readonly', $html);
+        // the script's words come from AdminStrings
+        self::assertStringContainsString('اعمال با وجود هشدار', $html);
+        foreach (self::SECRET_KEYS as $key) {
+            self::assertStringNotContainsString($key, $html);
+        }
+    }
+
     public function testHistoryListsBackupsAndRestoreIsItselfReversible(): void
     {
         $this->submit('settings_save', ['logs.page_size' => '25']);

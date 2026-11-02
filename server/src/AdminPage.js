@@ -74,40 +74,225 @@
       setInterval(show, 1000);
     });
   });
-  // Settings page: a filter over the rows (key and help text) and a "changed" mark on edited fields. Without
-  // JavaScript the filter box stays hidden and every row is simply there.
-  var sfilter = document.getElementById('settings-filter');
-  if (sfilter) {
-    sfilter.hidden = false;
-    sfilter.addEventListener('input', function () {
-      var needle = sfilter.value.trim().toLowerCase();
-      Array.prototype.forEach.call(document.querySelectorAll('details.sgroup'), function (group) {
-        var rows = group.querySelectorAll('tr.srow');
-        if (!rows.length) { return; }
-        var any = false;
-        Array.prototype.forEach.call(rows, function (row) {
-          var hit = !needle || row.getAttribute('data-search').indexOf(needle) !== -1;
-          row.hidden = !hit;
-          any = any || hit;
+  // Settings page. Without JavaScript the page is the plain form (Check / Save all). With it: the filter, a
+  // "differs from default" switch, collapsed groups, an unsaved-changes counter, and a per-row Apply that posts
+  // one key (action=settings_apply_one) and updates the row in place. The server validates and saves; nothing
+  // here repeats its rules.
+  var sform = document.getElementById('settings-form');
+  if (sform) {
+    (function () {
+      var words = {};
+      try { words = JSON.parse(sform.getAttribute('data-apply') || '{}'); } catch (e) { /* the form still works */ }
+      var live = !sform.hasAttribute('data-readonly') && !!window.fetch && !!window.URLSearchParams && !!words.apply;
+      var filter = document.getElementById('settings-filter');
+      var only = document.getElementById('settings-only');
+      var onlyLabel = document.getElementById('settings-only-label');
+      var pending = document.getElementById('settings-pending');
+      var flushNotice = document.getElementById('settings-flush');
+      var versionInput = sform.querySelector('input[name="version"]');
+      var csrf = sform.querySelector('input[name="csrf"]').value;
+      var version = versionInput.value;
+      var chain = Promise.resolve();
+      var rows = [];
+      var badgeClass = { 'panel': 'ok', 'config.php': 'warn', 'default': 'off' };
+
+      function make(tag, cls, text) {
+        var el = document.createElement(tag);
+        if (cls) { el.className = cls; }
+        if (text) { el.textContent = text; }
+        return el;
+      }
+      function button(label, cls, handler) {
+        var b = make('button', 'btn ' + (cls || ''), label);
+        b.type = 'button';
+        b.addEventListener('click', handler);
+        return b;
+      }
+      function compare(c) {
+        if (c.field.type === 'checkbox') { return c.field.checked ? '1' : '0'; }
+        return c.field.value.replace(/\s*[\r\n]+\s*/g, ',').trim();
+      }
+      function dirty(c) {
+        return compare(c) !== c.field.getAttribute('data-initial')
+          || !!(c.reset && c.reset.checked) || !!(c.empty && c.empty.checked);
+      }
+      function setField(c, text) {
+        if (c.field.type === 'checkbox') {
+          c.field.checked = text === '1';
+          var label = c.field.parentNode.querySelector('span');
+          if (label) { label.textContent = c.field.getAttribute(c.field.checked ? 'data-on' : 'data-off'); }
+        } else {
+          c.field.value = c.field.tagName === 'TEXTAREA' ? text.replace(/,/g, '\n') : text;
+        }
+      }
+      function count() {
+        var n = rows.filter(function (c) { return c.row.classList.contains('dirty'); }).length;
+        if (pending) {
+          pending.hidden = n === 0;
+          pending.textContent = words.pending ? words.pending.replace('{0}', n.toLocaleString('fa-IR')) : '';
+        }
+      }
+      function update(c) {
+        var d = dirty(c);
+        c.row.classList.toggle('dirty', d);
+        if (c.mark) { c.mark.hidden = !d; }
+        if (c.actions) { c.actions.hidden = !d; }
+        count();
+      }
+      function say(c, kind, text, items, extra) {
+        window.clearTimeout(c.timer);
+        c.msg.textContent = '';
+        if (!text) { return; }
+        var box = make('div', 'msg ' + kind);
+        box.appendChild(make('div', '', text));
+        if (items && items.length) {
+          var list = make('ul');
+          items.forEach(function (item) { list.appendChild(make('li', '', item.text)); });
+          box.appendChild(list);
+        }
+        if (extra) { box.appendChild(extra); }
+        c.msg.appendChild(box);
+      }
+      function lock(c, on) {
+        Array.prototype.forEach.call(c.row.querySelectorAll('.rowact button, .rowmsg button'), function (b) {
+          b.disabled = on;
         });
-        group.hidden = !any;
-        if (needle && any) { group.open = true; }
+      }
+      function syncReset(c, panel) {
+        if (panel && !c.reset) {
+          var label = make('label', 'note');
+          c.reset = make('input');
+          c.reset.type = 'checkbox';
+          c.reset.name = 'r[' + c.key + ']';
+          c.reset.value = '1';
+          c.reset.addEventListener('change', function () { edited(c); });
+          label.appendChild(c.reset);
+          label.appendChild(document.createTextNode(' ' + words.reset_box));
+          c.cell.insertBefore(label, c.actions);
+        } else if (!panel && c.reset) {
+          c.reset.parentNode.parentNode.removeChild(c.reset.parentNode);
+          c.reset = null;
+        }
+      }
+      function applied(c, d) {
+        version = d.version;
+        versionInput.value = d.version;
+        c.field.setAttribute('data-initial', d.value);
+        setField(c, d.value);
+        if (c.reset) { c.reset.checked = false; }
+        if (c.empty) { c.empty.checked = false; }
+        syncReset(c, d.source === 'panel');
+        c.row.setAttribute('data-differs', d.value === d.default ? '0' : '1');
+        var badge = c.state.querySelector('.badge:not(.mark)');
+        badge.className = 'badge ' + (badgeClass[d.source] || 'off');
+        badge.textContent = d.source_label;
+        var shown = c.state.querySelectorAll('bdi.trunc');
+        shown[0].textContent = d.value === '' ? words.empty_value : d.value;
+        shown[1].textContent = d.default === '' ? words.empty_value : d.default;
+        update(c);
+        say(c, 'ok', d.message);
+        c.timer = window.setTimeout(function () { say(c, 'ok', ''); }, 4000);
+        if (d.flush && flushNotice) { flushNotice.hidden = false; }
+      }
+      function answer(c, d) {
+        if (d.status === 'saved' || d.status === 'no_change') { applied(c, d); return; }
+        if (d.status === 'confirm') {
+          say(c, 'warn', d.message, d.warnings, button(words.apply_anyway, '', function () { send(c, true); }));
+        } else if (d.status === 'stale') {
+          say(c, 'bad', d.message, null, button(words.reload, 'primary', function () { window.location.reload(); }));
+        } else {
+          say(c, 'bad', d.message || words.network, d.errors);
+        }
+      }
+      function send(c, confirmed) {
+        say(c, 'ok', words.working);
+        lock(c, true);
+        // One request at a time: each answer carries the version the next one must start from.
+        chain = chain.then(function () {
+          var body = new URLSearchParams();
+          body.set('action', 'settings_apply_one');
+          body.set('csrf', csrf);
+          body.set('key', c.key);
+          body.set('value', c.field.type === 'checkbox' ? compare(c) : c.field.value);
+          body.set('version', version);
+          if (c.reset && c.reset.checked) { body.set('reset', '1'); }
+          if (c.empty && c.empty.checked) { body.set('empty', '1'); }
+          if (confirmed) { body.set('confirm', '1'); }
+          return fetch('?p=settings', {
+            method: 'POST', credentials: 'same-origin', body: body,
+            headers: { 'X-CSRF-Token': csrf, 'Accept': 'application/json' }
+          }).then(function (res) {
+            if ((res.headers.get('Content-Type') || '').indexOf('application/json') === -1) { throw new Error('not json'); }
+            return res.json();
+          }).then(function (d) { answer(c, d); }).catch(function () { say(c, 'bad', words.network); });
+        }).then(function () { lock(c, false); });
+      }
+      function edited(c) {
+        say(c, 'ok', '');
+        if (c.field.type === 'checkbox') { setField(c, compare(c)); }
+        update(c);
+      }
+
+      Array.prototype.forEach.call(sform.querySelectorAll('tr.srow'), function (row) {
+        var field = row.querySelector('[data-initial]');
+        var c = {
+          row: row, key: row.getAttribute('data-key'), field: field, cell: row.cells[1], state: row.cells[2],
+          mark: row.querySelector('.mark'), reset: row.querySelector('input[name^="r["]'),
+          empty: row.querySelector('input[name^="e["]'), actions: null, msg: null, timer: 0
+        };
+        rows.push(c);
+        if (live) {
+          c.actions = make('div', 'rowact');
+          c.actions.hidden = true;
+          c.actions.appendChild(button(words.apply, 'primary', function () { send(c, false); }));
+          c.actions.appendChild(document.createTextNode(' '));
+          c.actions.appendChild(button(words.undo, '', function () {
+            setField(c, field.getAttribute('data-initial'));
+            if (c.reset) { c.reset.checked = false; }
+            if (c.empty) { c.empty.checked = false; }
+            edited(c);
+          }));
+          c.msg = make('div', 'rowmsg');
+          c.msg.setAttribute('role', 'status');
+          c.cell.appendChild(c.actions);
+          c.cell.appendChild(c.msg);
+          if (field.tagName === 'INPUT' && field.type !== 'checkbox') {
+            field.addEventListener('keydown', function (e) {
+              if (e.key === 'Enter') { e.preventDefault(); if (dirty(c)) { send(c, false); } }
+            });
+          }
+        } else {
+          c.msg = make('div');
+        }
+        [field, c.reset, c.empty].forEach(function (el) {
+          if (el) { el.addEventListener('input', function () { edited(c); }); el.addEventListener('change', function () { edited(c); }); }
+        });
+        update(c);
       });
-    });
+
+      // Groups: collapsed unless they hold an unsaved change, an error, or (while filtering) a match.
+      function refresh() {
+        var needle = filter ? filter.value.trim().toLowerCase() : '';
+        var narrow = !!(only && only.checked);
+        Array.prototype.forEach.call(sform.querySelectorAll('details.sgroup'), function (group) {
+          var trs = group.querySelectorAll('tr.srow');
+          if (!trs.length) { return; }
+          var visible = 0;
+          var keep = 0;
+          Array.prototype.forEach.call(trs, function (tr) {
+            var hit = !needle || tr.getAttribute('data-search').indexOf(needle) !== -1;
+            var differs = !narrow || tr.getAttribute('data-differs') === '1' || tr.classList.contains('dirty');
+            tr.hidden = !(hit && differs);
+            if (!tr.hidden) { visible++; }
+            if (tr.classList.contains('dirty') || tr.querySelector('.msg.bad, .msg.warn')) { keep++; }
+          });
+          group.hidden = visible === 0;
+          group.open = (needle || narrow) ? visible > 0 : keep > 0;
+        });
+      }
+      if (filter) { filter.hidden = false; filter.addEventListener('input', refresh); }
+      if (onlyLabel) { onlyLabel.hidden = false; only.addEventListener('change', refresh); }
+      refresh();
+    })();
   }
-  Array.prototype.forEach.call(document.querySelectorAll('tr.srow [data-initial]'), function (field) {
-    var row = field.closest('tr');
-    var mark = row.querySelector('.mark');
-    function value() {
-      if (field.type === 'checkbox') { return field.checked ? '1' : '0'; }
-      return field.value.replace(/\s*[\r\n]+\s*/g, ',').trim();
-    }
-    function update() {
-      var dirty = value() !== field.getAttribute('data-initial');
-      row.classList.toggle('dirty', dirty);
-      if (mark) { mark.hidden = !dirty; }
-    }
-    field.addEventListener('input', update);
-    field.addEventListener('change', update);
-  });
 })();

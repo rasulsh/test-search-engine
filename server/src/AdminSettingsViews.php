@@ -107,13 +107,24 @@ final class AdminSettingsViews
         $version = (string) ($result['version'] ?? $state['stored']['version']);
         $disabled = empty($d['writable']) ? ' disabled' : '';
 
-        return $messages . '<form method="post" action="?p=settings" novalidate id="settings-form">'
+        // The script's words and the one-time cache notice; both stay unused (and hidden) without JavaScript.
+        $words = $t['apply'] + ['reset_box' => $t['reset_box'], 'empty_value' => $t['empty_value']];
+        $flush = '<div class="msg warn" id="settings-flush" role="status" hidden>' . self::e($t['flush_notice'])
+            . ' <a class="btn" href="?p=ops">' . self::e($t['flush_link']) . '</a></div>';
+
+        return $messages . $flush . '<form method="post" action="?p=settings" novalidate id="settings-form"'
+            . ' data-apply="' . self::e((string) json_encode($words, JSON_UNESCAPED_UNICODE)) . '"'
+            . ($disabled === '' ? '' : ' data-readonly="1"') . '>'
             . self::hidden('csrf', (string) $d['csrf']) . self::hidden('version', $version)
             . '<p class="note">' . self::e($t['intro']) . '</p>'
             . '<div class="controls"><input type="search" id="settings-filter" hidden placeholder="'
-            . self::e($t['filter']) . '" aria-label="' . self::e($t['filter']) . '"></div>'
+            . self::e($t['filter']) . '" aria-label="' . self::e($t['filter']) . '">'
+            . '<label class="note" hidden id="settings-only-label"><input type="checkbox" id="settings-only"> '
+            . self::e($t['apply']['only_changed']) . '</label></div>'
             . $sections . self::locked($t, $state) . $confirm
-            . '<div class="actions"><button class="btn" name="action" value="settings_check">' . self::e($t['check'])
+            . '<div class="actions bar-sticky">'
+            . '<span class="note pending" id="settings-pending" role="status" hidden></span>'
+            . '<button class="btn" name="action" value="settings_check">' . self::e($t['check'])
             . '</button> <button class="btn primary" name="action" value="settings_save"' . $disabled . '>'
             . self::e($t['save']) . '</button></div></form>';
     }
@@ -142,7 +153,9 @@ final class AdminSettingsViews
         $control = match (true) {
             $type === 'bool' => self::hidden($name, '0') . '<label class="switch"><input type="checkbox" name="'
                 . self::e($name) . '" value="1"' . ($value === '1' ? ' checked' : '') . ' data-initial="'
-                . self::e($current) . '"> ' . self::e($t[$value === '1' ? 'on' : 'off']) . '</label>',
+                . self::e($current) . '" data-on="' . self::e($t['on']) . '" data-off="' . self::e($t['off'])
+                . '"> <span>'
+                . self::e($t[$value === '1' ? 'on' : 'off']) . '</span></label>',
             isset($rule['enum']) => self::select($name, $rule['enum'], $value, $current),
             $type === 'int' || $type === 'float' => '<input type="number" dir="ltr" name="' . self::e($name)
                 . '" value="' . self::e($value) . '"' . (isset($rule['min']) ? ' min="' . $rule['min'] . '"' : '')
@@ -179,7 +192,8 @@ final class AdminSettingsViews
         $shownDefault = $default === '' ? $t['empty_value'] : $default;
         $search = mb_strtolower($path . ' ' . ($t['help_keys'][$path] ?? ''), 'UTF-8');
 
-        return '<tr class="srow' . ($changed ? ' dirty' : '') . '" data-search="' . self::e($search) . '"><td>'
+        return '<tr class="srow' . ($changed ? ' dirty' : '') . '" data-key="' . self::e($path) . '" data-differs="'
+            . ($current !== $default ? '1' : '0') . '" data-search="' . self::e($search) . '"><td>'
             . '<bdi class="ltr">' . self::e($path) . '</bdi><div class="note">'
             . self::e($t['help_keys'][$path] ?? '') . '</div>' . $problems . '</td><td>' . $control . $unit
             . $extra . '</td><td><span class="badge ' . $badge . '">' . self::e($t['source'][$source])
@@ -226,7 +240,7 @@ final class AdminSettingsViews
      * @param array<string, string> $codes
      * @param array<string, mixed> $item a validator error / warning / info entry
      */
-    private static function describe(array $codes, array $item): string
+    public static function describe(array $codes, array $item): string
     {
         $text = $codes[(string) $item['code']] ?? (string) $item['code'];
 

@@ -77,3 +77,6 @@ form.login button{margin-top:16px;width:100%}
 .stable .note label,.stable label.note{display:block}.srow.dirty{background:var(--card)}.srow .msg{margin:6px 0 0}
 .stable .trunc{display:inline-block;vertical-align:bottom}.confirm{display:block;margin:12px 0}
 .badge[hidden]{display:none}
+.rowact{margin:6px 0 0}.rowmsg .msg{margin:6px 0 0}.rowmsg ul{margin:4px 0;padding-inline-start:20px}.rowmsg .msg .btn{margin-top:4px}
+.bar-sticky{position:sticky;inset-block-end:0;z-index:5;margin:12px 0 0;padding:8px 12px;background:var(--card);border:1px solid var(--line);border-radius:8px}
+.bar-sticky .pending{margin:0;margin-inline-end:auto}.btn:disabled{opacity:.6;cursor:default}

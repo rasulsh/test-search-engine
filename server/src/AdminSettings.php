@@ -113,6 +113,125 @@ final class AdminSettings
     }
 
     /**
+     * One row of the page applied on its own (a fetch from the page's script). It is the full form's validation
+     * and save with a single key posted: SettingsValidator on the effective config with just that key changed
+     * (cross-key conflicts included), the same optimistic version check, atomic write, backup and audit row
+     * (key name only). Validation outcomes answer 200 (`ok` says whether anything was applied); a stale file
+     * is 409, a form that is not ours 400, a busy lock 503, a write failure 500. Only the key's own value,
+     * its editable-key warnings and Persian sentences leave this method, never any other key or secret.
+     *
+     * @param array<string, mixed> $post key, value, version and the optional reset / empty / confirm = '1' flags
+     * @return array{http: int, body: array<string, mixed>}
+     */
+    public function applyOne(array $post): array
+    {
+        $key = $post['key'] ?? null;
+        $value = $post['value'] ?? '';
+        $version = $post['version'] ?? null;
+        if (
+            !is_string($key) || !isset(SettingRules::table()[$key]) || !is_string($value) || !is_string($version)
+            || strlen($value) > self::MAX_VALUE_BYTES
+        ) {
+            return $this->reply(400, 'rejected');
+        }
+        $flag = static fn (string $name): bool => ($post[$name] ?? '') === '1';
+        $form = [
+            'version' => $version, 'confirm' => $flag('confirm') ? '1' : '0',
+            'v' => [$key => $value],
+            'r' => $flag('reset') ? [$key => '1'] : [],
+            'e' => $flag('empty') ? [$key => '1'] : [],
+        ];
+
+        if (!hash_equals($this->store->read()['version'], $version)) {
+            return $this->reply(409, 'stale');
+        }
+        $dry = $this->submit($form, false);
+        if ($dry['status'] === 'invalid') {
+            return $this->reply(200, 'invalid', $key, $dry);
+        }
+        if ($dry['warnings'] !== [] && !$flag('confirm')) {
+            return $this->reply(200, 'confirm', $key, $dry);
+        }
+        if ($dry['changes'] === []) {
+            return $this->reply(200, 'no_change', $key, $dry, ['version' => $version]);
+        }
+        $saved = $this->submit($form, true);
+        $http = ['stale' => 409, 'busy' => 503, 'io' => 500][$saved['status']] ?? 200;
+        if ($saved['status'] !== 'saved') {
+            return $this->reply($http, $saved['status'] === 'confirm' ? 'confirm' : $saved['status']);
+        }
+
+        return $this->reply(200, 'saved', $key, $saved, ['version' => $saved['version'], 'flush' => $saved['flush']]);
+    }
+
+    /**
+     * @param array<string, mixed> $result the validator's lists (errors, warnings), when there are any
+     * @param array<string, mixed> $extra
+     * @return array{http: int, body: array<string, mixed>}
+     */
+    private function reply(int $http, string $status, string $key = '', array $result = [], array $extra = []): array
+    {
+        $t = AdminStrings::fa()['settings'];
+        $body = array_replace([
+            'ok' => in_array($status, ['saved', 'no_change'], true),
+            'status' => $status,
+            'message' => $t['apply']['messages'][$status] ?? '',
+            'errors' => [], 'warnings' => [], 'needs_confirm' => $status === 'confirm',
+            'flush' => false,
+            'reload' => $status === 'stale',
+        ], $extra);
+        $describe = static function (array $items, string $codes) use ($t): array {
+            $out = [];
+            foreach ($items as $item) {
+                $itemKey = (string) ($item['key'] ?? '');
+                if (SettingRules::for($itemKey) === null) {
+                    continue;
+                }
+                $out[] = [
+                    'key' => $itemKey, 'code' => (string) $item['code'], 'args' => array_map(
+                        'strval',
+                        (array) ($item['args'] ?? [])
+                    ),
+                    'text' => AdminSettingsViews::describe($t[$codes], $item),
+                ];
+            }
+
+            return $out;
+        };
+        $body['errors'] = $describe((array) ($result['errors'] ?? []), 'error_codes');
+        $body['warnings'] = $describe((array) ($result['warnings'] ?? []), 'warning_codes');
+        if (in_array($status, ['saved', 'no_change'], true)) {
+            $body += $this->snapshot($key);
+        }
+
+        return ['http' => $http, 'body' => $body];
+    }
+
+    /**
+     * The key's state after a save, in the page's words: value, source (default / config.php / panel), code default.
+     *
+     * @return array<string, string>
+     */
+    private function snapshot(string $key): array
+    {
+        $type = Config::schema()[$key];
+        $stored = $this->store->read()['values'];
+        $given = Config::flatten($this->fileOverrides);
+        $source = array_key_exists($key, $stored)
+            ? 'panel'
+            : (array_key_exists($key, $given) ? 'config.php' : 'default');
+        $t = AdminStrings::fa()['settings']['source'];
+
+        return [
+            'key' => $key,
+            'value' => SettingsValidator::text($type, $stored[$key] ?? $this->inherited()[$key]),
+            'source' => $source,
+            'source_label' => $t[['config.php' => 'file'][$source] ?? $source],
+            'default' => SettingsValidator::text($type, Config::flatten(Config::defaults())[$key]),
+        ];
+    }
+
+    /**
      * @return array{status: string, version?: string, flush?: bool}
      */
     public function restore(string $backup, string $version): array

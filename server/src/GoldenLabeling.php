@@ -136,7 +136,8 @@ final class GoldenLabeling
             $notes = array_map('strval', array_keys($data['notes'] ?? []));
             $note = implode(' | ', $notes);
             if (in_array(1, $marks, true)) {
-                $golden[] = ['query' => $query, 'relevant_ids' => implode(';', array_values(array_unique($data['ids'] ?? []))), 'note' => $note];
+                $ids = implode(';', array_values(array_unique($data['ids'] ?? [])));
+                $golden[] = ['query' => $query, 'relevant_ids' => $ids, 'note' => $note];
             } elseif ($marks === array_fill(0, count($marks), 0)) {
                 if (preg_match('/\boff\b/i', $note) === 1) {
                     $golden[] = ['query' => $query, 'relevant_ids' => '', 'note' => $note];

@@ -10,11 +10,24 @@ namespace App;
  * overrides (credentials, tokens, URLs, any pinned tunable); load() deep-merges
  * them over the defaults, so code reads every key without a fallback and an old
  * config.php never lacks a key a newer release added.
+ *
+ * A third layer sits on top (M46): `<paths.storage>/settings.json`, written only by the admin
+ * panel's settings page and honoured only for keys {@see editability()} calls editable. Precedence:
+ * code defaults < config.php < settings.json. config.php itself is code and is never rewritten.
  */
 final class Config
 {
     /** Keys the app cannot invent: environment-specific, so they must be set. */
     private const REQUIRED = ['db.dsn', 'db.user'];
+
+    /** The panel overrides file is ignored past this size (a runaway file must not cost every request). */
+    public const SETTINGS_MAX_BYTES = 65536;
+    public const SETTINGS_FILE = 'settings.json';
+
+    public const EDITABLE = 'editable';
+    public const READONLY = 'readonly';
+    public const HIDDEN = 'hidden';
+    public const UNKNOWN = 'unknown';
 
     /**
      * Where the overrides live: server/config.php, or SEARCH_CONFIG_FILE when set
@@ -81,6 +94,162 @@ final class Config
         ];
     }
 
+    /**
+     * Who may change a key from the admin panel: `hidden` (credentials: never shown, never accepted),
+     * `readonly` (shown, but a wrong value can lock the owner out or break the app: edit config.php),
+     * `editable`, or `unknown` (not in the schema).
+     */
+    public static function editability(string $path): string
+    {
+        if (!isset(self::schema()[$path])) {
+            return self::UNKNOWN;
+        }
+        if (self::isSecret($path)) {
+            return self::HIDDEN;
+        }
+        if (
+            $path === 'model.normalization_version'
+            || preg_match('/^(db|paths|admin|reload)\./', $path) === 1
+        ) {
+            return self::READONLY;
+        }
+
+        return self::EDITABLE;
+    }
+
+    /**
+     * Where the panel's overrides live: SEARCH_SETTINGS_FILE when set (tests), else settings.json in the
+     * storage directory.
+     */
+    public static function settingsFile(string $storageDir): string
+    {
+        $path = getenv('SEARCH_SETTINGS_FILE');
+
+        return $path !== false && $path !== '' ? $path : rtrim($storageDir, '/') . '/' . self::SETTINGS_FILE;
+    }
+
+    /**
+     * The storage directory as the loaded config will have it, derived from config.php's raw overrides
+     * (paths.* is read-only in the panel, so the settings file can never move itself).
+     *
+     * @param array<string, mixed> $overrides config.php's raw overrides
+     */
+    public static function storageDir(array $overrides, ?string $root = null): string
+    {
+        $given = self::flatten($overrides)['paths.storage'] ?? null;
+        if (is_string($given) && $given !== '') {
+            return $given;
+        }
+
+        return rtrim($root ?? dirname(__DIR__), '/') . '/storage';
+    }
+
+    /**
+     * The panel overrides file, read defensively: a missing file is no overrides; an unreadable, oversized
+     * or corrupt one is ignored (the site keeps serving config.php + defaults) and reported in `problem`.
+     * Only editable keys with a castable value are honoured; the rest are listed by key path only.
+     *
+     * @return array{file: string, exists: bool, problem: ?string, values: array<string, mixed>,
+     *         ignored: list<string>, invalid: list<string>}
+     *         problem: unreadable | oversized | corrupt | null; values: 'dotted.path' => typed value
+     */
+    public static function panelLayer(string $file): array
+    {
+        $layer = ['file' => $file, 'exists' => false, 'problem' => null, 'values' => [], 'ignored' => [],
+            'invalid' => []];
+        if (!is_file($file)) {
+            return $layer;
+        }
+        $layer['exists'] = true;
+        $size = @filesize($file);
+        if ($size === false) {
+            $layer['problem'] = 'unreadable';
+
+            return $layer;
+        }
+        if ($size > self::SETTINGS_MAX_BYTES) {
+            $layer['problem'] = 'oversized';
+
+            return $layer;
+        }
+        $raw = @file_get_contents($file);
+        if ($raw === false) {
+            $layer['problem'] = 'unreadable';
+
+            return $layer;
+        }
+
+        return ['file' => $file, 'exists' => true] + self::parsePanel($raw);
+    }
+
+    /**
+     * The content of a panel overrides file (or of one of its backups).
+     *
+     * @return array{problem: ?string, values: array<string, mixed>, ignored: list<string>, invalid: list<string>}
+     */
+    public static function parsePanel(string $raw): array
+    {
+        $layer = ['problem' => null, 'values' => [], 'ignored' => [], 'invalid' => []];
+        $data = trim($raw) === '' ? [] : json_decode($raw, true, 4);
+        if (!is_array($data) || ($data !== [] && array_is_list($data))) {
+            $layer['problem'] = 'corrupt';
+
+            return $layer;
+        }
+        $schema = self::schema();
+        foreach ($data as $path => $value) {
+            $path = (string) $path;
+            if (self::editability($path) !== self::EDITABLE) {
+                $layer['ignored'][] = $path;
+                continue;
+            }
+            $cast = self::cast($schema[$path], $value);
+            if ($cast === null || (is_float($cast) && !is_finite($cast))) {
+                $layer['invalid'][] = $path;
+                continue;
+            }
+            $layer['values'][$path] = $cast;
+        }
+
+        return $layer;
+    }
+
+    /**
+     * Every layer: config.php's raw overrides, the panel's, and the two combined (the panel winning) in
+     * the nested shape {@see merge()} and the config doctor take.
+     *
+     * @param bool $panel false = config.php only (the installer, which must not touch settings.json)
+     * @return array{file: array<string, mixed>, panel: array<string, mixed>, merged: array<string, mixed>}
+     */
+    public static function layers(?string $overridesFile, ?string $root = null, bool $panel = true): array
+    {
+        $file = self::overrides($overridesFile);
+        $layer = $panel
+            ? self::panelLayer(self::settingsFile(self::storageDir($file, $root)))
+            : ['file' => '', 'exists' => false, 'problem' => null, 'values' => [], 'ignored' => [], 'invalid' => []];
+        $merged = $layer['values'] === []
+            ? $file
+            : self::expand(array_replace(self::flatten($file), $layer['values']));
+
+        return ['file' => $file, 'panel' => $layer, 'merged' => $merged];
+    }
+
+    /**
+     * 'a.b' => 1 pairs back into a nested tree.
+     *
+     * @param array<string, mixed> $flat
+     * @return array<string, mixed>
+     */
+    public static function expand(array $flat): array
+    {
+        $tree = [];
+        foreach ($flat as $path => $value) {
+            self::set($tree, (string) $path, $value);
+        }
+
+        return $tree;
+    }
+
     /** Dotted paths whose values are credentials: never shown, only "set" or "empty". */
     public static function isSecret(string $path): bool
     {
@@ -120,14 +289,15 @@ final class Config
     }
 
     /**
-     * The effective config: config.php's overrides over the defaults, every
+     * The effective config: the panel's overrides over config.php's over the defaults, every
      * known key cast to its schema type.
      *
+     * @param bool $panel false = ignore settings.json (the installer)
      * @return array<string, mixed>
      */
-    public static function load(?string $overridesFile, ?string $root = null): array
+    public static function load(?string $overridesFile, ?string $root = null, bool $panel = true): array
     {
-        return self::merge(self::overrides($overridesFile), $root);
+        return self::merge(self::layers($overridesFile, $root, $panel)['merged'], $root);
     }
 
     /**
@@ -383,6 +553,8 @@ final class Config
             'admin.alias_max_term_chars' => ['int', 64],
             'admin.alias_warn_matches'  => ['int', 500],
             'admin.alias_backups'       => ['int', 20],
+            // Settings page (M46): backups of settings.json kept (the newest).
+            'admin.settings_backups'    => ['int', 20],
 
             'paths.data'          => ['string', $root . '/data'],
             'paths.data_incoming' => ['string', $root . '/data_incoming'],

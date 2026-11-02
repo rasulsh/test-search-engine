@@ -229,6 +229,12 @@ deny-all `.htaccess` ships. Upgrading from M40, in full:
    search keeps serving exactly the aliases it served before. From then on edit aliases in the panel only; editing
    `pipeline/aliases.json` no longer changes the live search.
 
+**Upgrading to M46 (settings page).** Copy `src/`, `tools/` and `public/` over the live ones. `server/storage/` must be
+writable by the PHP user (it already is if the alias manager works); the page then writes `storage/settings.json` and
+`storage/backups/settings-*.json`. No migration, no bundle rebuild, no `config.php` edit (one new key,
+`admin.settings_backups`, has a default). `php server/tools/config-check.php` now reads `settings.json` too (`--no-panel`
+for `config.php` alone). To undo every panel change at once, delete `server/storage/settings.json`.
+
 Directory deletes (`<data>_old` / `<data>_swap` on reload and rollback, backup pruning) go through `App\SafePath`, which
 needs absolute paths of at least 3 segments below the configured base: `/home/ACCOUNT/app/server/data_old` is fine,
 a `paths.data` such as `/srv/data` (giving `/srv/data_old`) is refused with `directory_swap_failed`.

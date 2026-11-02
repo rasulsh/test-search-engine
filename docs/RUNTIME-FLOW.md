@@ -149,7 +149,7 @@ The response (and whether it had a vector) is stored under the stage-2 key with 
 
 ## Configuration
 
-`bootstrap.php` returns `App\Config::load(Config::file())`: the code's defaults (`App\Config::table()`, the single source of truth) deep-merged with the overrides in `config.php` (or the file named by `SEARCH_CONFIG_FILE`), every known key cast to its type. `search()` and its helpers read keys directly, with no fallback at the use site. Details and every key: [CONFIGURATION.md](CONFIGURATION.md#the-layered-server-config); `php server/tools/config-check.php` and `GET /health` (`config` section) report problems by key path.
+`bootstrap.php` returns `App\Config::load(Config::file())`: the code's defaults (`App\Config::table()`, the single source of truth) deep-merged with the overrides in `config.php` (or the file named by `SEARCH_CONFIG_FILE`) and then, for editable keys, with the admin panel's `storage/settings.json` (M46; missing or broken = no overrides), every known key cast to its type. `search()` and its helpers read keys directly, with no fallback at the use site. Details and every key: [CONFIGURATION.md](CONFIGURATION.md#the-layered-server-config); `php server/tools/config-check.php` and `GET /health` (`config` section) report problems by key path.
 
 ## Deployment context (M30)
 

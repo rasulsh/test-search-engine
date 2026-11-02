@@ -12,11 +12,14 @@ namespace App;
 final class ConfigDoctor
 {
     /**
-     * @param array<string, mixed> $overrides the raw array config.php returns
+     * @param array<string, mixed> $overrides the overrides the app really uses: config.php's raw array, with the
+     *        panel's settings.json values merged over it ({@see Config::layers()} 'merged')
      * @param array<string, array<string, string>>|null $deprecated replaces {@see Config::deprecated()} (tests)
+     * @param array<string, mixed>|null $panel {@see Config::panelLayer()}: reports an unusable settings.json and
+     *        the keys it holds that were ignored (null = the panel layer is not part of this check)
      * @return array{errors: list<string>, warnings: list<string>, info: list<string>}
      */
-    public static function check(array $overrides, ?array $deprecated = null): array
+    public static function check(array $overrides, ?array $deprecated = null, ?array $panel = null): array
     {
         $schema = Config::schema();
         $config = Config::merge($overrides, null, $deprecated);
@@ -26,6 +29,18 @@ final class ConfigDoctor
         $warnings = [];
         $info = [];
 
+        if ($panel !== null) {
+            $name = basename((string) $panel['file']);
+            if ($panel['problem'] !== null) {
+                $errors[] = "{$name}: {$panel['problem']}, ignored (config.php and the code defaults are in use)";
+            }
+            foreach ($panel['ignored'] as $path) {
+                $warnings[] = "{$path}: in {$name} but not editable there, ignored";
+            }
+            foreach ($panel['invalid'] as $path) {
+                $warnings[] = "{$path}: invalid value in {$name}, ignored";
+            }
+        }
         foreach (Config::required() as $path) {
             if (trim((string) self::get($config, $path)) === '') {
                 $errors[] = "{$path}: required, missing or empty";

@@ -63,6 +63,7 @@ plain cPanel hosting (no proxy in front), leave it empty.
 | --- | --- |
 | `status` | Read-only: database and product count, the live bundle's `meta.json` (built at, normalization version, counts), alias and synonym group counts, VPS `/health`, Redis ping and the number of keys under `redis.prefix`, the config doctor result, last reload time. The VPS and Redis probes time out at `admin.probe_timeout_ms` (1 s) and show "unreachable". |
 | `ops` | The operations page (M40), below. |
+| `settings` | The settings page (M46), below: view and change the server configuration. |
 | `aliases` | The alias manager (M41), below. |
 | `synonyms` | Read-only `synonyms.json`; "which groups hold term X" across alias and synonym groups with the merged result; "copy to aliases". Hand edits of `synonyms.json` are lost on the next build; to drop a bad generated group, put a term of it in `search.synonym_blocklist` in `config.php` (owner aliases are never filtered). |
 | `tester` | A search without a log row and without the result cache: tier, did-you-mean, the top 10 titles with match type. |
@@ -153,6 +154,65 @@ JSON with the same checks, plus a download).
   is overwritten. Saves are audited (`alias_save`, `alias_restore`: counts and the first changed terms, never the file).
 - Live at once: the next search reads the file; the result-cache key includes its version.
 
+## Settings page (M46)
+
+`?p=settings` shows every tunable of the server configuration and changes the ones that are safe to change from a
+browser. `config.php` stays the place for credentials and the structure of the install; this page is for the numbers
+and switches you tune while watching the search (weights, floors, caps, the VPS URL and timeout, the Redis cache).
+
+**Three layers.** The value the app uses is the first of: `settings.json` (this page) → `config.php` → the code default
+(`App\Config`). `settings.json` (`server/storage/settings.json`, or the file named by `SEARCH_SETTINGS_FILE`) holds only the
+keys that differ from what `config.php` / the default say: setting a field back to the inherited value, leaving it blank,
+or ticking its "back to default or config.php" box removes it. `config.php` is PHP code and is **never** rewritten by the
+panel (the installer writes it once and never reads `settings.json`). Every row shows its source (default / `config.php` /
+panel), the current value, the code default and a "changed" mark while you edit it. A key that `config.php` also sets is
+listed as an info row on save: the panel wins. To empty a text value that is not empty in `config.php` or the code (for
+example clear a stopword list), tick "empty value"; a blank field alone means "inherit".
+
+**Three classes of key** (`Config::editability()`, covered by a test over the whole schema):
+
+| class | keys | on the page |
+| --- | --- | --- |
+| hidden | every credential: `db.dsn`, `db.user`, `db.password`, `vps.token`, `redis.auth`, `debug.token`, `reload.token`, `admin.password_hash` | not listed, not in any message, audit row, backup or form; rejected if posted |
+| read-only | `db.*` (table names), `paths.*`, `model.normalization_version`, `admin.*`, `reload.*` | listed under "locked settings" with their value; edit `config.php`; rejected if posted |
+| editable | `search.*`, `storefront.*`, `vps.url`, `vps.timeout_ms`, `vps.reload_timeout_ms`, `redis.*` (except `redis.auth`), `events.allowed_origin`, `log.duplicate_seconds`, `logs.*` | form fields |
+
+**Checking before saving.** "Check changes" is a dry run: it shows the diff (current → new) and every error and warning
+and writes nothing. "Save" validates again on the server (the browser's check is never trusted):
+
+- *Errors block the save*: a wrong type (an integer field rejects `1.5`), a value outside the key's range or allowed values,
+  a malformed URL / origin / host / prefix, a control character, a text longer than 2048 characters. Typed values stay in
+  the form with the message next to their field. Persian digits are accepted for numbers.
+- *Warnings need the "I understand" box*: conflicts between keys, evaluated on the effective result (including keys that
+  come from `config.php` and the VPS token, which this page cannot show): `vps.url` set while the VPS token is empty;
+  Redis enabled with an empty host; `vps.timeout_ms` not smaller than `search.latency_budget_ms`; `tail_cap` above
+  `semantic_top_k`, or `result_cap` below it; both entity factors 0 (entity logic off); both blend weights 0; the Redis
+  zero-result TTL above the normal TTL or the hot TTL below it; list items that were empty or repeated (lists are
+  normalized with the runtime's `Normalizer` and shown back as saved). Each conflict is reported only when the save
+  changes one of its keys.
+- *Info*: keys also set in `config.php` (the panel wins).
+
+Each key's range comes from how the code uses it (a clamp in the class that reads it, the VPS's accepted range, the
+installer's old limits); where the code gives no basis the page only enforces the type and a technical bound. The table
+is `App\SettingRules`, the Persian help line of every key is in `AdminStrings` (`settings.help_keys`); a test fails when an
+editable key lacks either, or when its own default breaks its rule.
+
+**After saving.** The change is live from the next request (no reload, no rebuild). If a changed key can alter which
+products a query returns (`search.*`, `vps.url`, `vps.timeout_ms`), the page says so and links to the Operations page:
+the result cache is **not** flushed automatically because its key does not carry every setting.
+
+**History tab.** Every save or restore keeps the previous `settings.json` in `storage/backups/` (newest
+`admin.settings_backups`), with a diff against the current settings and a one-click restore. A restore is itself backed
+up, so it can be undone. Saves and restores are audited (`settings_save`, `settings_restore`): only the changed key
+names and their count, never a value. A save is refused as "stale" when the file changed since the form was opened.
+
+**Safety.** The file is read defensively on every request: missing = no overrides; unreadable, larger than 64 KB or not a
+JSON object = ignored (the site keeps serving `config.php` + defaults), reported as an ERROR naming the file on the
+status page, in `/health` (`config` section) and by `config-check.php`; ignored or invalid keys are WARNs by key path. A
+save over a broken file repairs it (the broken content becomes a backup). If `storage/` is not writable the page stays
+readable and saving is disabled with a message. **Recovery:** delete `server/storage/settings.json` to return to
+`config.php` + defaults.
+
 ## Numbers and dates
 
 Every number the panel prints uses Latin digits, a comma for thousands and a dot for decimals: `1,118`, `11.7%`,
@@ -178,6 +238,8 @@ start with the same card size.
 | `src/AdminStatus.php` | the status data and its probes |
 | `src/AdminPage.php`, `AdminPage.css`, `AdminPage.js` | shell: side navigation, theme toggle, confirm dialogs |
 | `src/AdminViews.php` | page bodies |
+| `src/AdminSettings.php`, `AdminSettingsViews.php` | the settings page: actions (check / save / restore, audit) and HTML (M46) |
+| `src/SettingsValidator.php`, `SettingRules.php`, `SettingsStore.php` | per-key rules and conflicts, the rule table, the versioned atomic file with backups (M46) |
 | `src/AdminStrings.php` | **every Persian string and help text**; edit wording here only |
 
 Theme: follows the system until the toggle is used; the choice is stored in `localStorage` (`admin-theme`, guarded

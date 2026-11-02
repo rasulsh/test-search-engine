@@ -19,7 +19,7 @@ final class AdminStatus
 
     /**
      * @param array<string, mixed> $config the loaded server config
-     * @param array<string, mixed> $overrides config.php's raw overrides, for the doctor
+     * @param array<string, mixed> $overrides config.php's overrides with the panel's merged over them, for the doctor
      * @param null|callable(string, int): (array{status: int, body: string}|null) $http (url, timeoutMs) -> response;
      *        null on a transport failure. Tests inject one; the default is curl.
      */
@@ -29,7 +29,8 @@ final class AdminStatus
         private readonly Audit $audit,
         private readonly array $overrides,
         ?callable $http = null,
-        private readonly ?RedisClient $redis = null
+        private readonly ?RedisClient $redis = null,
+        private readonly ?array $panel = null
     ) {
         $this->http = $http ?? [self::class, 'curlGet'];
     }
@@ -50,8 +51,8 @@ final class AdminStatus
             ],
             'vps' => $this->vps(),
             'redis' => $this->redis(),
-            'doctor' => ConfigDoctor::check($this->overrides),
-            'config' => ConfigReport::rows($this->overrides),
+            'doctor' => ConfigDoctor::check($this->overrides, null, $this->panel),
+            'config' => ConfigReport::rows($this->overrides, null, $this->panel),
             'last_reload' => $this->lastReload(),
         ];
     }

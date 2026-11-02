@@ -188,10 +188,12 @@ final class AdminViews
                     . '</span> <bdi class="ltr">'
                     . self::e($issue['message']) . '</bdi></div>';
             }
-            $fromFile = $row['source'] === 'file';
-            $body .= '<tr data-changed="' . ($fromFile || $notes !== '' ? '1' : '0') . '"><td><bdi class="ltr">'
+            $overridden = $row['source'] !== 'default';
+            $sourceLabel = ['file' => $t['source_file'], 'panel' => $t['source_panel']][$row['source']]
+                ?? $t['source_default'];
+            $body .= '<tr data-changed="' . ($overridden || $notes !== '' ? '1' : '0') . '"><td><bdi class="ltr">'
                 . self::e($row['key']) . '</bdi></td><td>' . $value . '</td><td class="c">'
-                . self::e($fromFile ? $t['source_file'] : $t['source_default']) . '</td><td class="wrap">' . $notes
+                . self::e($sourceLabel) . '</td><td class="wrap">' . $notes
                 . '</td></tr>';
         }
 
@@ -283,6 +285,16 @@ final class AdminViews
                 $summary = AdminStrings::fill($t['alias_restore'], $backup, self::num($detail['groups'] ?? 0))
                     . ' ' . $summary;
             }
+
+            return '<bdi dir="auto">' . self::e($summary) . '</bdi>';
+        }
+
+        if ($action === Audit::SETTINGS_SAVE || $action === Audit::SETTINGS_RESTORE) {
+            $keys = implode(AdminStrings::fa()['ui']['list_sep'], array_map('strval', (array) ($detail['keys'] ?? [])));
+            $total = self::num((int) ($detail['total'] ?? 0));
+            $summary = $action === Audit::SETTINGS_SAVE
+                ? AdminStrings::fill($t['settings_save'], $total, $keys)
+                : AdminStrings::fill($t['settings_restore'], (string) ($detail['backup'] ?? ''), $total, $keys);
 
             return '<bdi dir="auto">' . self::e($summary) . '</bdi>';
         }

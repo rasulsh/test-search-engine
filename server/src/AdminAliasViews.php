@@ -11,6 +11,10 @@ namespace App;
  */
 final class AdminAliasViews
 {
+    /** Rows the tester page shows by default, and with "show more". */
+    public const TESTER_SHOW = 10;
+    public const TESTER_SHOW_MORE = 50;
+
     /** Rows of the synonyms viewer's table (its filter narrows it); the alias groups are paginated instead. */
     public const PAGE_ROWS = 200;
     /** Alias groups per page unless the request asks for another {@see Paging::SIZES} choice. */
@@ -592,7 +596,8 @@ final class AdminAliasViews
             . '</dd>' . self::entityRows($r['debug']['entities'] ?? null, $t) . '</dl>';
 
         $rows = '';
-        foreach (array_slice($r['debug']['results'] ?? [], 0, 10) as $row) {
+        $show = (int) ($d['show'] ?? self::TESTER_SHOW);
+        foreach (array_slice($r['debug']['results'] ?? [], 0, $show) as $row) {
             $hit = $row['keyword_hit'];
             $type = $hit === null ? 'semantic' : (string) $hit['match_type'];
             $coverage = $hit === null ? '—' : self::e(number_format((float) $hit['coverage'], 2, '.', ''));
@@ -605,10 +610,14 @@ final class AdminAliasViews
             $rows = '<tr><td colspan="5">' . self::e($t['no_results']) . '</td></tr>';
         }
 
+        $other = $show === self::TESTER_SHOW ? self::TESTER_SHOW_MORE : self::TESTER_SHOW;
+        $toggle = '<p class="note"><a href="?p=tester&amp;q=' . rawurlencode($q) . '&amp;show=' . $other . '">'
+            . self::e(AdminStrings::fill($t['show_n'], AdminViews::num($other))) . '</a></p>';
+
         return $html . '<section class="card">' . $meta . '</section><br><div class="scroll card"><table>'
             . '<thead><tr><th class="c">' . self::e($t['rank']) . '</th><th class="c">' . self::e($t['id'])
             . '</th><th>' . self::e($t['product']) . '</th><th class="c">' . self::e($t['match'])
             . '</th><th class="c">'
-            . self::e($t['coverage']) . '</th></tr></thead><tbody>' . $rows . '</tbody></table></div>';
+            . self::e($t['coverage']) . '</th></tr></thead><tbody>' . $rows . '</tbody></table></div>' . $toggle;
     }
 }

@@ -16,6 +16,13 @@ namespace App;
 final class GoldenEval
 {
     /**
+     * The `limit` the OpenCart storefront sends to /search (smartSearchIds). The hybrid blend only ranks the keyword
+     * candidates that fit in `limit`, so the order of a shallower request differs from the list shoppers see; the
+     * tester page and the evaluation tool ask for this depth and cut the list afterwards.
+     */
+    public const STOREFRONT_DEPTH = 300;
+
+    /**
      * @param string $csv columns `query`, `relevant_ids` (`;`-separated), `note`; lines starting with `#`
      *        before the header are comments
      * @return list<array{query: string, relevant: list<int>, note: string}>
@@ -60,6 +67,12 @@ final class GoldenEval
         fclose($stream);
 
         return $cases;
+    }
+
+    /** The depth a saved run asked for; a run saved before `depth` existed asked for exactly k. @param array<string, mixed> $run */
+    public static function depthOf(array $run): int
+    {
+        return (int) ($run['depth'] ?? $run['k'] ?? 0);
     }
 
     /** 1-based rank of the first relevant id, or null. @param list<int> $ranked @param list<int> $relevant */

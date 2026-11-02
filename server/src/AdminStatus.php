@@ -46,7 +46,8 @@ final class AdminStatus
             'database' => $this->database(),
             'bundle' => $this->bundle($dataDir),
             'groups' => [
-                'aliases' => self::countGroups($dataDir . '/' . Synonyms::ALIASES_FILE),
+                // The file the search reads: storage/aliases.json, else the bundle's until storage is seeded.
+                'aliases' => self::countGroups(AliasStore::fromConfig($this->config)->runtimePath()),
                 'synonyms' => self::countGroups($dataDir . '/' . Synonyms::SYNONYMS_FILE),
             ],
             'vps' => $this->vps(),

@@ -82,7 +82,7 @@ with the checks in the [go-live checklist](#production-go-live-checklist).
 
 ### Command-line tools
 
-`server/tools/` holds `config-check.php` (the config doctor), `logs-export.php`, `admin-password.php` and `vps-probe.php` (the VPS probe, below). Run them
+`server/tools/` holds `config-check.php` (the config doctor), `logs-export.php`, `admin-password.php`, `vps-probe.php` (the VPS probe, below) and `warm-cache.php` ([result-cache warm-up](#warming-the-result-cache)). Run them
 **as the account user, not as root**, with the **PHP 8.1+ binary the site uses**:
 
 ```bash
@@ -94,6 +94,17 @@ files the web server's user cannot read or replace (a log export, a rotated conf
 is often older than the site's. Every tool checks `PHP_VERSION_ID >= 80100` first (`tools/_php-guard.php`, shipped
 in `release.zip`) and, on an older PHP, prints a one-paragraph English message and exits with status 1 instead of a
 fatal error from inside `src/`. A PHP older than 7.0 cannot even parse the tools; use the explicit path then.
+
+The same guard checks the extensions the tools need (`mbstring`, `pdo_mysql`, `curl`, `json`). A missing one ends the tool with
+a message on stderr and status 1 (before, the CLI died silently with status 255, because `display_errors` is off there). The
+cPanel `alt-php83` command-line PHP can come without `mbstring`; the tool then prints the working invocation, for example:
+
+```bash
+su - search -c "cd ~/search-service/server && /opt/cpanel/ea-php83/root/usr/bin/php -d extension=mbstring tools/warm-cache.php --dry-run"
+```
+
+(add `-d extension=pdo_mysql` and so on for each name the message lists; use the same flags in the cron line). The lasting
+fix is to enable the extension for that PHP version in cPanel (Select PHP Version, or MultiPHP INI Editor).
 
 ### One-time setup (cPanel host)
 
@@ -229,6 +240,11 @@ deny-all `.htaccess` ships. Upgrading from M40, in full:
    search keeps serving exactly the aliases it served before. From then on edit aliases in the panel only; editing
    `pipeline/aliases.json` no longer changes the live search.
 
+**Upgrading to the cache warm-up.** No migration, no config key, no bundle rebuild. Upload `tools/warm-cache.php`, the changed
+`tools/_php-guard.php` (it now also checks the extensions), new `src/CacheWarmer.php` and the changed `src/Cache.php` and
+`src/SearchController.php` (or unzip the new `release.zip`, which carries all of them). `storage/` must be writable (the lock
+file lives there). Then see [Warming the result cache](#warming-the-result-cache).
+
 <a id="upgrading-to-the-vps-call-log"></a>**Upgrading to the VPS call log (`vps_calls`, the panel's VPS page).** No bundle rebuild, no
 reload, no `.htaccess` change. The service keeps working if any step is late: each side degrades to "no new data".
 
@@ -326,7 +342,10 @@ curl -sS -X POST -H "X-Reload-Token: $SEARCH_RELOAD_TOKEN" \
      "https://shop.example.com/search-api/reload.php?load=1"
 # {"ok":true,"count":20000}
 curl -sS https://shop.example.com/search-api/health.php   # product_count == count, config.ok true
+php tools/warm-cache.php        # the reload emptied the result cache: refill it (and after the VPS reload)
 ```
+
+The last line is [the cache warm-up](#warming-the-result-cache); skip it when the Redis cache is off.
 
 `config.php` survives every unzip, so the new code meets an old config. The
 config doctor turns that from a silent risk into a checked step: it reports a
@@ -678,6 +697,41 @@ The pattern also covers the `search:cache:freq:*` hit counters of the adaptive T
 
 If Redis stops, searches carry on uncached (each costs at most `redis.timeout_ms` extra, logged with
 `error_log`); to turn the cache off set `SEARCH_REDIS_ENABLED=0`.
+
+### Warming the result cache
+
+A deploy, a bundle reload, a cache flush (the Operations page or `POST /reload`) and a VPS vector reload all empty or outdate the
+result cache, so the first shopper to ask each popular query waits for the full search. `tools/warm-cache.php` asks the most
+searched queries itself and fills the cache first. **Run it after every bundle reload, cache flush and VPS vector reload**
+(and after a settings change that needed a flush):
+
+```bash
+su - search -c "cd ~/search-service/server && /opt/cpanel/ea-php82/root/usr/bin/php tools/warm-cache.php"
+```
+
+* **Queries**: the top `--n` (default 500, at most 1000) distinct normalized queries of the last `--window` (default `30d`; `24h`,
+  `7d`, `30d`, `90d`, `all`) from `search_logs`, counted like the analytics count searches (no suspicious, duplicate, burst or
+  paging rows). `--queries=file.csv` adds the `normalized_q` column of a `logs-export.php --grouped` file after them; each query runs once.
+* **Same key as a shopper**: each query goes through the normal search at the storefront depth (`limit` 300) with the live
+  config, so the cache entry is the one the storefront hits. It writes **no** `search_logs` row and counts no lookup for the
+  adaptive TTL. The PHP -> VPS calls are recorded in `vps_calls` as usual (they are real calls).
+* **Gentle**: sequential; `--sleep-ms` (default 250) after each query that reached the VPS; a query already cached is skipped
+  (`--only-missing`, the default; `--force` recomputes it); the run stops after `--max-failures` (default 5) consecutive VPS
+  failures with a message naming the VPS page. A result computed while the VPS failed (degraded, keyword-only) is **never cached**;
+  those queries are retried once at the end and the summary says how many stayed degraded.
+* **Look first**: `--dry-run` lists every query as `would warm` or `cached` and writes nothing.
+* **Output**: a progress line every 50 queries, then `done: warmed N, already cached N, degraded N, failed N in S s`. Exit 0 when
+  everything is cached; 1 when queries stayed degraded or failed, the run stopped early, `redis.enabled` is off, Redis does not
+  answer, or another run holds the lock (`storage/warm-cache.lock`); 2 on a usage error.
+* **Cron** (safe: an overlapping run exits 1 without doing anything). Nightly, after the usual quiet hour for reloads:
+
+  ```
+  17 4 * * * /opt/cpanel/ea-php82/root/usr/bin/php $HOME/search-service/server/tools/warm-cache.php --n 500 >/dev/null 2>&1
+  ```
+
+  Entries live `redis.ttl` (a day by default, a week once hot), so a nightly run keeps the popular ones warm; the run right after a
+  reload matters more. A run of 500 uncached queries takes about `500 x (VPS latency + sleep)`: roughly 5 to 10 minutes at the
+  defaults, which the real VPS has to confirm.
 
 ### Rollback (one step)
 

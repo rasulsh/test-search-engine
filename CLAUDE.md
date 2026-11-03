@@ -149,6 +149,7 @@ abstraction layers.
 │   ├── tools/_php-guard.php      # every tools/*.php requires it first: clear message on PHP < 8.1 (M40)
 │   ├── tools/logs-export.php     # search_logs -> CSV / JSON CLI for the zero-result loop (M36)
 │   ├── tools/vps-probe.php       # GET /health to the VPS, recorded in vps_calls; a 1-minute cron (M47)
+│   ├── tools/warm-cache.php      # pre-fills the Redis result cache for the top queries after a reload / flush (M48)
 │   ├── data/                      # active bundle (gitignored)
 │   └── tests/
 ├── vps/                          # VPS vector service (Python): query embedding + cosine top-K
@@ -488,6 +489,13 @@ wait for review before starting the next.
   "Probe now" record `kind=probe`; `?p=vps` (`VpsCallReport`, `AdminVpsViews`): summary, hourly strips, incidents, call list
   with filters and CSV. VPS: request-id echo, `Server-Timing`, inflight header, one journal line per request, lifecycle
   events. Contracts unchanged.
+
+- **M48 — Result-cache warm-up + CLI extension check:** `tools/warm-cache.php` (`CacheWarmer`, `SearchController::warm()` /
+  `isCached()`, `fromConfig(..., $logSearches)`): the top N normalized queries of the last W days (analytics rows only) plus an
+  optional grouped CSV go through the normal search at the storefront depth, writing the result cache and no `search_logs` row;
+  sequential, `--sleep-ms`, `--only-missing` (default) / `--force`, stop after K consecutive VPS failures, a degraded result is
+  never cached and is retried once, `--dry-run`, a lock in `storage/`. `tools/_php-guard.php` also checks `mbstring`, `pdo_mysql`,
+  `curl`, `json` (stderr + exit 1). No config key. Contracts unchanged. See `docs/DEPLOY.md`.
 
 **Definition of Done (per PR):** code + tests pass in CI; docs updated;
 KISS respected (no unused abstraction); PR description complete; no secrets or

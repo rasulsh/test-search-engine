@@ -33,7 +33,7 @@ final class ToolsGuardTest extends TestCase
 
     public function testThereAreToolsToCheck(): void
     {
-        self::assertGreaterThanOrEqual(4, count(self::tools()));
+        self::assertGreaterThanOrEqual(5, count(self::tools()));
     }
 
     public function testTheMessageNamesTheVersionTheBinaryAndTheFix(): void
@@ -52,6 +52,38 @@ final class ToolsGuardTest extends TestCase
             self::assertStringEndsWith("\n", $message);
             self::assertSame(0, preg_match('/[^\x00-\x7F]/', $message), 'English / ASCII only');
         }
+    }
+
+    public function testAMissingExtensionGetsAClearMessageWithTheWorkingInvocation(): void
+    {
+        require_once self::toolsDir() . '/_php-guard.php';
+
+        self::assertNull(search_tool_extension_problem([], '/usr/bin/php'));
+        self::assertSame([], search_tool_missing_extensions(), 'the test PHP has every required extension');
+        $message = (string) search_tool_extension_problem(['mbstring', 'curl'], '/opt/cpanel/ea-php83/root/usr/bin/php');
+
+        self::assertStringContainsString('extension(s) mbstring, curl not loaded', $message);
+        self::assertStringContainsString('/opt/cpanel/ea-php83/root/usr/bin/php -d extension=mbstring -d extension=curl', $message);
+        self::assertSame(0, preg_match('/[^\x00-\x7F]/', $message), 'English / ASCII only');
+    }
+
+    #[DataProvider('tools')]
+    public function testEveryToolStopsOnStderrWithStatusOneWhenAnExtensionIsMissing(string $file): void
+    {
+        // `php -n` loads no ini file, so a PHP that ships its extensions as modules lacks mbstring etc.
+        $probe = shell_exec(escapeshellarg(PHP_BINARY) . ' -n -r ' . escapeshellarg('echo extension_loaded("mbstring") ? "yes" : "no";'));
+        if ($probe !== 'no') {
+            self::markTestSkipped('this PHP has mbstring built in; the message itself is covered above');
+        }
+        $process = proc_open([PHP_BINARY, '-n', $file], [1 => ['pipe', 'w'], 2 => ['pipe', 'w']], $pipes);
+        self::assertIsResource($process);
+        $out = (string) stream_get_contents($pipes[1]);
+        $err = (string) stream_get_contents($pipes[2]);
+
+        self::assertSame(1, proc_close($process));
+        self::assertSame('', $out);
+        self::assertStringContainsString('mbstring', $err);
+        self::assertStringContainsString('-d extension=', $err);
     }
 
     #[DataProvider('tools')]

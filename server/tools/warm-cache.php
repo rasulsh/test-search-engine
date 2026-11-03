@@ -81,7 +81,7 @@ if (isset($options['queries']) && ($file === null || $file === '')) {
     $fail('--queries needs a file path');
 }
 
-$say = static function (string $line): void {
+$say = static function ($line) {
     echo $line . "\n";
 };
 
@@ -117,8 +117,14 @@ try {
             $say(($item['cached'] ? 'cached   ' : 'would warm') . ' ' . $item['query']);
             $todo += $item['cached'] ? 0 : 1;
         }
-        $say(sprintf('dry run: %d queries (%d from the log, %d from the file), %d to warm, %d already cached',
-            count($queries), count($logged), count($fromFile), $todo, count($queries) - $todo));
+        $say(sprintf(
+            'dry run: %d queries (%d from the log, %d from the file), %d to warm, %d already cached',
+            count($queries),
+            count($logged),
+            count($fromFile),
+            $todo,
+            count($queries) - $todo
+        ));
         exit(0);
     }
 
@@ -132,8 +138,14 @@ try {
         $fail('another warm-up is running (lock ' . $lockPath . '); not starting a second one', 1);
     }
 
-    $say(sprintf('warming %d queries (%d from the log, %d from the file), depth %d%s',
-        count($queries), count($logged), count($fromFile), GoldenEval::STOREFRONT_DEPTH, $force ? ', forced' : ''));
+    $say(sprintf(
+        'warming %d queries (%d from the log, %d from the file), depth %d%s',
+        count($queries),
+        count($logged),
+        count($fromFile),
+        GoldenEval::STOREFRONT_DEPTH,
+        $force ? ', forced' : ''
+    ));
     $summary = $warmer->run($queries, $force, $say);
 } catch (Throwable $e) {
     $fail('failed: ' . $e->getMessage(), 1);

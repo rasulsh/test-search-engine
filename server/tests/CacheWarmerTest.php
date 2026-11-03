@@ -221,18 +221,20 @@ final class CacheWarmerTest extends DatabaseTestCase
     {
         $insert = $this->pdo->prepare(
             'INSERT INTO search_logs (raw_q, normalized_q, is_suspicious, is_duplicate, is_burst, page, source, ts)'
-            . ' VALUES (:q, :q, :s, :d, :b, :p, :src, NOW() - INTERVAL :age DAY)'
+            . ' VALUES (:q, :q2, :s, :d, :b, :p, :src, NOW() - INTERVAL :age DAY)'
         );
         $row = static fn (string $q, int $times, array $o = []): array => [$q, $times, $o + [
             's' => 0, 'd' => 0, 'b' => 0, 'p' => 1, 'src' => 'page', 'age' => 1,
         ]];
-        foreach ([
+        foreach (
+            [
             $row('ps5', 3), $row('ps4', 2), $row('zelda', 5, ['d' => 1]), $row('drop table', 4, ['s' => 1]),
             $row('gifts', 4, ['b' => 1]), $row('paging', 4, ['p' => 2]), $row('reload', 4, ['src' => 'filter']),
             $row('old', 9, ['age' => 60]), $row('mario', 1),
-        ] as [$q, $times, $o]) {
+            ] as [$q, $times, $o]
+        ) {
             for ($i = 0; $i < $times; $i++) {
-                $insert->execute(['q' => $q] + $o);
+                $insert->execute(['q' => $q, 'q2' => $q] + $o);
             }
         }
         $analytics = new Analytics($this->pdo, 'search_logs');

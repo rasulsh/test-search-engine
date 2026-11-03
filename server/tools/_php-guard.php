@@ -54,7 +54,9 @@ if (!function_exists('search_tool_extension_problem')) {
             $flags .= ' -d extension=' . $name;
         }
 
-        return 'search service: the PHP extension(s) ' . implode(', ', $missing) . " not loaded in this PHP ({$binary}).\n"
+        $names = implode(', ', $missing);
+
+        return "search service: the PHP extension(s) {$names} not loaded in this PHP ({$binary}).\n"
             . "Run the tool with the extension switched on, for example:\n"
             . "  {$binary}{$flags} {$tool}\n"
             . "or enable it for the account's PHP version in cPanel (Select PHP Version / MultiPHP INI Editor).\n";

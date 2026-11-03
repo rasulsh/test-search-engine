@@ -63,7 +63,7 @@ final class WarmCacheToolTest extends DatabaseTestCase
         ], $overrides));
         $env = array_filter(getenv(), static fn (string $key): bool => !str_starts_with($key, 'SEARCH_'), ARRAY_FILTER_USE_KEY);
         $process = proc_open(
-            [PHP_BINARY, dirname(__DIR__) . '/tools/warm-cache.php', '--sleep-ms=0', ...$args],
+            [PHP_BINARY, dirname(__DIR__) . '/tools/warm-cache.php', ...(preg_grep('/^--sleep-ms/', $args) ? [] : ['--sleep-ms=0']), ...$args],
             [1 => ['pipe', 'w'], 2 => ['pipe', 'w']],
             $pipes,
             null,

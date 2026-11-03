@@ -2,6 +2,8 @@
 
 declare(strict_types=1);
 
+// phpcs:disable Generic.Files.LineLength.TooLong -- fixtures
+
 namespace App\Tests;
 
 /** tools/warm-cache.php as a real process, against a fake Redis server and a mock VPS. */

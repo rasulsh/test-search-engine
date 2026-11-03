@@ -62,7 +62,7 @@ final class CacheWarmer
             }
             $column = is_array($header) ? array_search('normalized_q', $header, true) : false;
             if ($column === false) {
-                throw new InvalidArgumentException("{$path} has no normalized_q column (a logs-export --grouped file does)");
+                throw new InvalidArgumentException("{$path} has no normalized_q column (use logs-export --grouped)");
             }
             $queries = [];
             while (($row = fgetcsv($handle, 0, ',', '"', '')) !== false) {
@@ -166,7 +166,7 @@ final class CacheWarmer
             if ($this->maxFailures > 0 && $streak >= $this->maxFailures) {
                 $summary['stopped'] = true;
                 $summary['not_attempted'] = $total - $i - 1;
-                $report("stopping after {$streak} consecutive VPS failures; check the VPS (admin panel VPS page) and run again");
+                $report("stopping after {$streak} consecutive VPS failures; check the VPS, then rerun");
                 break;
             }
         }

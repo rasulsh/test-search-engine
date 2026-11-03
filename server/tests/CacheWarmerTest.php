@@ -2,6 +2,8 @@
 
 declare(strict_types=1);
 
+// phpcs:disable Generic.Files.LineLength.TooLong -- fixtures
+
 namespace App\Tests;
 
 use App\Analytics;

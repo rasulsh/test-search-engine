@@ -56,6 +56,7 @@ final class SearchController
     private $normalize;
     private int $topIdsLimit;
     private ?VpsClient $vps;
+    private ?VpsCallLog $callLog = null;
     private ?Ranker $ranker;
     /** @var null|callable(list<int>): array<int, array{stock: int, popularity: int}> */
     private $signalsProvider;
@@ -125,12 +126,13 @@ final class SearchController
         $this->entities = $entities;
     }
 
-    /** Every PHP -> VPS call of a recording controller lands in vps_calls (the VPS page). */
-    private static function withCallLog(?VpsClient $client, PDO $pdo, array $config, bool $record): ?VpsClient
+    /** Every PHP -> VPS call, and every search that skipped the tier by design, lands in vps_calls. */
+    public function withCallLog(VpsCallLog $log): self
     {
-        return $client !== null && $record
-            ? $client->recordTo(new VpsCallLog($pdo, (int) $config['vps']['log_retention_days']))
-            : $client;
+        $this->callLog = $log;
+        $this->vps?->recordTo($log);
+
+        return $this;
     }
 
     /**
@@ -214,7 +216,7 @@ final class SearchController
             return $signals;
         };
 
-        return new self(
+        $controller = new self(
             $keyword,
             $record ? new Logger(
                 $pdo,
@@ -224,7 +226,7 @@ final class SearchController
             $spellerFactory,
             null,
             10,
-            self::withCallLog($vps ?? VpsClient::fromConfig($config['vps']), $pdo, $config, $record),
+            $vps ?? VpsClient::fromConfig($config['vps']),
             new Ranker(
                 (float) $search['stock_boost'],
                 (float) $search['popularity_boost'],
@@ -260,6 +262,10 @@ final class SearchController
                 (bool) $search['condition_enabled']
             ) : null
         );
+
+        return $record
+            ? $controller->withCallLog(new VpsCallLog($pdo, (int) $config['vps']['log_retention_days']))
+            : $controller;
     }
 
     /**
@@ -440,7 +446,7 @@ final class SearchController
         // Tier 2 is additive: only reshuffle when the VPS answered. Otherwise the
         // keyword ordering above stands.
         $stage = microtime(true);
-        $semantic = $this->semantic($boostQuery);
+        $semantic = $this->semantic($boostQuery, $normalized);
         $timing['vector'] = $semanticOn && $normalized !== '' ? self::elapsedMs($stage) : null;
         $recognized = $this->recognizeEntities($boostQuery);
         $entityInfo = null;
@@ -658,13 +664,20 @@ final class SearchController
      *
      * @return list<array{product_id: int, score: float}>|null
      */
-    private function semantic(string $normalized): ?array
+    private function semantic(string $sent, string $normalized): ?array
     {
         // The normalized text, not the raw one: spellings that normalize alike must embed (and cache) alike.
+        // $sent is the applied "did you mean" text when the literal query matched nothing.
         if (!$this->semanticEnabled() || $normalized === '') {
+            // Skipped by design, not failed: one vps_calls row says why (best effort, never raised).
+            $this->callLog?->skipped(
+                $this->vps === null ? 'not_configured' : ($this->semanticEnabled() ? 'empty_query' : 'disabled'),
+                $normalized
+            );
+
             return null;
         }
-        $semantic = $this->vps->search($normalized, $this->semanticTopK, $this->semanticMinScore);
+        $semantic = $this->vps->search($sent, $this->semanticTopK, $this->semanticMinScore, $normalized);
         if ($semantic === null) {
             error_log('search: semantic tier unavailable (' . $this->vps->failure() . '); served keyword-only results');
         }

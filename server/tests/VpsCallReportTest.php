@@ -64,6 +64,26 @@ final class VpsCallReportTest extends DatabaseTestCase
         self::assertNull($this->report->summary(24, 'reload')['p50']);
     }
 
+    public function testSkippedSearchesAreCountedApartAndAreNotFailures(): void
+    {
+        $this->call('10', 'ok', 'search', 100);
+        $this->call('20', 'skipped', 'search', 0, ['error' => 'not_configured']);
+        $this->call('30', 'skipped', 'search', 0, ['error' => 'empty_query']);
+        $this->pdo->exec("UPDATE vps_calls SET duration_ms = NULL, source = 'none' WHERE outcome = 'skipped'");
+
+        $day = $this->report->summary(24, 'search');
+
+        self::assertSame([1, 2, 1, 100.0], [$day['calls'], $day['skipped'], $day['ok'], $day['ok_pct']]);
+        self::assertSame([100, 100], [$day['p50'], $day['max']], 'skipped rows have no duration');
+        self::assertSame([], $this->report->incidents(7), 'skipped is not an incident');
+        $f = static fn (array $q): array => VpsCallReport::filters($q);
+        self::assertSame(0, $this->report->rows($f([]), 1, 50)['total'], 'not in the failures view');
+        self::assertSame(2, $this->report->rows($f(['view' => 'all', 'outcome' => 'skipped']), 1, 50)['total']);
+        self::assertSame(0, $this->report->rows($f(['outcome' => 'failed']), 1, 50)['total']);
+        $series = $this->report->hourly(1, 'search');
+        self::assertSame(2, array_sum(array_column(array_column($series, 'counts'), 'skipped')));
+    }
+
     public function testPercentilesUseTheNearestRank(): void
     {
         self::assertNull(VpsCallReport::percentile([], 50));

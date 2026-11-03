@@ -238,7 +238,8 @@ reload, no `.htaccess` change. The service keeps working if any step is late: ea
    `src/AdminOps.php`, `src/Audit.php`, `src/Config.php`, `src/SettingRules.php`, `src/AdminStrings.php`, `public/admin.php`
    and `db/schema.sql` (new installs).
 2. **Migration** (idempotent, MariaDB 10.4+; the app does not create this table itself):
-   `mysql search_db < db/migrations/2026-11-03_vps_calls.sql`. Rollback (drops the history):
+   `mysql search_db < db/migrations/2026-11-03_vps_calls.sql`. (It also brings a table made by an earlier revision of this file up
+   to date: `ADD COLUMN IF NOT EXISTS`, old rows read as `source = live`.) Rollback (drops the history):
    `mysql search_db < db/migrations/2026-11-03_vps_calls.down.sql`. Until it is applied `/search` is unaffected (one
    `error_log` line per call) and `?p=vps` names the file to apply.
 3. **Cron, every minute** (cPanel -> Cron Jobs; the account's PHP 8.1+ binary, see [Command-line tools](#command-line-tools)):

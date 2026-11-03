@@ -143,14 +143,15 @@ URL or token. Rows older than `vps.log_retention_days` (30) are purged, a bounde
 | `http_error` | the VPS answered with a status other than 200 (401 wrong token, 503 no vectors loaded) |
 | `bad_body` | status 200 but the body was not the expected JSON |
 | `not_configured` | `vps.url` is empty (only a probe records it) |
+| `skipped` | a search whose semantic tier was **not called by design**, with `source = none` and the reason in `error`: `not_configured` (no `vps.url`), `disabled` (the tier is not wired) or `empty_query` (the query normalizes to nothing). It is not a failure and not a call: it never lowers ok %, has no duration, and is not an incident. A keyword-only answer with no failure row and no `skipped` row means the result cache answered it |
 
-Columns: `duration_ms`, `connect_ms` and `ttfb_ms` come from curl (`CONNECT_TIME`, `STARTTRANSFER_TIME`, `TOTAL_TIME`);
+Columns: `duration_ms`, `namelookup_ms`, `connect_ms`, `appconnect_ms` (TLS) and `ttfb_ms` come from curl (`TOTAL_TIME`, `NAMELOOKUP_TIME`, `CONNECT_TIME`, `APPCONNECT_TIME`, `STARTTRANSFER_TIME`). They are cumulative from the start of the call, and every call opens a new connection, so a slow DNS / TCP / TLS handshake is spent from the same `timeout_ms` budget; an empty value means the phase was not reached or took no measurable time (an IP address has no lookup, plain http has no TLS). `vps_took_ms` is the `took_ms` the VPS puts in its JSON body (embed + search as the VPS saw it). `source` is `live` for every real call (`cache` / `stale` are reserved for a later raw-response cache) and `none` for `skipped`. `sent_differs` / `sent_hash`: the text sent to the VPS is not always the shopper's normalized query (the applied "did you mean" text replaces it when the literal query matched nothing); `normalized_q` keeps the shopper's, `sent_differs = 1` flags the other case and `sent_hash` (first 8 hex of sha1) identifies what was sent;
 `timeout_ms` is the limit that call had; `request_id` is the id cPanel sent as `X-Request-Id` and the VPS prints in its
 journal line (`journalctl -u search-vectors | grep id=<request_id>`); `vps_queue_ms`, `vps_embed_ms`, `vps_search_ms`
 and `vps_inflight` come from the VPS's `Server-Timing` / `X-Vps-Inflight` headers and stay empty against an older VPS.
 
 The page: **summary** for 24 h and 7 days, for searches and for probes separately (calls, ok %, a column per failure
-outcome, median / p95 / max duration, and near-timeouts: ok calls slower than 80 % of their `timeout_ms`); **hourly strips**,
+outcome and the skipped count, median / p95 / max duration, and near-timeouts: ok calls slower than 80 % of their `timeout_ms`); **hourly strips**,
 one per outcome that occurred, 168 bars of inline SVG with a hover title per bar; **incidents**: failures within 60 s of
 each other are one incident (start, end, length, count, outcomes, kinds) with the median duration of the 10 ok searches
 before and after it; and the **call list** (latest failures / slowest ok calls / all) filtered by outcome, kind and date
@@ -162,6 +163,8 @@ VPS slow under load: probes stay fast and ok while searches time out, with `conn
 `vps_embed_ms` in the near-timeouts before. **Probe now** (POST, CSRF, an audit row `vps_probe`) makes the same call on
 demand. Without the migration the page says which file to apply and `/search` is unaffected (a failed insert is one
 `error_log` line, `vps_calls: could not record a call`).
+
+The operations page's "load the uploaded vectors" is recorded too (`kind = reload`, with its own `timeout_ms`). The probe is `GET {vps.url}/health`, which needs no token.
 
 ## Effective configuration and upgrades (M40)
 

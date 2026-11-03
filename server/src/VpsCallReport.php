@@ -17,7 +17,7 @@ use PDOException;
 final class VpsCallReport
 {
     public const VIEWS = ['failures', 'slowest', 'all'];
-    /** A "failure" filter value meaning every outcome but ok and not_configured. */
+    /** A "failure" filter value meaning every outcome but ok, not_configured and skipped. */
     public const FAILED = 'failed';
     /** Failures this close together (seconds) are one incident. */
     public const INCIDENT_GAP = 60;
@@ -28,13 +28,14 @@ final class VpsCallReport
     public const EXPORT_LIMIT = 50000;
 
     public const COLUMNS = [
-        'id', 'ts', 'kind', 'outcome', 'http_status', 'duration_ms', 'connect_ms', 'ttfb_ms', 'timeout_ms',
-        'error', 'response_bytes', 'neighbours', 'request_id', 'vps_queue_ms', 'vps_embed_ms', 'vps_search_ms',
-        'vps_inflight', 'normalized_q',
+        'id', 'ts', 'kind', 'outcome', 'source', 'http_status', 'duration_ms', 'namelookup_ms', 'connect_ms',
+        'appconnect_ms', 'ttfb_ms', 'timeout_ms', 'error', 'response_bytes', 'neighbours', 'request_id',
+        'vps_queue_ms', 'vps_embed_ms', 'vps_search_ms', 'vps_took_ms', 'vps_inflight', 'normalized_q',
+        'sent_differs', 'sent_hash',
     ];
 
     private const T = VpsCallLog::TABLE;
-    private const FAILURE_SQL = "outcome NOT IN ('ok', 'not_configured')";
+    private const FAILURE_SQL = "outcome NOT IN ('ok', 'not_configured', 'skipped')";
 
     public function __construct(private readonly PDO $pdo)
     {
@@ -53,9 +54,10 @@ final class VpsCallReport
     }
 
     /**
-     * Calls of one kind in the last $hours hours.
+     * Calls of one kind in the last $hours hours (`calls` leaves out searches that skipped the tier).
      *
-     * @return array{calls: int, ok: int, ok_pct: ?float, outcomes: array<string, int>, p50: ?int, p95: ?int,
+     * @return array{calls: int, skipped: int, ok: int, ok_pct: ?float, outcomes: array<string, int>, p50: ?int,
+     *         p95: ?int,
      *         max: ?int, near: int, near_pct: ?float}
      */
     public function summary(int $hours, string $kind): array
@@ -67,7 +69,8 @@ final class VpsCallReport
         foreach ($counts->fetchAll(PDO::FETCH_NUM) as [$outcome, $count]) {
             $outcomes[(string) $outcome] = (int) $count;
         }
-        $calls = array_sum($outcomes);
+        // A skipped search made no call: it is counted apart and never lowers ok %.
+        $calls = array_sum($outcomes) - $outcomes['skipped'];
 
         $durations = $this->pdo->prepare(
             'SELECT duration_ms FROM ' . self::T . " WHERE {$where} AND duration_ms IS NOT NULL ORDER BY duration_ms"
@@ -84,6 +87,7 @@ final class VpsCallReport
 
         return [
             'calls' => $calls,
+            'skipped' => $outcomes['skipped'],
             'ok' => $outcomes['ok'],
             'ok_pct' => $calls === 0 ? null : round(100 * $outcomes['ok'] / $calls, 1),
             'outcomes' => $outcomes,

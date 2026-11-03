@@ -141,9 +141,12 @@ final class VpsClient
     /**
      * Nearest products to the query, best first, all scoring >= $minScore.
      *
+     * @param string|null $normalizedQuery the shopper's normalized query when $query is not it (the applied
+     *        "did you mean" text): recorded as normalized_q, with a flag and a hash of what was sent
+     *
      * @return list<array{product_id: int, score: float}>|null null on any failure
      */
-    public function search(string $query, int $limit, float $minScore): ?array
+    public function search(string $query, int $limit, float $minScore, ?string $normalizedQuery = null): ?array
     {
         $this->failure = '';
         $this->call = null;
@@ -164,6 +167,7 @@ final class VpsClient
             $body,
             max(1, $this->timeoutMs),
             'POST',
+            $normalizedQuery ?? $query,
             $query
         );
         if (is_string($response)) {
@@ -191,7 +195,7 @@ final class VpsClient
         }
         usort($results, static fn (array $a, array $b): int =>
             [$b['score'], $a['product_id']] <=> [$a['score'], $b['product_id']]);
-        $this->finish('search', '', $response, count($data['results']));
+        $this->finish('search', '', $response, count($data['results']), $data['took_ms'] ?? null);
 
         return $results;
     }
@@ -230,7 +234,8 @@ final class VpsClient
         string $body,
         int $timeoutMs,
         string $method = 'POST',
-        string $query = ''
+        string $query = '',
+        string $sent = ''
     ): array|string {
         $id = bin2hex(random_bytes(16));
         $headers[] = 'X-Request-Id: ' . $id;
@@ -238,7 +243,7 @@ final class VpsClient
         $started = hrtime(true);
         $response = ($this->transport)(rtrim($this->url, '/') . $path, $headers, $body, $timeoutMs, $method);
         $this->call = [
-            'kind' => $kind, 'id' => $id, 'timeout_ms' => $timeoutMs, 'query' => $query,
+            'kind' => $kind, 'id' => $id, 'timeout_ms' => $timeoutMs, 'query' => $query, 'sent' => $sent,
             'wall_ms' => (int) round((hrtime(true) - $started) / 1e6), 'net' => $this->net,
         ];
 
@@ -251,8 +256,13 @@ final class VpsClient
      * @param array{status: int, body: string}|null $response
      * @return array{ok: bool, outcome: string, status: int, duration_ms: ?int, error: string}
      */
-    private function finish(string $kind, string $reason, ?array $response, ?int $neighbours = null): array
-    {
+    private function finish(
+        string $kind,
+        string $reason,
+        ?array $response,
+        ?int $neighbours = null,
+        mixed $tookMs = null
+    ): array {
         $outcome = self::outcome($reason);
         $call = $this->call ?? [];
         $net = is_array($call['net'] ?? null) ? $call['net'] : [];
@@ -275,7 +285,10 @@ final class VpsClient
                 'outcome' => $outcome,
                 'http_status' => isset($response['status']) ? $response['status'] : null,
                 'duration_ms' => $total,
+                'source' => 'live',
+                'namelookup_ms' => $net['namelookup_ms'] ?? null,
                 'connect_ms' => $net['connect_ms'] ?? null,
+                'appconnect_ms' => $net['appconnect_ms'] ?? null,
                 'ttfb_ms' => $net['ttfb_ms'] ?? null,
                 'timeout_ms' => $call['timeout_ms'] ?? null,
                 'error' => $error,
@@ -285,8 +298,12 @@ final class VpsClient
                 'vps_queue_ms' => $timing['queue'] ?? null,
                 'vps_embed_ms' => $timing['embed'] ?? null,
                 'vps_search_ms' => $timing['search'] ?? null,
+                'vps_took_ms' => (is_int($tookMs) || is_float($tookMs)) && is_finite((float) $tookMs) && $tookMs >= 0
+                    ? (float) $tookMs : null,
                 'vps_inflight' => is_string($inflight) && ctype_digit($inflight) ? (int) $inflight : null,
                 'normalized_q' => $kind === 'search' ? (string) ($call['query'] ?? '') : null,
+                'sent_differs' => $kind === 'search' && ($call['sent'] ?? '') !== ($call['query'] ?? ''),
+                'sent_hash' => $kind === 'search' ? substr(sha1((string) ($call['sent'] ?? '')), 0, 8) : null,
             ]);
         } catch (\Throwable) {
             // Recording is evidence, never a reason to fail a call.
@@ -378,7 +395,8 @@ final class VpsClient
         $ms = static fn (int $info): ?int => ($t = (float) curl_getinfo($handle, $info)) > 0.0
             ? max(1, (int) round($t * 1000)) : null;
         $this->net = [
-            'connect_ms' => $ms(CURLINFO_CONNECT_TIME), 'ttfb_ms' => $ms(CURLINFO_STARTTRANSFER_TIME),
+            'namelookup_ms' => $ms(CURLINFO_NAMELOOKUP_TIME), 'connect_ms' => $ms(CURLINFO_CONNECT_TIME),
+            'appconnect_ms' => $ms(CURLINFO_APPCONNECT_TIME), 'ttfb_ms' => $ms(CURLINFO_STARTTRANSFER_TIME),
             'total_ms' => $ms(CURLINFO_TOTAL_TIME), 'errno' => curl_errno($handle),
         ];
         if ($responseBody === false) {

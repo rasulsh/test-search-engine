@@ -94,6 +94,22 @@ final class VpsCallLogTest extends DatabaseTestCase
         self::assertLessThan(5, $drift, 'ts is UTC');
     }
 
+    public function testTheBodyTookMsIsRecordedAndNonsenseIsNot(): void
+    {
+        $body = static fn (string $took): callable => static fn (): array => [
+            'status' => 200, 'body' => '{"results":[],"took_ms":' . $took . '}',
+        ];
+        foreach (['31.4', '"fast"', '-5', 'null'] as $took) {
+            $this->client($body($took))->search('laptop', 10, 0.4);
+        }
+        $this->client(static fn (): array => ['status' => 200, 'body' => '{"results":[]}'])->search('laptop', 10, 0.4);
+
+        $recorded = array_column($this->rows(), 'vps_took_ms');
+        self::assertSame(31.4, (float) $recorded[0]);
+        self::assertSame([null, null, null, null], array_slice($recorded, 1), 'a string, a negative, null and a missing value');
+        self::assertSame(['live'], array_unique(array_column($this->rows(), 'source')));
+    }
+
     public function testEveryFailureHasItsOutcomeAndTheReasonNeverHoldsTheUrlOrToken(): void
     {
         $cases = [
@@ -265,6 +281,8 @@ final class VpsCallLogTest extends DatabaseTestCase
         $row = $this->only();
         self::assertSame('ok', $row['outcome']);
         self::assertGreaterThan(0, (int) $row['connect_ms']);
+        self::assertNull($row['appconnect_ms'], 'plain http has no TLS phase');
+        self::assertLessThanOrEqual((int) $row['connect_ms'], (int) ($row['namelookup_ms'] ?? 0), 'phases are cumulative');
         self::assertGreaterThanOrEqual((int) $row['connect_ms'], (int) $row['ttfb_ms']);
         self::assertGreaterThanOrEqual((int) $row['ttfb_ms'], (int) $row['duration_ms']);
         self::assertEqualsWithDelta([0.5, 20.0, 4.0, 2], [(float) $row['vps_queue_ms'], (float) $row['vps_embed_ms'], (float) $row['vps_search_ms'], (int) $row['vps_inflight']], 0.001);

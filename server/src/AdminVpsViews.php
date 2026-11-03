@@ -42,6 +42,12 @@ final class AdminVpsViews
         return $value === null || $value === '' ? '-' : AdminViews::num((int) round((float) $value));
     }
 
+    /** 12.50 -> "12.5", 3.00 -> "3". */
+    private static function decimal(mixed $value): string
+    {
+        return rtrim(rtrim(number_format((float) $value, 2, '.', ''), '0'), '.');
+    }
+
     private static function badge(string $outcome): string
     {
         $labels = AdminStrings::fa()['vps']['outcomes'];
@@ -124,11 +130,12 @@ final class AdminVpsViews
                 $s = $summary[$hours][$kind];
                 $body .= '<tr><td>' . self::e($t['windows'][(string) $hours]) . '</td><td>' . self::e($kinds[$kind])
                     . '</td>';
-                if ($s['calls'] === 0) {
-                    $body .= '<td colspan="10">' . self::e($t['empty']) . '</td></tr>';
+                if ($s['calls'] === 0 && $s['skipped'] === 0) {
+                    $body .= '<td colspan="11">' . self::e($t['empty']) . '</td></tr>';
                     continue;
                 }
-                $body .= '<td class="c">' . AdminViews::num($s['calls']) . '</td><td class="c">' . self::e($s['ok_pct'])
+                $body .= '<td class="c">' . AdminViews::num($s['calls'])
+                    . '</td><td class="c">' . self::e($s['ok_pct'] ?? '-')
                     . '</td>';
                 foreach (VpsCallLog::OUTCOMES as $outcome) {
                     if ($outcome !== 'ok' && $outcome !== 'not_configured') {
@@ -341,7 +348,13 @@ final class AdminVpsViews
                     'outcome' => '<td class="c">' . self::badge((string) $value) . '</td>',
                     'error', 'normalized_q' => '<td dir="auto"><span class="trunc" title="' . self::e($value) . '">'
                         . self::e($value) . '</span></td>',
-                    'request_id' => '<td class="c"><bdi class="ltr">' . self::e($value) . '</bdi></td>',
+                    'request_id', 'sent_hash' => '<td class="c"><bdi class="ltr">' . self::e($value) . '</bdi></td>',
+                    'source' => '<td class="c">' . self::e($value) . '</td>',
+                    'sent_differs' => '<td class="c">'
+                        . self::e(AdminStrings::fa()['ui'][$value ? 'yes' : 'no']) . '</td>',
+                    'vps_queue_ms', 'vps_embed_ms', 'vps_search_ms', 'vps_took_ms' => '<td class="c">'
+                        . self::e($value === null ? '-' : self::decimal($value))
+                        . '</td>',
                     default => '<td class="c">'
                         . ($column === 'http_status' ? self::e($value ?? '-') : self::ms($value))
                         . '</td>',

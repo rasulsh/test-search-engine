@@ -137,6 +137,7 @@ final class AdminVpsPanelTest extends TestCase
         $this->call(990, 'timeout', 'search', 601, ['q' => 'macbook']);
         $this->call(960, 'unreachable', 'probe', 5, ['error' => 'unreachable: Failed to connect to [vps] port 1', 'connect' => null]);
         $this->call(100, 'http_error', 'search', 30, ['status' => 503, 'error' => 'http_503']);
+        $this->call(50, 'skipped', 'search', 0, ['error' => 'not_configured']);
         for ($i = 0; $i < 3; $i++) {
             $this->call(900 - $i * 10, 'ok', 'search', 80);
         }
@@ -153,8 +154,8 @@ final class AdminVpsPanelTest extends TestCase
         self::assertStringContainsString('timeout [curl 28]', $body);
         // the burst's baseline: 40 ms before (the 10 newest ok calls), 80 after
         self::assertMatchesRegularExpression('#<td class="c">40</td><td class="c">80</td>#u', $body);
-        // strips: search (ok, timeout, http_error) and probe (unreachable)
-        self::assertSame(4, preg_match_all('#<svg class="strip"#', $body), 'one strip per outcome that occurred, per kind');
+        // strips: search (ok, timeout, http_error, skipped) and probe (unreachable)
+        self::assertSame(5, preg_match_all('#<svg class="strip"#', $body), 'one strip per outcome that occurred, per kind');
         self::assertStringContainsString('class="o-timeout"', $body);
         self::assertStringContainsString('<title>', $body);
     }
@@ -234,7 +235,7 @@ final class AdminVpsPanelTest extends TestCase
         self::assertStringStartsWith('text/csv; charset=utf-8', $failures['headers']['content-type']);
         self::assertStringContainsString('attachment; filename="vps-calls.csv"', $failures['headers']['content-disposition']);
         $lines = array_values(array_filter(explode("\n", $failures['body'])));
-        self::assertSame('id,ts,kind,outcome,http_status,duration_ms,connect_ms,ttfb_ms,timeout_ms,error,response_bytes,neighbours,request_id,vps_queue_ms,vps_embed_ms,vps_search_ms,vps_inflight,normalized_q', $lines[0]);
+        self::assertSame('id,ts,kind,outcome,source,http_status,duration_ms,namelookup_ms,connect_ms,appconnect_ms,ttfb_ms,timeout_ms,error,response_bytes,neighbours,request_id,vps_queue_ms,vps_embed_ms,vps_search_ms,vps_took_ms,vps_inflight,normalized_q,sent_differs,sent_hash', $lines[0]);
         self::assertCount(2, $lines, 'the failures view: the header and the one failure');
         self::assertStringContainsString("\"'=HYPERLINK(\"\"x\"\")\"", $failures['body']);
         self::assertStringContainsString('پلی استیشن', $all['body']);

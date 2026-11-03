@@ -20,7 +20,9 @@ final class VpsCallLog
 {
     public const TABLE = 'vps_calls';
     public const KINDS = ['search', 'reload', 'probe'];
-    public const OUTCOMES = ['ok', 'timeout', 'unreachable', 'http_error', 'bad_body', 'not_configured'];
+    public const OUTCOMES = ['ok', 'timeout', 'unreachable', 'http_error', 'bad_body', 'not_configured', 'skipped'];
+    /** live = a real call; cache / stale are for a later raw-response cache; none = no call was made. */
+    public const SOURCES = ['live', 'cache', 'stale', 'none'];
 
     private const ERROR_LIMIT = 200;
     private const QUERY_LIMIT = 120;
@@ -40,9 +42,12 @@ final class VpsCallLog
      * @param array{
      *     kind: string,
      *     outcome: string,
+     *     source?: string,
      *     http_status?: ?int,
      *     duration_ms?: ?int,
+     *     namelookup_ms?: ?int,
      *     connect_ms?: ?int,
+     *     appconnect_ms?: ?int,
      *     ttfb_ms?: ?int,
      *     timeout_ms?: ?int,
      *     error?: ?string,
@@ -52,8 +57,11 @@ final class VpsCallLog
      *     vps_queue_ms?: ?float,
      *     vps_embed_ms?: ?float,
      *     vps_search_ms?: ?float,
+     *     vps_took_ms?: ?float,
      *     vps_inflight?: ?int,
-     *     normalized_q?: ?string
+     *     normalized_q?: ?string,
+     *     sent_differs?: bool,
+     *     sent_hash?: ?string
      * } $call
      */
     public function record(array $call): void
@@ -70,9 +78,12 @@ final class VpsCallLog
             $row = [
                 'kind' => in_array($call['kind'], self::KINDS, true) ? $call['kind'] : 'search',
                 'outcome' => in_array($call['outcome'], self::OUTCOMES, true) ? $call['outcome'] : 'unreachable',
+                'source' => in_array($call['source'] ?? '', self::SOURCES, true) ? $call['source'] : 'live',
                 'http_status' => $call['http_status'] ?? null,
                 'duration_ms' => $call['duration_ms'] ?? null,
+                'namelookup_ms' => $call['namelookup_ms'] ?? null,
                 'connect_ms' => $call['connect_ms'] ?? null,
+                'appconnect_ms' => $call['appconnect_ms'] ?? null,
                 'ttfb_ms' => $call['ttfb_ms'] ?? null,
                 'timeout_ms' => $call['timeout_ms'] ?? null,
                 'error' => $error === null || $error === '' ? null : mb_substr($error, 0, self::ERROR_LIMIT),
@@ -82,8 +93,11 @@ final class VpsCallLog
                 'vps_queue_ms' => $call['vps_queue_ms'] ?? null,
                 'vps_embed_ms' => $call['vps_embed_ms'] ?? null,
                 'vps_search_ms' => $call['vps_search_ms'] ?? null,
+                'vps_took_ms' => $call['vps_took_ms'] ?? null,
                 'vps_inflight' => $call['vps_inflight'] ?? null,
                 'normalized_q' => $query,
+                'sent_differs' => ($call['sent_differs'] ?? false) ? 1 : 0,
+                'sent_hash' => isset($call['sent_hash']) ? mb_substr((string) $call['sent_hash'], 0, 8) : null,
             ];
             $columns = array_keys($row);
             $stmt = $this->pdo->prepare(
@@ -97,6 +111,18 @@ final class VpsCallLog
         } catch (Throwable $e) {
             error_log('vps_calls: could not record a call (' . get_class($e) . ')');
         }
+    }
+
+    /**
+     * A search whose semantic tier was not called by design (`reason`: not_configured, disabled, empty_query):
+     * one row, so "skipped" is told apart from "failed". Same fail-soft rules as record().
+     */
+    public function skipped(string $reason, string $normalizedQuery): void
+    {
+        $this->record([
+            'kind' => 'search', 'outcome' => 'skipped', 'source' => 'none', 'error' => $reason,
+            'normalized_q' => $normalizedQuery,
+        ]);
     }
 
     /** Deletes up to a batch of rows older than the retention; returns how many went. */

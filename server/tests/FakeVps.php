@@ -53,7 +53,9 @@ final class FakeVps
             [$b['score'], $a['product_id']] <=> [$a['score'], $b['product_id']]);
         $results = array_slice($results, 0, (int) ($request['limit'] ?? 100));
 
-        return ['status' => 200, 'body' => (string) json_encode(['results' => $results, 'model' => 'fake'])];
+        $body = ['results' => $results, 'model' => 'fake', 'took_ms' => 12.5];
+
+        return ['status' => 200, 'body' => (string) json_encode($body)];
     }
 
     /**

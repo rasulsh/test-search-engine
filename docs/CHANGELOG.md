@@ -17,7 +17,7 @@ line can be deleted. `php server/tools/config-check.php` lists all of it.
 - **Behaviour**: every PHP -> VPS call (a `/search` cache miss, the panel's "load vectors", a probe) is recorded in the
   new `vps_calls` table with its outcome and timings; `?p=vps` shows summary, hourly strips, incidents and the call list
   ([ADMIN.md](ADMIN.md#vps-page)). `tools/vps-probe.php` is the once-a-minute probe for cron. `/search` results, ranking and
-  cache keys are unchanged; the existing `error_log` line is unchanged. The VPS service gains request-id echo,
+  cache keys are unchanged; the existing `error_log` line is unchanged. Searches that skip the semantic tier by design are recorded as `skipped` (with a reason), the VPS's `took_ms` and the curl DNS / connect / TLS / first-byte phases are stored, and a flag says when what was sent differs from the normalized query. The VPS service gains request-id echo,
   `Server-Timing`, `X-Vps-Inflight` headers and one journal line per request (old and new sides work with each other).
 - **After deploying**: see [DEPLOY.md](DEPLOY.md#upgrading-to-the-vps-call-log): apply `db/migrations/2026-11-03_vps_calls.sql`,
   upload the listed `server/` files, add the cron line; copy `vps/search_vectors/app.py` to the VPS and restart it.

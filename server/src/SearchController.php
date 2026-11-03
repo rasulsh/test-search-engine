@@ -125,6 +125,14 @@ final class SearchController
         $this->entities = $entities;
     }
 
+    /** Every PHP -> VPS call of a recording controller lands in vps_calls (the VPS page). */
+    private static function withCallLog(?VpsClient $client, PDO $pdo, array $config, bool $record): ?VpsClient
+    {
+        return $client !== null && $record
+            ? $client->recordTo(new VpsCallLog($pdo, (int) $config['vps']['log_retention_days']))
+            : $client;
+    }
+
     /**
      * The production wiring shared by POST /search and the eval harness, so the
      * harness measures exactly the knobs /search serves. $config is a loaded
@@ -216,7 +224,7 @@ final class SearchController
             $spellerFactory,
             null,
             10,
-            $vps ?? VpsClient::fromConfig($config['vps']),
+            self::withCallLog($vps ?? VpsClient::fromConfig($config['vps']), $pdo, $config, $record),
             new Ranker(
                 (float) $search['stock_boost'],
                 (float) $search['popularity_boost'],

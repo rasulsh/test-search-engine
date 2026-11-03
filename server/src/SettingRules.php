@@ -99,6 +99,7 @@ final class SettingRules
             'vps.url'                         => ['format' => 'url'],
             'vps.timeout_ms'                  => $count(50, 10000, 'ms'),           // installer's limits
             'vps.reload_timeout_ms'           => $count(1000, 600000, 'ms'),
+            'vps.log_retention_days'          => $count(1, 365, 'days'),
 
             'redis.enabled'                   => [],
             'redis.host'                      => ['format' => 'host'],

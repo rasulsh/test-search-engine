@@ -29,7 +29,7 @@ def dev_tree(tmp_path: Path) -> Path:
                 "public/client/model/stale.onnx", "data/vectors.bin",
                 "data_incoming/old.txt", "tests/KeywordTest.php", "tools/eval.php",
                 "tools/config-check.php", "tools/logs-export.php", "tools/admin-password.php",
-                "tools/_php-guard.php", "public/.htaccess",
+                "tools/vps-probe.php", "tools/_php-guard.php", "public/.htaccess",
                 "public/app_base.php",
                 ".htaccess", "data/.htaccess", "data_incoming/.htaccess", "storage/.htaccess",
                 "storage/aliases.json", "storage/backups/aliases-20260101-000000-000000.json"):
@@ -69,10 +69,11 @@ def test_release_packs_bundle_under_data_incoming_and_the_server_code(
     assert [n for n in names if n.startswith("storage/")] == ["storage/.htaccess"]
     assert not any(n.startswith("tests/") for n in names)
     # The tools shipped (run on the host after unzipping): the config doctor, the log
-    # export (M36) and the admin password hash maker (M39); never the dev-only tools/eval.php.
+    # export (M36), the admin password hash maker (M39) and the VPS probe (cron); never the
+    # dev-only tools/eval.php.
     assert [n for n in names if n.startswith("tools/")] == [
         "tools/_php-guard.php", "tools/admin-password.php", "tools/config-check.php",
-        "tools/logs-export.php"]
+        "tools/logs-export.php", "tools/vps-probe.php"]
     assert "data_incoming/old.txt" not in names
     # M30 layout: unzipped into server/, public/ stays a child of it, with the deny-all nets.
     assert {".htaccess", "data/.htaccess", "data_incoming/.htaccess", "storage/.htaccess",
@@ -231,7 +232,8 @@ def test_one_command_builds_the_zip_and_the_vps_vectors(tmp_path: Path, dev_tree
     vps_meta = json.loads((vps / "meta.json").read_text(encoding="utf-8"))
     with zipfile.ZipFile(tmp_path / "out" / "release.zip") as archive:
         meta = json.loads(archive.read("data_incoming/meta.json"))
-        assert not any("vps" in n for n in archive.namelist())
+        # (tools/vps-probe.php is code, not vectors)
+        assert not any("vps_vectors" in n or n.startswith("vps/") for n in archive.namelist())
         assert not any(n.startswith("data_incoming/vectors.") for n in archive.namelist())
     assert vps_meta["count"] == meta["count"] == 6
 

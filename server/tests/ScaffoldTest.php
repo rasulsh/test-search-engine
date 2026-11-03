@@ -114,7 +114,8 @@ final class ScaffoldTest extends TestCase
     public function testVpsIsConfigDrivenAndOffByDefault(): void
     {
         $this->assertSame(
-            ['url' => '', 'token' => '', 'timeout_ms' => 600, 'reload_timeout_ms' => 60000],
+            ['url' => '', 'token' => '', 'timeout_ms' => 600, 'reload_timeout_ms' => 60000,
+                'log_retention_days' => 30],
             $this->loadExampleConfig()['vps']
         );
 
@@ -129,7 +130,7 @@ final class ScaffoldTest extends TestCase
 
         $this->assertSame(
             ['url' => 'https://vps.example.com:8600', 'token' => 'secret-from-env-0123', 'timeout_ms' => 600,
-                'reload_timeout_ms' => 60000],
+                'reload_timeout_ms' => 60000, 'log_retention_days' => 30],
             $vps
         );
     }

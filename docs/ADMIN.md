@@ -68,6 +68,7 @@ plain cPanel hosting (no proxy in front), leave it empty.
 | `synonyms` | Read-only `synonyms.json`; "which groups hold term X" across alias and synonym groups with the merged result; "copy to aliases". Hand edits of `synonyms.json` are lost on the next build; to drop a bad generated group, put a term of it in `search.synonym_blocklist` in `config.php` (owner aliases are never filtered). |
 | `tester` | A search without a log row and without the result cache: tier, did-you-mean, the top 10 titles (or 50, link under the table) with match type. Ranked at the storefront's depth (`GoldenEval::STOREFRONT_DEPTH`, 300) and cut afterwards, so the order is the one shoppers see ([EVALUATION.md](EVALUATION.md#depth-vs-k)). |
 | `analytics` | The M35/M38 dashboard. It counts a row as a search only when it is not a repeat submit, is page 1, is not a `source = 'filter'` reload and not part of a burst; the tile "requests logged / counted as searches" shows how many rows were left out (the logs page still lists them all). `?p=analytics&format=json` is the same JSON as before (byte-identical, covered by `AnalyticsJsonCompatTest`), now needing a session: 401 `{"error":"unauthorized"}` without one. |
+| `vps` | The VPS page ([below](#vps-page)): every PHP -> VPS call with its outcome and timings. |
 | `logs` | Recent / zero-result / slowest `search_logs` rows, paginated. |
 | `audit` | The audit trail. |
 | `help` | The full guide. Every page also has a collapsible help box: what it is for, how to use it, the effect on live search, when a change takes effect and the risks. |
@@ -124,6 +125,43 @@ and releases the session lock before it starts; it runs to the end if the browse
 elapsed seconds while it waits. The result is stored in the audit row (`{"ok":true,"count":24000,"s":12.3}`) and shown
 after the redirect, so a closed tab loses nothing. `server/` must be writable by the web user (the lock file, the
 directory swaps).
+
+## VPS page
+
+`?p=vps` is the evidence for "why did the semantic tier time out". `VpsClient` writes one `vps_calls` row per call to the
+VPS: a `/search` cache miss (`kind = search`), the operations page's "load the uploaded vectors" (`reload`) and a probe
+(`probe`, `tools/vps-probe.php` from cron or the button on this page). Only cache misses reach the VPS, so this is about
+600 rows a day plus 1,440 probes. Times are **UTC**. The row holds no shopper identity: `normalized_q` only (cut at 120
+characters, long pastes and phone-like numbers masked like `search_logs`), never a `customer_id` or session, never the VPS
+URL or token. Rows older than `vps.log_retention_days` (30) are purged, a bounded batch on about one write in 50.
+
+| Outcome | Meaning |
+| --- | --- |
+| `ok` | a complete, valid answer within the limit |
+| `timeout` | no complete answer within `timeout_ms`, **connect included**. `connect_ms` empty = the connection never completed (VPS or path); `connect_ms` set and `ttfb_ms` empty = connected but the VPS did not answer in time (slow / overloaded) |
+| `unreachable` | connect, DNS or TLS error before any answer (VPS down, port closed, route cut) |
+| `http_error` | the VPS answered with a status other than 200 (401 wrong token, 503 no vectors loaded) |
+| `bad_body` | status 200 but the body was not the expected JSON |
+| `not_configured` | `vps.url` is empty (only a probe records it) |
+
+Columns: `duration_ms`, `connect_ms` and `ttfb_ms` come from curl (`CONNECT_TIME`, `STARTTRANSFER_TIME`, `TOTAL_TIME`);
+`timeout_ms` is the limit that call had; `request_id` is the id cPanel sent as `X-Request-Id` and the VPS prints in its
+journal line (`journalctl -u search-vectors | grep id=<request_id>`); `vps_queue_ms`, `vps_embed_ms`, `vps_search_ms`
+and `vps_inflight` come from the VPS's `Server-Timing` / `X-Vps-Inflight` headers and stay empty against an older VPS.
+
+The page: **summary** for 24 h and 7 days, for searches and for probes separately (calls, ok %, a column per failure
+outcome, median / p95 / max duration, and near-timeouts: ok calls slower than 80 % of their `timeout_ms`); **hourly strips**,
+one per outcome that occurred, 168 bars of inline SVG with a hover title per bar; **incidents**: failures within 60 s of
+each other are one incident (start, end, length, count, outcomes, kinds) with the median duration of the 10 ok searches
+before and after it; and the **call list** (latest failures / slowest ok calls / all) filtered by outcome, kind and date
+range, 25 to 200 per page, with a CSV export of the same filter (UTF-8, the table's columns only, cells starting with `=`
+`+` `-` `@` are quoted so a spreadsheet never runs them).
+
+Reading it: the probe (every minute) is the control. VPS or network down: probes fail at the same time as the searches.
+VPS slow under load: probes stay fast and ok while searches time out, with `connect_ms` set and a high `vps_inflight` /
+`vps_embed_ms` in the near-timeouts before. **Probe now** (POST, CSRF, an audit row `vps_probe`) makes the same call on
+demand. Without the migration the page says which file to apply and `/search` is unaffected (a failed insert is one
+`error_log` line, `vps_calls: could not record a call`).
 
 ## Effective configuration and upgrades (M40)
 
@@ -270,6 +308,8 @@ start with the same card size.
 | `src/AdminViews.php` | page bodies |
 | `src/AdminSettings.php`, `AdminSettingsViews.php` | the settings page: actions (check / save / restore / apply one key, audit) and HTML (M46) |
 | `src/SettingsValidator.php`, `SettingRules.php`, `SettingsStore.php` | per-key rules and conflicts, the rule table, the versioned atomic file with backups (M46) |
+| `src/VpsCallLog.php`, `VpsCallReport.php` | the `vps_calls` writer (never throws, purges) and the page's read-only queries and CSV rows |
+| `src/AdminVps.php`, `AdminVpsViews.php` | "Probe now" and the VPS page's HTML (inline SVG strips, no script) |
 | `src/AdminStrings.php` | **every Persian string and help text**; edit wording here only |
 
 Theme: follows the system until the toggle is used; the choice is stored in `localStorage` (`admin-theme`, guarded

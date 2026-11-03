@@ -92,7 +92,8 @@ final class AdminOpsTest extends DatabaseTestCase
         $result = $this->ops(null, $this->vps(['status' => 200, 'body' => $body], $seen))->vpsReload();
 
         self::assertSame('http://vps.test/reload', $seen['url']);
-        self::assertSame(['Authorization: Bearer vps-token'], $seen['headers']);
+        self::assertSame('Authorization: Bearer vps-token', $seen['headers'][0]);
+        self::assertMatchesRegularExpression('/^X-Request-Id: [0-9a-f]{32}$/', $seen['headers'][1]);
         self::assertSame(45000, $seen['timeout'], 'its own reload timeout, not the 300 ms search budget');
         self::assertTrue($result['ok']);
         self::assertSame(24000, $result['count']);

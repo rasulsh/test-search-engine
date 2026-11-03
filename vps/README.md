@@ -59,6 +59,28 @@ curl -s https://vsearch.example.com/search-vectors \
 # {"results":[{"product_id":2002,"score":0.71},...],"model":"BAAI/bge-m3","took_ms":31.4}
 ```
 
+### Observability headers and the journal line
+
+Added for the cPanel call log (`docs/ADMIN.md`, VPS page). Callers that ignore them are unaffected, and an older service
+simply does not send them (the cPanel page then leaves those columns empty).
+
+| Header | Direction | Meaning |
+|---|---|---|
+| `X-Request-Id` | request, echoed in the response | the caller's id (1-64 of `A-Za-z0-9._-`), else a generated one |
+| `Server-Timing` | response, `/search-vectors` only | `queue;dur=..., embed;dur=..., search;dur=...` in ms: from arrival to the handler starting (body parse + wait for a worker thread), the query embedding, the cosine top-K |
+| `X-Vps-Inflight` | response, every route | requests in flight when this one arrived (itself included) |
+
+Every request writes **one** journal line (`journalctl -u search-vectors`), never the query text:
+
+```
+INFO search_vectors: req id=3f2a... route=/search-vectors method=POST status=200 total_ms=48.12 queue_ms=0.9 embed_ms=40.3 search_ms=4.8 inflight=2 rss_mb=1210.5 load1=0.42
+INFO search_vectors: event=model_loaded ts=2026-11-03T09:00:04.512+00:00 ms=3120.45
+```
+
+`route` is `/health`, `/search-vectors`, `/reload` or `other`; `-` = not measured (for example `queue_ms` on a 401).
+Lifecycle lines `event=startup`, `model_loaded`, `vectors_loaded` (count, built_at), `vectors_reload` (ok, reason, count)
+and `shutdown` carry their own UTC `ts=`. uvicorn's own access log is unchanged, so each request also appears there.
+
 ## Setup (fresh Debian 12 / Ubuntu 22.04+ VPS)
 
 Needs Python 3.11+, ~1.1 GB RAM for the int8 model (fp32: ~1.5 GB) plus ~2×
@@ -225,6 +247,21 @@ curl -s -X POST .../reload -H "Authorization: Bearer $VPS_TOKEN"
 On start the service serves `active/` (or `previous/` if a swap was interrupted
 between its two renames). Without valid vectors it still starts: `/health` and
 `/search-vectors` answer `503`, and cPanel keeps serving keyword results.
+
+## Upgrading for the call log
+
+Only `search_vectors/app.py` changed (no new dependency, no config key, no vectors, no `.env` edit). Re-running
+`setup.sh` from a fresh checkout also does it; the minimal way, on the VPS (the code lives in `/opt/search-vectors/app`):
+
+```bash
+sudo cp search_vectors/app.py /opt/search-vectors/app/search_vectors/app.py
+sudo systemctl restart search-vectors
+journalctl -u search-vectors -n 20 --no-pager                # event=startup, model_loaded, vectors_loaded
+curl -si https://vsearch.example.com/health | grep -i "x-request-id\|x-vps-inflight"
+```
+
+The restart reloads the model and the vectors (seconds), and searches during it fall back to keyword-only on cPanel, so
+do it at a quiet hour. Rollback is the reverse copy and a restart; the cPanel side keeps working either way.
 
 ## Model parity (contract 2)
 

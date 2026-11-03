@@ -82,7 +82,7 @@ with the checks in the [go-live checklist](#production-go-live-checklist).
 
 ### Command-line tools
 
-`server/tools/` holds `config-check.php` (the config doctor), `logs-export.php` and `admin-password.php`. Run them
+`server/tools/` holds `config-check.php` (the config doctor), `logs-export.php`, `admin-password.php` and `vps-probe.php` (the VPS probe, below). Run them
 **as the account user, not as root**, with the **PHP 8.1+ binary the site uses**:
 
 ```bash
@@ -228,6 +228,32 @@ deny-all `.htaccess` ships. Upgrading from M40, in full:
 4. Open the panel's aliases page once: it seeds `storage/aliases.json` from the live bundle's `aliases.json`, so the
    search keeps serving exactly the aliases it served before. From then on edit aliases in the panel only; editing
    `pipeline/aliases.json` no longer changes the live search.
+
+<a id="upgrading-to-the-vps-call-log"></a>**Upgrading to the VPS call log (`vps_calls`, the panel's VPS page).** No bundle rebuild, no
+reload, no `.htaccess` change. The service keeps working if any step is late: each side degrades to "no new data".
+
+1. **cPanel, files**: copy these over the live ones (or unzip the new `release.zip`, which carries all of them):
+   new `src/VpsCallLog.php`, `src/VpsCallReport.php`, `src/AdminVps.php`, `src/AdminVpsViews.php`, `tools/vps-probe.php`,
+   `db/migrations/2026-11-03_vps_calls.sql` (+ `.down.sql`); changed `src/VpsClient.php`, `src/SearchController.php`,
+   `src/AdminOps.php`, `src/Audit.php`, `src/Config.php`, `src/SettingRules.php`, `src/AdminStrings.php`, `public/admin.php`
+   and `db/schema.sql` (new installs).
+2. **Migration** (idempotent, MariaDB 10.4+; the app does not create this table itself):
+   `mysql search_db < db/migrations/2026-11-03_vps_calls.sql`. Rollback (drops the history):
+   `mysql search_db < db/migrations/2026-11-03_vps_calls.down.sql`. Until it is applied `/search` is unaffected (one
+   `error_log` line per call) and `?p=vps` names the file to apply.
+3. **Cron, every minute** (cPanel -> Cron Jobs; the account's PHP 8.1+ binary, see [Command-line tools](#command-line-tools)):
+
+   ```
+   * * * * * /opt/cpanel/ea-php82/root/usr/bin/php $HOME/search-service/server/tools/vps-probe.php --quiet >/dev/null 2>&1
+   ```
+
+   One `GET {vps.url}/health` per minute, bounded by `vps.timeout_ms`, recorded as `kind = probe` (about 1,440 rows a day,
+   30 days kept by default). It is what separates "VPS or network down" from "VPS slow under search load". Run it once
+   by hand without `--quiet` to see `ok http=200 ms=12`; exit status 1 means the VPS did not answer healthy.
+4. **VPS** (optional but wanted for the queue / embed / search columns): copy `vps/search_vectors/app.py` and restart,
+   see [vps/README.md](../vps/README.md#upgrading-for-the-call-log). An old VPS keeps working; the page just leaves those
+   columns empty.
+5. Optional: `vps.log_retention_days` (default 30) on the settings page.
 
 **Upgrading to M46 (settings page).** Copy `src/`, `tools/` and `public/` over the live ones. `server/storage/` must be
 writable by the PHP user (it already is if the alias manager works); the page then writes `storage/settings.json` and

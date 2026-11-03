@@ -135,6 +135,7 @@ The cPanel bundle carries no vectors and no model since M42 (the semantic tier's
 | --- | --- | --- |
 | `vps.url` | empty | base URL (the client appends `/search-vectors`); empty = keyword-only |
 | `vps.token` | empty | the VPS's `VPS_TOKEN` (secret) |
+| `vps.log_retention_days` | 30 | days the `vps_calls` rows (one per PHP -> VPS call, shown on the panel's VPS page) are kept; older rows are deleted in small batches on a small share of the writes. Range 1 to 365 |
 | `vps.reload_timeout_ms` | 60000 | timeout of the admin panel's "load the uploaded vectors" call (`POST {vps.url}/reload`), which loads and checks a whole catalog |
 | `vps.timeout_ms` | 600 | whole-call budget (M43; was 300, which left too little for a loaded VPS; 600 leaves room for the keyword stage and the database inside the 800 ms target), connect included. A slow or unreachable VPS means keyword-only results for that request, never an error. The default is sized for an external VPS; on the final LAN VM it is a safety net, keep it sane |
 

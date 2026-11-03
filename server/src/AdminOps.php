@@ -80,7 +80,8 @@ final class AdminOps
             if ($client === null) {
                 return ['ok' => false, 'reason' => 'vps_off'];
             }
-            $answer = $client->reload();
+            $answer = $client->recordTo(new VpsCallLog($this->pdo, (int) $this->config['vps']['log_retention_days']))
+                ->reload();
 
             return [
                 'ok' => $answer['ok'],

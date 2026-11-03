@@ -19,6 +19,7 @@ $authorization = (string) ($_SERVER['HTTP_AUTHORIZATION'] ?? '');
 file_put_contents($scenarioPath . '.last', (string) json_encode([
     'path' => parse_url((string) $_SERVER['REQUEST_URI'], PHP_URL_PATH),
     'authorization' => $authorization,
+    'request_id' => $_SERVER['HTTP_X_REQUEST_ID'] ?? null,
     'body' => json_decode($body, true),
 ]));
 
@@ -36,4 +37,14 @@ if ($path === '/search-vectors' && $_SERVER['REQUEST_METHOD'] === 'POST') {
 
 http_response_code($response['status']);
 header('Content-Type: application/json');
+// What the real VPS adds (vps/search_vectors/app.py): the echoed request id, Server-Timing, inflight.
+if (isset($_SERVER['HTTP_X_REQUEST_ID'])) {
+    header('X-Request-Id: ' . $_SERVER['HTTP_X_REQUEST_ID']);
+}
+if (isset($scenario['server_timing'])) {
+    header('Server-Timing: ' . $scenario['server_timing']);
+}
+if (isset($scenario['inflight'])) {
+    header('X-Vps-Inflight: ' . $scenario['inflight']);
+}
 echo $response['body'];

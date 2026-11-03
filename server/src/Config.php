@@ -500,6 +500,8 @@ final class Config
             'vps.timeout_ms' => ['int', 600],
             // POST {vps.url}/reload (the admin panel's "reload vectors"): loading a catalog takes seconds.
             'vps.reload_timeout_ms' => ['int', 60000],
+            // Days the vps_calls rows (one per PHP -> VPS call, the VPS page's evidence) are kept.
+            'vps.log_retention_days' => ['int', 30],
 
             'redis.enabled'    => ['bool', false],
             'redis.host'       => ['string', '127.0.0.1'],

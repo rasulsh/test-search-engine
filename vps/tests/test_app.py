@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import logging
+import re
 import threading
 
 import numpy as np
@@ -199,3 +201,109 @@ def test_config_refuses_missing_or_short_token(tmp_path) -> None:
 def test_config_rejects_invalid_values(tmp_path, key, value) -> None:
     with pytest.raises(ValueError):
         make_settings(tmp_path, **{key: value})
+
+
+# --- observability: request id, Server-Timing, inflight, one log line per request ---
+
+def _req_lines(caplog: pytest.LogCaptureFixture) -> list[str]:
+    return [r.getMessage() for r in caplog.records if r.getMessage().startswith("req ")]
+
+
+def _field(line: str, name: str) -> str:
+    return dict(pair.split("=", 1) for pair in line.split()[1:])[name]
+
+
+def test_request_id_is_echoed_or_generated(served) -> None:
+    echoed = served.post("/search-vectors", json={"q": "laptop"},
+                         headers={**AUTH, "X-Request-Id": "abc-123_X.y"})
+    assert echoed.headers["x-request-id"] == "abc-123_X.y"
+    # Unusable ids (spaces, control characters, too long) are replaced, never echoed.
+    for bad in ("", "has space", "a\tb", "x" * 65, "ключ"):
+        got = served.get("/health", headers={"X-Request-Id": bad} if bad.isascii() else {})
+        assert re.fullmatch(r"[0-9a-f]{32}", got.headers["x-request-id"]), bad
+
+
+def test_server_timing_and_inflight_headers_on_search(served) -> None:
+    response = served.post("/search-vectors", json={"q": "laptop"}, headers=AUTH)
+    timing = response.headers["server-timing"]
+    assert re.fullmatch(r"queue;dur=\d+\.\d\d, embed;dur=\d+\.\d\d, search;dur=\d+\.\d\d", timing)
+    assert response.headers["x-vps-inflight"] == "1"
+    # Not on routes that do no embedding, nor on a request that never reached the handler.
+    assert "server-timing" not in served.get("/health").headers
+    assert "server-timing" not in served.post("/search-vectors", json={}, headers=AUTH).headers
+    assert "server-timing" not in served.post("/search-vectors", json={"q": "x"}).headers
+
+
+def test_old_callers_are_unaffected(served) -> None:
+    """No request id, no new headers needed: the body is exactly what it was."""
+    body = served.post("/search-vectors", json={"q": "laptop"}, headers=AUTH).json()
+    assert set(body) == {"results", "model", "took_ms"}
+
+
+def test_one_structured_log_line_per_request_without_the_query(served, caplog) -> None:
+    caplog.set_level(logging.INFO, logger="search_vectors")
+    served.post("/search-vectors", json={"q": "secret shopper words"},
+                headers={**AUTH, "X-Request-Id": "req-1"})
+    served.get("/health", headers={"X-Request-Id": "req-2"})
+    served.post("/search-vectors", json={"q": "x"}, headers={"X-Request-Id": "req-3"})  # 401
+
+    lines = _req_lines(caplog)
+    assert len(lines) == 3
+    search, health, denied = lines
+    assert _field(search, "id") == "req-1" and _field(search, "route") == "/search-vectors"
+    assert _field(search, "status") == "200" and _field(search, "inflight") == "1"
+    for name in ("total_ms", "queue_ms", "embed_ms", "search_ms", "rss_mb", "load1"):
+        assert name in dict(p.split("=", 1) for p in search.split()[1:])
+    assert float(_field(search, "total_ms")) >= float(_field(search, "embed_ms"))
+    assert _field(health, "route") == "/health" and _field(health, "embed_ms") == "-"
+    assert _field(denied, "status") == "401" and _field(denied, "queue_ms") == "-"
+    assert all("secret shopper words" not in r.getMessage() for r in caplog.records)
+
+
+def test_unknown_paths_are_logged_as_other(served, caplog) -> None:
+    caplog.set_level(logging.INFO, logger="search_vectors")
+    served.get("/wp-login.php?x=1")
+    assert _field(_req_lines(caplog)[0], "route") == "other"
+    assert _field(_req_lines(caplog)[0], "status") == "404"
+
+
+def test_lifecycle_events_are_logged_with_timestamps(settings, caplog) -> None:
+    caplog.set_level(logging.INFO, logger="search_vectors")
+    write_vectors(settings.vectors_dir, settings, list(TEXTS), vectors_for(TEXTS))
+    with TestClient(create_app(settings)) as client:
+        new = {201: "lg oled tv"}
+        write_vectors(settings.incoming_dir, settings, list(new), vectors_for(new))
+        assert client.post("/reload", headers=AUTH).status_code == 200
+        assert client.post("/reload", headers=AUTH).status_code == 422  # nothing left to load
+
+    events = [r.getMessage() for r in caplog.records if r.getMessage().startswith("event=")]
+    names = [e.split()[0] for e in events]
+    assert names == ["event=startup", "event=model_loaded", "event=vectors_loaded",
+                     "event=vectors_reload", "event=vectors_reload", "event=shutdown"]
+    assert all(re.search(r" ts=\d{4}-\d\d-\d\dT[\d:.]+\+00:00", e) for e in events)
+    assert "count=3" in events[2] and "ok=True" in events[3] and "count=1" in events[3]
+    assert "ok=False" in events[4] and "reason=rejected" in events[4]
+
+
+def test_inflight_counts_concurrent_requests(served, monkeypatch: pytest.MonkeyPatch) -> None:
+    started, release = threading.Event(), threading.Event()
+    from search_vectors import app as app_module
+
+    real_top_k = app_module.top_k
+
+    def slow_top_k(*args, **kwargs):
+        started.set()
+        release.wait(5)
+        return real_top_k(*args, **kwargs)
+
+    monkeypatch.setattr(app_module, "top_k", slow_top_k)
+    first: dict = {}
+    worker = threading.Thread(target=lambda: first.update(r=served.post(
+        "/search-vectors", json={"q": "laptop"}, headers=AUTH)))
+    worker.start()
+    assert started.wait(5)
+    second = served.get("/health")
+    release.set()
+    worker.join(5)
+    assert second.headers["x-vps-inflight"] == "2"
+    assert first["r"].headers["x-vps-inflight"] == "1"

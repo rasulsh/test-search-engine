@@ -21,6 +21,8 @@ use App\AdminSettingsViews;
 use App\AdminStatus;
 use App\AdminStrings;
 use App\AdminViews;
+use App\AdminVps;
+use App\AdminVpsViews;
 use App\Analytics;
 use App\AnalyticsPage;
 use App\Audit;
@@ -34,6 +36,7 @@ use App\ProductDetails;
 use App\Reload;
 use App\SearchController;
 use App\Synonyms;
+use App\VpsCallReport;
 
 /** @var array<string, mixed> $config */
 if (!isset($config)) {
@@ -97,7 +100,9 @@ try {
     $auth = new AdminAuth($admin, $audit);
     $auth->start($mount);
 
-    $pages = ['status', 'ops', 'settings', 'aliases', 'synonyms', 'tester', 'analytics', 'logs', 'audit', 'help'];
+    $pages = [
+        'status', 'ops', 'settings', 'aliases', 'synonyms', 'tester', 'analytics', 'vps', 'logs', 'audit', 'help',
+    ];
     $page = (string) ($_GET['p'] ?? 'status');
     $json = $page === 'analytics' && ($_GET['format'] ?? '') === 'json';
     $state = $auth->check(time(), $json);
@@ -167,7 +172,7 @@ try {
         $redirect('p=status');
         return;
     }
-    $writable = ['ops', 'aliases', 'settings'];
+    $writable = ['ops', 'aliases', 'settings', 'vps'];
     if (!in_array($page, $pages, true) || ($method !== 'GET' && !in_array($page, $writable, true))) {
         $unknown = !in_array($page, $pages, true);
         $refuse($unknown ? 404 : 405, $fa['errors'][$unknown ? 'not_found' : 'method']);
@@ -209,6 +214,16 @@ try {
             'raw_text' => $mode === 'raw' ? (string) ($_POST['json'] ?? '') : null,
             'list' => $listState,
         ];
+    } elseif ($method === 'POST' && $page === 'vps') {
+        // "Probe now": one GET /health, recorded in vps_calls and in the audit trail.
+        if (($_POST['action'] ?? '') !== 'vps_probe') {
+            $refuse(400, $fa['errors']['method']);
+            return;
+        }
+        session_write_close();
+        $probe = (new AdminVps($config, $pdo, $audit, $ip))->probe();
+        $redirect(http_build_query(['p' => 'vps', 'probed' => $probe['outcome'], 'ms' => $probe['duration_ms']]));
+        return;
     } elseif ($method === 'POST' && $page === 'settings') {
         $layers ??= Config::layers(Config::file());
         $settingsOps = new AdminSettings($config, $layers['file'], $audit, $ip);
@@ -392,6 +407,41 @@ try {
                 }
             }
             $body = AdminAliasViews::tester($view);
+            break;
+        case 'vps':
+            $calls = new VpsCallReport($pdo);
+            $filters = VpsCallReport::filters($_GET);
+            $vpsView = ['available' => $calls->available(), 'csrf' => $csrf];
+            if (($_GET['export'] ?? '') === 'csv' && $vpsView['available']) {
+                header('Content-Type: text/csv; charset=utf-8');
+                header('Content-Disposition: attachment; filename="vps-calls.csv"');
+                $out = fopen('php://output', 'wb');
+                fputcsv($out, VpsCallReport::COLUMNS, ',', '"', '', "\n");
+                foreach ($calls->export($filters) as $row) {
+                    fputcsv($out, array_map([VpsCallReport::class, 'csvCell'], $row), ',', '"', '', "\n");
+                }
+                return;
+            }
+            if ($vpsView['available']) {
+                $per = Paging::size($_GET['per'] ?? null, 50);
+                $probed = (string) ($_GET['probed'] ?? '');
+                $vpsView += [
+                    'probed' => in_array($probed, App\VpsCallLog::OUTCOMES, true) ? $probed : '',
+                    'probed_ms' => ctype_digit((string) ($_GET['ms'] ?? '')) ? (int) $_GET['ms'] : null,
+                    'summary' => [], 'hourly' => [], 'filters' => $filters, 'default_per' => 50,
+                    'sizes' => Paging::sizes(50),
+                    'incidents' => $calls->incidents(7),
+                    'list' => $calls->rows($filters, (int) ($_GET['page'] ?? 1), $per),
+                ];
+                foreach (['search', 'probe'] as $kind) {
+                    $vpsView['hourly'][$kind] = $calls->hourly(7, $kind);
+                    foreach ([24, 168] as $hours) {
+                        $vpsView['summary'][$hours][$kind] = $calls->summary($hours, $kind);
+                    }
+                }
+            }
+            $body = AdminVpsViews::page($vpsView);
+            $css = AdminVpsViews::css();
             break;
         case 'audit':
             $body = AdminViews::audit($audit->recent((int) ($_GET['page'] ?? 1)));

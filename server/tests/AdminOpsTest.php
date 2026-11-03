@@ -92,12 +92,33 @@ final class AdminOpsTest extends DatabaseTestCase
         $result = $this->ops(null, $this->vps(['status' => 200, 'body' => $body], $seen))->vpsReload();
 
         self::assertSame('http://vps.test/reload', $seen['url']);
-        self::assertSame(['Authorization: Bearer vps-token'], $seen['headers']);
+        self::assertSame('Authorization: Bearer vps-token', $seen['headers'][0]);
+        self::assertMatchesRegularExpression('/^X-Request-Id: [0-9a-f]{32}$/', $seen['headers'][1]);
         self::assertSame(45000, $seen['timeout'], 'its own reload timeout, not the 300 ms search budget');
         self::assertTrue($result['ok']);
         self::assertSame(24000, $result['count']);
         self::assertSame(24000, $this->lastDetail('vps_reload')['count']);
         self::assertStringNotContainsString('vps-token', (string) json_encode($this->lastDetail('vps_reload')));
+        $row = $this->pdo->query('SELECT * FROM vps_calls')->fetch();
+        self::assertSame(['reload', 'ok', 200, 45000], [$row['kind'], $row['outcome'], (int) $row['http_status'], (int) $row['timeout_ms']]);
+        self::assertNotNull($row['duration_ms']);
+        self::assertNull($row['normalized_q']);
+    }
+
+    public function testAFailedVpsReloadIsRecordedWithItsOutcome(): void
+    {
+        $this->ops(null, $this->vps(['status' => 422, 'body' => '{"ok":false,"error":"model mismatch"}'], $seen))->vpsReload();
+        $this->ops(null, new VpsClient('http://vps.test', 'vps-token', 300, static fn (): string => 'timeout', 45000))->vpsReload();
+
+        self::assertSame(
+            [['reload', 'http_error', 422], ['reload', 'timeout', null]],
+            array_map(
+                static fn (array $r): array => [$r['kind'], $r['outcome'], $r['http_status'] === null ? null : (int) $r['http_status']],
+                $this->pdo->query('SELECT kind, outcome, http_status FROM vps_calls ORDER BY id')->fetchAll()
+            )
+        );
+        $this->ops()->vpsReload();
+        self::assertSame(2, (int) $this->pdo->query('SELECT COUNT(*) FROM vps_calls')->fetchColumn(), 'no VPS configured: no call, no row');
     }
 
     /** @return array<string, array{array{status: int, body: string}|string, string}> */

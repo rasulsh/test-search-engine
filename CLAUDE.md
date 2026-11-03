@@ -130,6 +130,9 @@ abstraction layers.
 │   │   ├── AdminOpsViews.php      # the operations page body (M40)
 │   │   ├── ConfigReport.php       # effective-configuration table: value, source, doctor notes, secrets masked (M40)
 │   │   ├── AdminStrings.php       # every Persian string and help text of the panel (M39)
+│   │   ├── VpsCallLog.php         # one vps_calls row per PHP -> VPS call; never throws, purges by retention (M47)
+│   │   ├── VpsCallReport.php      # read-only queries of the panel's VPS page + CSV rows (M47)
+│   │   ├── AdminVps.php / AdminVpsViews.php  # "Probe now" and the VPS page (M47)
 │   │   ├── Db.php                 # thin PDO wrapper
 │   │   ├── Config.php             # config schema + every default; load() merges config.php overrides (M29)
 │   │   ├── ConfigDoctor.php       # checks config.php against the schema (M29)
@@ -145,6 +148,7 @@ abstraction layers.
 │   ├── tools/admin-password.php  # prompts for a password, prints the admin.password_hash (M39)
 │   ├── tools/_php-guard.php      # every tools/*.php requires it first: clear message on PHP < 8.1 (M40)
 │   ├── tools/logs-export.php     # search_logs -> CSV / JSON CLI for the zero-result loop (M36)
+│   ├── tools/vps-probe.php       # GET /health to the VPS, recorded in vps_calls; a 1-minute cron (M47)
 │   ├── data/                      # active bundle (gitignored)
 │   └── tests/
 ├── vps/                          # VPS vector service (Python): query embedding + cosine top-K
@@ -476,6 +480,14 @@ wait for review before starting the next.
   `admin.settings_backups`, restore), audit `settings_save` / `settings_restore` (key names only). **`config.php` is code and
   is never rewritten by the panel or any tool.** The doctor, status table, `/health` and `config-check.php` describe the merged
   result; the installer ignores `settings.json`. Recovery: delete `storage/settings.json`.
+
+- **M47 — VPS call log + VPS page:** `vps_calls` (migration `db/migrations/2026-11-03_vps_calls.sql`, UTC): `VpsClient` records every
+  PHP -> VPS call (search, reload, probe) through `VpsCallLog` with outcome (`ok|timeout|unreachable|http_error|bad_body|
+  not_configured`), curl timings, the VPS's `Server-Timing` / `X-Vps-Inflight` headers and a request id; one INSERT after
+  the response in a try/catch, never changes a result; `vps.log_retention_days` (30). `tools/vps-probe.php` (cron) and the panel's
+  "Probe now" record `kind=probe`; `?p=vps` (`VpsCallReport`, `AdminVpsViews`): summary, hourly strips, incidents, call list
+  with filters and CSV. VPS: request-id echo, `Server-Timing`, inflight header, one journal line per request, lifecycle
+  events. Contracts unchanged.
 
 **Definition of Done (per PR):** code + tests pass in CI; docs updated;
 KISS respected (no unused abstraction); PR description complete; no secrets or

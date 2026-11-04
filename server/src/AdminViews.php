@@ -129,6 +129,11 @@ final class AdminViews
         $cards .= '<section class="card"><h2>' . self::e($t['last_reload']) . '</h2><p>' . $reloaded
             . '</p></section>';
 
+        $cards .= '<section class="card"><h2>' . self::e($t['last_warm']) . '</h2>'
+            . (($s['warm'] ?? null) === null
+                ? '<p>' . self::e($t['last_warm_none']) . '</p>'
+                : AdminOpsViews::warmLast($s['warm'], AdminStrings::fa()['ops']['warm'])) . '</section>';
+
         $cards .= '<section class="card"><h2>' . self::e($t['doctor']) . '</h2>' . self::doctorBody($s['doctor'])
             . '<p class="note">' . self::e($t['doctor_note']) . '</p></section>';
 

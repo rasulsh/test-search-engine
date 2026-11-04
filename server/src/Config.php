@@ -518,6 +518,11 @@ final class Config
             'redis.timeout_ms' => ['int', 100],
             'redis.prefix'     => ['string', 'search:cache:'],
 
+            // Result-cache warm-up (M49): a flag file the panel writes and the every-minute cron job
+            // (tools/warm-cache.php --if-pending) consumes. warm.auto = false stops the automatic flags only.
+            'warm.auto' => ['bool', true],
+            'warm.n'    => ['int', 500],
+
             // Origin the storefront runs on, for a fetch()-based events call; sendBeacon needs none.
             'events.allowed_origin' => ['string', ''],
 

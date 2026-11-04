@@ -10,6 +10,18 @@ holds overrides). A **renamed** key keeps working for two releases (its value is
 config doctor / status page warn with the new name. A **removed** key is ignored; the doctor says why and that the
 line can be deleted. `php server/tools/config-check.php` lists all of it.
 
+## Automatic result-cache warm-up (M49)
+
+- **Config changes**: **added** `warm.auto` = `true` and `warm.n` = `500` (both editable on the settings page; `warm.n` 50 to 1000).
+  Nothing removed, renamed or re-defaulted.
+- **Behaviour**: a bundle reload (panel and `POST /reload`), a rollback, a panel cache flush and a successful VPS vector reload
+  leave `storage/warm-cache.pending`; the every-minute cron job `warm-cache.php --if-pending --quiet` warms the cache and writes
+  `storage/warm-cache.status.json`. `AdminOps::vpsReload()` now flushes the result cache after a **successful** reload (it
+  flushed nothing before). New audit action `warm_requested` (reason only). The Operations page gets a warm-up card and "Warm now";
+  the status page shows the last result. The `POST /reload` answer gains `"warm_requested": true` when a warm-up was flagged (additive). Cache keys, TTLs, ranking and results are unchanged.
+- **After deploying**: see [DEPLOY.md](DEPLOY.md#warming-the-result-cache): upload the listed files and add the every-minute cron line.
+  No migration.
+
 ## Result-cache warm-up tool
 
 - **Config changes**: none (no key added, removed, renamed or re-defaulted).

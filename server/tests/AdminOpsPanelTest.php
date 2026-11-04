@@ -8,6 +8,7 @@ namespace App\Tests;
 
 use App\Config;
 use App\RedisClient;
+use App\WarmQueue;
 use PDO;
 use PHPUnit\Framework\TestCase;
 use Throwable;
@@ -49,11 +50,12 @@ final class AdminOpsPanelTest extends TestCase
 
         self::$root = TempTree::path('adminops_e2e');
         mkdir(self::$root);
+        mkdir(self::$root . '/storage');
         self::$vps = new MockVpsServer(['token' => FakeVps::TOKEN]);
         self::$redis = new FakeRedisServer();
         self::$server = new AdminServer([
             'db' => ['dsn' => $dsn, 'user' => $user, 'password' => $password],
-            'paths' => ['data' => self::$root . '/data', 'data_incoming' => self::$root . '/data_incoming'],
+            'paths' => ['data' => self::$root . '/data', 'data_incoming' => self::$root . '/data_incoming', 'storage' => self::$root . '/storage'],
             'model' => ['normalization_version' => 2],
             'reload' => ['token' => self::RELOAD_TOKEN],
             'vps' => ['url' => self::$vps->url, 'token' => FakeVps::TOKEN],
@@ -76,6 +78,9 @@ final class AdminOpsPanelTest extends TestCase
     protected function setUp(): void
     {
         self::$pdo->exec('DELETE FROM admin_audit');
+        foreach (glob(self::$root . '/storage/warm-cache*') ?: [] as $file) {
+            unlink($file);
+        }
         self::$pdo->exec('DROP TABLE IF EXISTS products_new, products_old');
         self::$pdo->exec('DELETE FROM products');
         foreach (['data', 'data_incoming', 'data_old', 'data_swap'] as $dir) {
@@ -209,7 +214,7 @@ final class AdminOpsPanelTest extends TestCase
 
         $forward = $this->act('rollback');
         self::assertStringContainsString('اکنون 3 محصول فعال است', self::banner($forward['body']));
-        self::assertSame(['reload_apply', 'rollback', 'rollback'], $this->auditActions());
+        self::assertSame(['warm_requested', 'reload_apply', 'warm_requested', 'rollback', 'warm_requested', 'rollback'], $this->auditActions());
     }
 
     public function testARefusedApplyShowsWhyAndLeavesTheLiveVersionAlone(): void
@@ -263,7 +268,8 @@ final class AdminOpsPanelTest extends TestCase
         self::assertStringContainsString('3 کلید از کش نتایج پاک شد.', self::banner($page['body']));
         self::assertNull($redis->get('search:cache:a'));
         self::assertSame('v', $redis->get('unrelated:key'), 'a neighbour on the same Redis survives');
-        self::assertSame(['cache_flush'], $this->auditActions());
+        self::assertSame(['warm_requested', 'cache_flush'], $this->auditActions());
+        self::assertSame(['cache_flush'], $this->queue()->pending()['reasons']);
     }
 
     public function testVpsReloadReachesTheVpsWithTheTokenAndShowsItsAnswer(): void
@@ -278,12 +284,13 @@ final class AdminOpsPanelTest extends TestCase
         self::$vps->setScenario(['token' => FakeVps::TOKEN, 'reload' => ['status' => 422, 'body' => ['ok' => false, 'error' => 'model mismatch']]]);
         $refused = $this->act('vps_reload');
         self::assertStringContainsString('انجام نشد: model mismatch', self::banner($refused['body']));
-        self::assertSame(['vps_reload', 'vps_reload'], $this->auditActions());
+        self::assertSame(['warm_requested', 'vps_reload', 'vps_reload'], $this->auditActions(), 'only the successful reload flags a warm-up');
+        self::assertSame(['vps_reload'], $this->queue()->pending()['reasons']);
     }
 
     public function testEveryActionNeedsTheCsrfTokenAndAKnownName(): void
     {
-        foreach (['validate', 'apply', 'rollback', 'flush_cache', 'vps_reload'] as $action) {
+        foreach (['validate', 'apply', 'rollback', 'flush_cache', 'vps_reload', 'warm_now'] as $action) {
             $forged = $this->client->request('POST', '/admin.php?p=ops', ['action' => $action]);
             self::assertSame(403, $forged['status'], $action);
         }
@@ -321,9 +328,104 @@ final class AdminOpsPanelTest extends TestCase
         self::assertSame(200, $done['status'], $done['body']);
         self::assertSame(3, json_decode($done['body'], true)['count']);
         self::assertSame(3, $this->rows('products'));
-        self::assertSame(['reload_api'], $this->auditActions(), 'the script path leaves its audit row too');
+        self::assertSame(['warm_requested', 'reload_api'], $this->auditActions(), 'the script path leaves its audit rows too');
+        self::assertSame(['reload'], $this->queue()->pending()['reasons']);
+        self::assertTrue(json_decode($done['body'], true)['warm_requested'], 'additive key in the reload answer');
         // The panel can roll back what the script reloaded: one code path, one previous version.
         self::assertStringContainsString('اکنون 2 محصول فعال است', self::banner($this->act('rollback')['body']));
+    }
+
+    private function queue(): WarmQueue
+    {
+        return new WarmQueue(self::$root . '/storage');
+    }
+
+    private static function card(string $html): string
+    {
+        return preg_match('#<section class="card" id="warm">(.*?)</section>#su', $html, $m) === 1 ? html_entity_decode(strip_tags($m[1])) : '';
+    }
+
+    public function testTheWarmCardShowsIdleThenWaitingAfterAFlushAndTheMessageSaysAWarmUpWasScheduled(): void
+    {
+        $idle = $this->follow('?p=ops');
+        self::assertStringContainsString('گرم‌کردن کش نتایج', self::card($idle['body']));
+        self::assertStringContainsString('بیکار', self::card($idle['body']));
+        self::assertStringContainsString('هنوز گرم‌کردنی اجرا نشده است.', self::card($idle['body']));
+        self::assertStringNotContainsString('<code>', $idle['body'], 'no cron line while nothing waits');
+
+        $page = $this->act('flush_cache');
+
+        self::assertStringContainsString('گرم‌کردن کش نتایج زمان‌بندی شد.', self::banner($page['body']));
+        self::assertTrue($this->queue()->hasFlag());
+        self::assertStringContainsString('در انتظار کرون', self::card($page['body']));
+        self::assertStringContainsString('پاک‌کردن کش نتایج', self::card($page['body']), 'the reason');
+        self::assertStringNotContainsString('کرون‌جاب هر دقیقه اجرا نمی‌شود', $page['body'], 'a fresh flag is not a warning yet');
+        self::assertSame(['warm_requested', 'cache_flush'], $this->auditActions());
+    }
+
+    public function testWarmNowWritesTheFlagAuditsItAndNeedsTheCsrfToken(): void
+    {
+        $page = $this->act('warm_now');
+
+        self::assertStringContainsString('گرم‌کردن کش نتایج درخواست شد (علت: درخواست دستی)', self::banner($page['body']));
+        self::assertSame(['manual'], $this->queue()->pending()['reasons']);
+        self::assertSame(['warm_requested'], $this->auditActions());
+        self::assertSame(403, $this->client->request('POST', '/admin.php?p=ops', ['action' => 'warm_now'])['status']);
+        self::assertSame(1, count(array_filter($this->auditActions())), 'the forged request wrote nothing');
+    }
+
+    public function testAFlagWaitingMoreThanThreeMinutesWarnsThatCronIsNotRunningAndShowsTheLine(): void
+    {
+        file_put_contents(self::$root . '/storage/warm-cache.pending', json_encode(['requested_at' => gmdate('c', time() - 240), 'reasons' => ['reload']]));
+
+        $page = $this->follow('?p=ops');
+
+        self::assertStringContainsString('کرون‌جاب هر دقیقه اجرا نمی‌شود', self::card($page['body']));
+        self::assertMatchesRegularExpression('#<code>\* \* \* \* \* php [^<]+/tools/warm-cache\.php --if-pending --quiet &gt;/dev/null 2&gt;&amp;1</code>#', $page['body']);
+    }
+
+    public function testTheCardShowsRunningAndTheLastResultWithoutSecrets(): void
+    {
+        $this->queue()->writeStatus([
+            'started_at' => '2026-11-04T10:00:00+00:00', 'finished_at' => '2026-11-04T10:06:30+00:00', 'queries' => 500,
+            'warmed' => 480, 'already_cached' => 12, 'degraded' => 5, 'failed' => 3, 'stopped_early' => false,
+            'exit_code' => 1, 'reasons' => ['reload'],
+        ]);
+
+        $page = $this->follow('?p=ops');
+        $card = self::card($page['body']);
+        self::assertStringContainsString('گرم‌شده: 480، از قبل در کش: 12، بی‌پاسخ (VPS): 5، ناموفق: 3.', $card);
+        self::assertStringContainsString('390 ثانیه', $card);
+        self::assertStringContainsString('2026-11-04 10:00', $card);
+
+        $lock = fopen(self::$root . '/storage/warm-cache.lock', 'c');
+        self::assertTrue(flock($lock, LOCK_EX | LOCK_NB));
+        $running = $this->follow('?p=ops');
+        flock($lock, LOCK_UN);
+        fclose($lock);
+        self::assertStringContainsString('در حال اجرا', self::card($running['body']));
+
+        foreach ([FakeVps::TOKEN, self::RELOAD_TOKEN] as $secret) {
+            self::assertStringNotContainsString($secret, $page['body']);
+        }
+
+        $gaveUp = ['started_at' => '2026-11-04T10:00:00+00:00', 'finished_at' => '2026-11-04T10:00:00+00:00', 'error' => 'redis', 'reasons' => []];
+        $this->queue()->writeStatus($gaveUp);
+        self::assertStringContainsString('Redis در دسترس نبود', self::card($this->follow('?p=ops')['body']));
+    }
+
+    public function testTheStatusPageShowsTheLastWarmUp(): void
+    {
+        self::assertStringContainsString('هنوز اجرا نشده است', html_entity_decode($this->client->request('GET', '/admin.php?p=status')['body']));
+
+        $this->queue()->writeStatus([
+            'started_at' => '2026-11-04T10:00:00+00:00', 'finished_at' => '2026-11-04T10:05:00+00:00', 'queries' => 10,
+            'warmed' => 9, 'already_cached' => 1, 'degraded' => 0, 'failed' => 0, 'stopped_early' => false, 'exit_code' => 0, 'reasons' => [],
+        ]);
+        $status = html_entity_decode($this->client->request('GET', '/admin.php?p=status')['body']);
+
+        self::assertStringContainsString('آخرین گرم‌کردن کش', $status);
+        self::assertStringContainsString('گرم‌شده: 9', $status);
     }
 
     public function testTheConfigDoctorResultIsOnThePage(): void

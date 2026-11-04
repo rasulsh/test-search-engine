@@ -42,6 +42,7 @@ final class AdminOpsViews
             . self::reloadCard($d['reload'], (string) $d['csrf'])
             . self::rollbackCard($d['reload']['rollback'], $form)
             . self::cacheCard($d['redis'], (string) $d['prefix'], $form)
+            . self::warmCard($d['warm'], $d['redis']['state'] === 'ok', (string) $d['csrf'])
             . self::vpsCard($d['vps'], $form)
             . self::doctorCard($d['doctor'])
             . '</div>' . self::recent($d['recent']);
@@ -171,6 +172,73 @@ final class AdminOpsViews
     }
 
     /**
+     * The cache warm-up card: the state, the last run, a warning when the cron job does not consume the flag,
+     * and the "warm now" button.
+     *
+     * @param array<string, mixed> $w {@see WarmQueue::describe()} plus `cron` (the exact cron line)
+     */
+    public static function warmCard(array $w, bool $redisOk, string $csrf): string
+    {
+        $t = AdminStrings::fa()['ops']['warm'];
+        $badges = ['idle' => 'off', 'waiting' => 'warn', 'running' => 'ok'];
+        $body = '<dl class="kv"><dt>' . self::e($t['state']) . '</dt><dd><span class="badge '
+            . $badges[$w['state']] . '">' . self::e($t['states'][$w['state']]) . '</span></dd>';
+        if ($w['pending'] !== null) {
+            $body .= '<dt>' . self::e($t['requested']) . '</dt><dd>' . AdminViews::ts($w['pending']['requested_at'])
+                . '</dd><dt>' . self::e($t['why']) . '</dt><dd>' . self::e(implode('، ', array_map(
+                    static fn (string $r): string => $t['for'][$r] ?? $r,
+                    $w['pending']['reasons']
+                ))) . '</dd>';
+        }
+        $body .= '</dl>';
+        if ($w['pending'] !== null && $w['state'] !== 'running' && $w['age'] > WarmQueue::STALE_SECONDS) {
+            $body .= '<p class="msg warn" role="alert">' . self::e($t['cron_warning'])
+                . '</p><p><bdi class="ltr"><code>' . self::e($w['cron']) . '</code></bdi></p>';
+        }
+        $body .= self::warmLast($w['last'], $t);
+        $disabled = $redisOk ? '' : ' disabled';
+
+        return '<section class="card" id="warm"><h2>' . self::e($t['title']) . '</h2>' . $body
+            . '<p class="note">' . self::e($t['note']) . '</p>'
+            . '<form method="post" action="?p=ops" data-busy><input type="hidden" name="csrf" value="' . self::e($csrf)
+            . '"><button class="btn" name="action" value="warm_now"' . $disabled . '>' . self::e($t['button'])
+            . '</button></form></section>';
+    }
+
+    /**
+     * @param array<string, mixed>|null $last the status file
+     * @param array<string, mixed> $t
+     */
+    public static function warmLast(?array $last, array $t): string
+    {
+        if ($last === null || !isset($last['started_at'])) {
+            return '<p class="note">' . self::e($t['never']) . '</p>';
+        }
+        $error = (string) ($last['error'] ?? '');
+        if ($error !== '') {
+            $result = '<span class="badge bad">' . self::e($t['failed_reason'][$error] ?? $error) . '</span>';
+        } elseif (($last['finished_at'] ?? null) === null) {
+            $result = '<span class="badge warn">' . self::e($t['unfinished']) . '</span>';
+        } else {
+            $result = self::e(AdminStrings::fill(
+                $t['summary'],
+                AdminViews::num($last['warmed'] ?? 0),
+                AdminViews::num($last['already_cached'] ?? 0),
+                AdminViews::num($last['degraded'] ?? 0),
+                AdminViews::num($last['failed'] ?? 0)
+            ) . (!empty($last['stopped_early']) ? ' ' . $t['stopped'] : ''));
+        }
+        $seconds = ($last['finished_at'] ?? null) === null
+            ? null
+            : max(0, (int) strtotime((string) $last['finished_at']) - (int) strtotime((string) $last['started_at']));
+
+        return '<dl class="kv"><dt>' . self::e($t['last']) . '</dt><dd>' . AdminViews::ts($last['started_at'])
+            . '</dd><dt>' . self::e($t['result']) . '</dt><dd>' . $result . '</dd>'
+            . ($seconds === null ? '' : '<dt>' . self::e($t['duration']) . '</dt><dd>'
+                . self::e(AdminStrings::fill($t['seconds'], AdminViews::num($seconds))) . '</dd>') . '</dl>';
+    }
+
+    /**
      * @param array<string, mixed> $vps AdminStatus::vps()
      * @param callable(string, string, string, bool): string $form
      */
@@ -250,10 +318,19 @@ final class AdminOpsViews
             ? AdminStrings::fill($t['results']['in'], number_format((float) $detail['s'], 1, '.', ''))
             : '';
         $count = AdminViews::num($detail['count'] ?? $detail['removed'] ?? 0);
+        if ($action === Audit::WARM_REQUESTED && ($detail['ok'] ?? false) === true) {
+            $why = $t['warm']['for'][$detail['for'] ?? ''] ?? (string) ($detail['for'] ?? '');
+
+            return ['ok', AdminStrings::fill($t['results']['warm_requested'], $why)];
+        }
         if ($action === Audit::RELOAD_API || ($detail['ok'] ?? false) === true) {
             $text = AdminStrings::fill($t['results'][$action] ?? $t['results']['reload_apply'], $count);
             if (array_key_exists('cache_flushed', $detail)) {
                 $text .= $detail['cache_flushed'] ? $t['results']['cache_also'] : $t['results']['cache_not'];
+            }
+
+            if (($detail['warm_requested'] ?? false) === true && $action !== Audit::RELOAD_API) {
+                $text .= $t['results']['warm_scheduled'];
             }
 
             return ['ok', trim($text . ' ' . $seconds)];

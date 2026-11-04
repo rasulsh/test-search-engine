@@ -43,6 +43,7 @@ final class Reload
     private bool $hadPreviousTable = false;
     private int $normalizationVersion;
     private ?Cache $cache;
+    private array $config;
 
     /**
      * @param array<string, mixed> $config
@@ -51,6 +52,7 @@ final class Reload
     public function __construct(PDO $pdo, array $config, ?Cache $cache = null)
     {
         $this->cache = $cache ?? Cache::fromConfig($config);
+        $this->config = $config;
         $this->pdo = $pdo;
         $this->dataDir = rtrim((string) $config['paths']['data'], '/');
         $this->incomingDir = rtrim((string) $config['paths']['data_incoming'], '/');
@@ -128,7 +130,9 @@ final class Reload
                 throw new ReloadException('directory_swap_failed', ['error' => $e->getMessage()]);
             }
 
-            return $this->finish((int) (($this->readMetaFile($this->dataDir . '/meta.json'))['count'] ?? 0));
+            $count = (int) (($this->readMetaFile($this->dataDir . '/meta.json'))['count'] ?? 0);
+
+            return $this->finish($count, 'rollback');
         });
     }
 
@@ -204,16 +208,16 @@ final class Reload
             throw new ReloadException('directory_swap_failed', ['error' => $e->getMessage()]);
         }
 
-        return $this->finish($count);
+        return $this->finish($count, 'reload');
     }
 
     /**
      * After a committed swap (reload or rollback): drop the worker's cached maps, warm the speller
      * (best effort) and flush the result cache.
      *
-     * @return array{ok: true, count: int, cache_flushed?: bool}
+     * @return array{ok: true, count: int, cache_flushed?: bool, warm_requested?: bool}
      */
-    private function finish(int $count): array
+    private function finish(int $count, string $reason): array
     {
         // Searches in this worker re-read synonyms.json (and the alias file) at once.
         Synonyms::clearCache();
@@ -238,6 +242,10 @@ final class Reload
         // reported, not raised: the swap stands and entries expire with their TTL.
         if ($this->cache !== null) {
             $result['cache_flushed'] = $this->cache->flush();
+        }
+        // The cron job refills the cache (tools/warm-cache.php --if-pending); a failure here never fails the swap.
+        if (WarmQueue::trigger($this->config, $this->pdo, (string) ($_SERVER['REMOTE_ADDR'] ?? ''), $reason)) {
+            $result['warm_requested'] = true;
         }
 
         return $result;

@@ -24,6 +24,7 @@ final class Audit
     public const CACHE_FLUSH = 'cache_flush';
     public const VPS_RELOAD = 'vps_reload';
     public const VPS_PROBE = 'vps_probe';
+    public const WARM_REQUESTED = 'warm_requested';
     public const ALIAS_SAVE = 'alias_save';
     public const ALIAS_RESTORE = 'alias_restore';
     public const SETTINGS_SAVE = 'settings_save';

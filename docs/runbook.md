@@ -78,12 +78,14 @@ curl -sS -X POST -H "X-Reload-Token: $SEARCH_RELOAD_TOKEN" \
 curl -sS "https://<DOMAIN>/search-api/health.php"   # product_count == <N>, config.ok true
 ```
 
-Then fill the result cache so shoppers do not pay the first miss of each popular query (see
-[DEPLOY.md](DEPLOY.md#warming-the-result-cache); add `-d extension=mbstring` if the tool says the extension is missing):
+The result cache is refilled for you: the reload leaves `storage/warm-cache.pending` and the every-minute cron line
+`* * * * * php .../tools/warm-cache.php --if-pending --quiet` (set up once, see
+[DEPLOY.md](DEPLOY.md#warming-the-result-cache)) warms it within a minute. The Operations page shows the state and the
+last result; "Warm now" asks for another run. To look first by hand (add `-d extension=mbstring` if the tool says the
+extension is missing):
 
 ```bash
 php tools/warm-cache.php --dry-run   # what it would do
-php tools/warm-cache.php             # run after every reload, flush and VPS vector reload
 ```
 
 ## 5. Verify

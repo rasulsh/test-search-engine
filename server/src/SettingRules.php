@@ -114,6 +114,9 @@ final class SettingRules
             // A blank prefix would let the cache flush match every key of the Redis database.
             'redis.prefix'                    => ['format' => 'prefix', 'required' => true],
 
+            'warm.auto'                       => [],
+            'warm.n'                          => $count(50, 1000, 'count'),         // the analytics cap is 1000
+
             'events.allowed_origin'           => ['format' => 'origin'],
 
             'log.duplicate_seconds'           => $count(0, 86400, 'seconds'),

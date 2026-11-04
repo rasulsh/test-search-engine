@@ -111,9 +111,10 @@ no upload of `release.zip` or any code, and no `FLUSHALL`.
 | Card | What it does | Takes effect |
 | --- | --- | --- |
 | **Reload the staged bundle** | Shows `data_incoming/` next to the live `data/`: build time, normalization version, count, the count change, how many product ids were added / removed (staged `products_new` against the live `products` table, once the staging table is loaded), the staging table and `products.load.sql`. **Validate only** runs every check of a reload and changes nothing; **load and activate** is the reload itself (optionally loading `products.load.sql` into `products_new` first, the equivalent of `reload.php?load=1`). | at once; the previous version stays as `products_old` + `data_old` |
-| **Return to the previous version** | Swaps `products` / `products_old` and `data` / `data_old`. Disabled when either is missing. Refused when the previous bundle's model, dim or normalization version does not match the running code. A second press goes back. | at once |
-| **Result cache** | Shows the Redis state and how many keys sit under `redis.prefix`; **clear** deletes those keys only (`SCAN` + `DEL`, 5 s timeout), never `FLUSHDB` / `FLUSHALL`, so other data on the same Redis is safe. | at once |
-| **VPS** | Shows `/health` (count, model, built at) and **load the uploaded vectors** calls the VPS `POST /reload` with `vps.token` and `vps.reload_timeout_ms` (60 s). The `rsync` of the vector files stays outside the panel. | when the VPS finishes its own check |
+| **Return to the previous version** | Swaps `products` / `products_old` and `data` / `data_old`. Disabled when either is missing. Refused when the previous bundle's model, dim or normalization version does not match the running code. A second press goes back. | at once; a warm-up is scheduled |
+| **Result cache** | Shows the Redis state and how many keys sit under `redis.prefix`; **clear** deletes those keys only (`SCAN` + `DEL`, 5 s timeout), never `FLUSHDB` / `FLUSHALL`, so other data on the same Redis is safe; a warm-up is then scheduled. | at once |
+| **Cache warm-up** | State (idle / waiting for cron / running), when and why a warm-up was requested, the last run from `storage/warm-cache.status.json` (time, warmed, already cached, degraded, failed, duration) and **Warm now**, which writes the flag (audited, works with `warm.auto` off). A flag pending more than 3 minutes shows a warning with the exact cron line: the cron job is not running. The panel never runs the warm-up itself (a web request cannot run it); see [DEPLOY.md](DEPLOY.md#warming-the-result-cache). | the cron job starts it within a minute |
+| **VPS** | Shows `/health` (count, model, built at) and **load the uploaded vectors** calls the VPS `POST /reload` with `vps.token` and `vps.reload_timeout_ms` (60 s); after a **successful** reload the result cache is flushed (the same code as the cache card) and a warm-up is scheduled, a failed reload changes nothing. The `rsync` of the vector files stays outside the panel. | when the VPS finishes its own check |
 | **Config doctor** | Runs the doctor on `config.php` and lists the key paths (never values). | - |
 | **Latest operations** | The last 8 operations with their result; this is also where the outcome is when the browser was closed. | - |
 
@@ -311,6 +312,7 @@ start with the same card size.
 | `src/AdminViews.php` | page bodies |
 | `src/AdminSettings.php`, `AdminSettingsViews.php` | the settings page: actions (check / save / restore / apply one key, audit) and HTML (M46) |
 | `src/SettingsValidator.php`, `SettingRules.php`, `SettingsStore.php` | per-key rules and conflicts, the rule table, the versioned atomic file with backups (M46) |
+| `src/WarmQueue.php` | the warm-up flag (`storage/warm-cache.pending`), status file and lock the cron job and the panel share (M49) |
 | `src/VpsCallLog.php`, `VpsCallReport.php` | the `vps_calls` writer (never throws, purges) and the page's read-only queries and CSV rows |
 | `src/AdminVps.php`, `AdminVpsViews.php` | "Probe now" and the VPS page's HTML (inline SVG strips, no script) |
 | `src/AdminStrings.php` | **every Persian string and help text**; edit wording here only |

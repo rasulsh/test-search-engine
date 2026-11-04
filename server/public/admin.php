@@ -37,6 +37,7 @@ use App\Reload;
 use App\SearchController;
 use App\Synonyms;
 use App\VpsCallReport;
+use App\WarmQueue;
 
 /** @var array<string, mixed> $config */
 if (!isset($config)) {
@@ -270,6 +271,7 @@ try {
             'apply' => $ops->apply($loadStaging),
             'rollback' => $ops->rollback(),
             'flush_cache' => $ops->flushCache(),
+            'warm_now' => $ops->warmNow(),
             'vps_reload' => $ops->vpsReload(),
             default => null,
         };
@@ -297,6 +299,8 @@ try {
                 'vps' => $probe->vps(),
                 'redis' => $probe->redis(),
                 'doctor' => ConfigDoctor::check($layers['merged'], null, $layers['panel']),
+                'warm' => WarmQueue::fromConfig($config)->describe() + ['cron' => '* * * * * php ' . dirname(__DIR__)
+                    . '/tools/warm-cache.php --if-pending --quiet >/dev/null 2>&1'],
                 'recent' => $audit->latest(AdminOps::ACTIONS, 8),
                 'done' => (int) ($_GET['done'] ?? 0),
                 'csrf' => $csrf,

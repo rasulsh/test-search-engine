@@ -29,7 +29,8 @@ def dev_tree(tmp_path: Path) -> Path:
                 "public/client/model/stale.onnx", "data/vectors.bin",
                 "data_incoming/old.txt", "tests/KeywordTest.php", "tools/eval.php",
                 "tools/config-check.php", "tools/logs-export.php", "tools/admin-password.php",
-                "tools/vps-probe.php", "tools/_php-guard.php", "public/.htaccess",
+                "tools/vps-probe.php", "tools/warm-cache.php", "tools/_php-guard.php",
+                "public/.htaccess",
                 "public/app_base.php",
                 ".htaccess", "data/.htaccess", "data_incoming/.htaccess", "storage/.htaccess",
                 "storage/aliases.json", "storage/backups/aliases-20260101-000000-000000.json"):
@@ -69,11 +70,11 @@ def test_release_packs_bundle_under_data_incoming_and_the_server_code(
     assert [n for n in names if n.startswith("storage/")] == ["storage/.htaccess"]
     assert not any(n.startswith("tests/") for n in names)
     # The tools shipped (run on the host after unzipping): the config doctor, the log
-    # export (M36), the admin password hash maker (M39) and the VPS probe (cron); never the
-    # dev-only tools/eval.php.
+    # export (M36), the admin password hash maker (M39), the VPS probe (cron) and the cache
+    # warm-up; never the dev-only tools/eval.php.
     assert [n for n in names if n.startswith("tools/")] == [
         "tools/_php-guard.php", "tools/admin-password.php", "tools/config-check.php",
-        "tools/logs-export.php", "tools/vps-probe.php"]
+        "tools/logs-export.php", "tools/vps-probe.php", "tools/warm-cache.php"]
     assert "data_incoming/old.txt" not in names
     # M30 layout: unzipped into server/, public/ stays a child of it, with the deny-all nets.
     assert {".htaccess", "data/.htaccess", "data_incoming/.htaccess", "storage/.htaccess",

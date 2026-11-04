@@ -72,6 +72,11 @@ final class SearchController
     private int $queryMaxTokens;
     private int $resultCap;
     private ?QueryEntities $entities;
+    /** Set only by warm(): this search fills the cache and leaves the hit counters alone. */
+    private bool $warming = false;
+    private bool $forceMiss = false;
+    private string $outcome = '';
+    private bool $reachedVps = false;
 
     /**
      * @param callable(): Speller $spellerFactory Built lazily (a catalog scan),
@@ -145,13 +150,15 @@ final class SearchController
      * @param Cache|null $cache replaces the result cache built from $config['redis'] (tests)
      * @param bool $record false builds the controller the admin panel's tester uses: no log row and
      *        no result cache (read or write), so trying a query leaves no trace
+     * @param bool $logSearches false writes no search_logs row but keeps the result cache (the warm-up tool)
      */
     public static function fromConfig(
         PDO $pdo,
         array $config,
         ?VpsClient $vps = null,
         ?Cache $cache = null,
-        bool $record = true
+        bool $record = true,
+        bool $logSearches = true
     ): self {
         $search = $config['search'];
         $productsTable = $config['db']['products_table'];
@@ -218,7 +225,7 @@ final class SearchController
 
         $controller = new self(
             $keyword,
-            $record ? new Logger(
+            $record && $logSearches ? new Logger(
                 $pdo,
                 $config['db']['search_logs_table'],
                 (int) $config['log']['duplicate_seconds']
@@ -378,9 +385,14 @@ final class SearchController
             : null;
         if ($cacheKey !== null) {
             // Count before the GET so hits (which return early) and misses both register.
-            $this->cache->registerLookup($cacheKey);
-            $hit = $this->cache->get($cacheKey);
+            // A warm-up is not a shopper: it neither counts nor reads when forced.
+            if (!$this->warming) {
+                $this->cache->registerLookup($cacheKey);
+            }
+            $hit = $this->forceMiss ? null : $this->cache->get($cacheKey);
             if ($hit !== null && $this->isCachedResponse($hit)) {
+                $this->outcome = self::WARM_CACHED;
+
                 return $this->serveCached($hit, $raw, $context, $start);
             }
         }
@@ -447,6 +459,7 @@ final class SearchController
         // keyword ordering above stands.
         $stage = microtime(true);
         $semantic = $this->semantic($boostQuery, $normalized);
+        $this->reachedVps = $semanticOn && $normalized !== '';
         $timing['vector'] = $semanticOn && $normalized !== '' ? self::elapsedMs($stage) : null;
         $recognized = $this->recognizeEntities($boostQuery);
         $entityInfo = null;
@@ -505,7 +518,12 @@ final class SearchController
         // slow) is a degradation: caching it would pin it for the whole TTL. The
         // search_uuid belongs to this request, not to the cached answer. An empty
         // answer is cached briefly: an alias or a reload may be about to fill it.
+        $this->outcome = self::WARM_UNCACHED;
+        if ($cacheKey !== null && $semanticOn && $semantic === null) {
+            $this->outcome = self::WARM_DEGRADED;
+        }
         if ($cacheKey !== null && (!$semanticOn || $semantic !== null)) {
+            $this->outcome = self::WARM_STORED;
             unset($response['search_uuid']);
             $this->cache->set($cacheKey, [
                 'response'   => $response,
@@ -516,6 +534,51 @@ final class SearchController
         }
 
         return $response;
+    }
+
+    public const WARM_CACHED = 'cached';
+    public const WARM_STORED = 'stored';
+    public const WARM_DEGRADED = 'degraded';
+    public const WARM_UNCACHED = 'uncached';
+
+    /**
+     * Runs one query through the normal path so the result cache holds what a shopper asking `limit`
+     * would be served (same key), without counting a lookup for the adaptive TTL. The caller builds
+     * this controller with logSearches = false. A degraded answer (the VPS failed) is never cached.
+     *
+     * @param bool $force recompute even when the answer is already cached
+     * @return array{outcome: string, vps: bool} outcome is a WARM_* constant; vps: the VPS was called
+     */
+    public function warm(string $query, int $limit, bool $force = false): array
+    {
+        $this->warming = true;
+        $this->forceMiss = $force;
+        $this->outcome = self::WARM_UNCACHED;
+        $this->reachedVps = false;
+        try {
+            $this->search(['q' => $query, 'limit' => $limit]);
+
+            return ['outcome' => $this->outcome, 'vps' => $this->reachedVps];
+        } finally {
+            $this->warming = false;
+            $this->forceMiss = false;
+        }
+    }
+
+    /** True when the answer for this query at this limit is already cached (read-only, for --dry-run). */
+    public function isCached(string $query, int $limit): bool
+    {
+        if ($this->cache === null) {
+            return false;
+        }
+        [$capped] = QueryPrep::cap(QueryPrep::clean($query), $this->queryMaxChars, $this->queryMaxTokens);
+        $normalized = ($this->normalize)($capped);
+        if ($normalized === '') {
+            return false;
+        }
+        $hit = $this->cache->get($this->cache->key($normalized, $limit, $this->semanticEnabled(), $this->dataVersion));
+
+        return $hit !== null && $this->isCachedResponse($hit);
     }
 
     private const SOURCES = ['page', 'autocomplete', 'filter', 'paging'];

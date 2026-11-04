@@ -156,6 +156,16 @@ class Cache
         return $this->prefix . 'freq:' . substr($key, strlen($this->prefix));
     }
 
+    /** True when Redis answers; the warm-up tool checks it first because every other method hides an outage. */
+    public function ping(): bool
+    {
+        try {
+            return $this->redis->ping();
+        } catch (Throwable $e) {
+            return false;
+        }
+    }
+
     /** Drops every cached result; false when Redis could not be reached. */
     public function flush(): bool
     {

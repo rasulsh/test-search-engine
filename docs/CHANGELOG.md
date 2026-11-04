@@ -10,6 +10,17 @@ holds overrides). A **renamed** key keeps working for two releases (its value is
 config doctor / status page warn with the new name. A **removed** key is ignored; the doctor says why and that the
 line can be deleted. `php server/tools/config-check.php` lists all of it.
 
+## Result-cache warm-up tool
+
+- **Config changes**: none (no key added, removed, renamed or re-defaulted).
+- **Behaviour**: new `tools/warm-cache.php` pre-fills the result cache for the most searched queries after a reload or flush
+  ([DEPLOY.md](DEPLOY.md#warming-the-result-cache)). `SearchController::fromConfig()` gains a `$logSearches` argument (default
+  true, so every existing caller is unchanged) and `warm()` / `isCached()`; a warm-up writes no `search_logs` row. Every
+  `tools/*.php` now also checks the required PHP extensions (`mbstring`, `pdo_mysql`, `curl`, `json`) and, when one is
+  missing, prints a message with the `-d extension=NAME` invocation on stderr and exits 1 (it used to die silently with 255).
+- **After deploying**: upload `tools/warm-cache.php`, `tools/_php-guard.php`, `src/CacheWarmer.php`, `src/Cache.php`,
+  `src/SearchController.php`. No migration, no bundle rebuild.
+
 ## VPS call log and the VPS page
 
 - **Config changes**: **added** `vps.log_retention_days` = `30` (days the `vps_calls` rows are kept; editable on the

@@ -6,7 +6,7 @@
  * (docs/DEPLOY.md, "Warming the result cache").
  *
  *   php server/tools/warm-cache.php [--n 500] [--window 30d] [--queries file.csv] [--force]
- *       [--sleep-ms 250] [--max-failures 5] [--dry-run]
+ *       [--sleep-ms 250] [--max-failures 5] [--dry-run] [--if-pending [--quiet]]
  *
  * Queries: the top --n distinct normalized queries of the last --window (24h|7d|30d|90d|all; same
  * rows the analytics count: no suspicious, duplicate, burst or paging rows; at most 1000), then the
@@ -17,6 +17,13 @@
  * the run stops after --max-failures consecutive VPS failures (0 = never). A degraded result (the
  * VPS timed out) is never cached; those queries are retried once at the end. --dry-run lists what
  * would be done and changes nothing. A lock file in storage/ keeps two runs from overlapping.
+ *
+ * --if-pending is the every-minute cron mode: with no storage/warm-cache.pending flag it exits 0 at once
+ * and silently (no database, no Redis). With a flag and a free lock it removes the flag as the run starts (a
+ * request made during the run schedules the next one), runs with --n defaulting to `warm.n`, and writes
+ * storage/warm-cache.status.json. Redis down or the lock held leaves the flag for the next minute; after 30
+ * minutes the flag is dropped and the status records the failure. --quiet prints nothing.
+ *
  * Exit 0 when everything is cached, 1 when queries stayed degraded or failed, the run stopped, Redis
  * is off or unreachable, or another run holds the lock, 2 on a usage error.
  */
@@ -29,6 +36,7 @@ use App\CacheWarmer;
 use App\Db;
 use App\GoldenEval;
 use App\SearchController;
+use App\WarmQueue;
 
 require __DIR__ . '/_php-guard.php'; // PHP 8.1+ and extension check, before anything else runs
 
@@ -40,12 +48,28 @@ if (PHP_SAPI !== 'cli') {
 /** @var array<string, mixed> $config */
 $config = require dirname(__DIR__) . '/bootstrap.php';
 
-$fail = static function (string $message, int $status = 2): never {
-    fwrite(STDERR, "warm-cache: {$message}\n");
+$fail = static function (string $message, int $status = 2) use (&$quiet): never {
+    if (!$quiet) {
+        fwrite(STDERR, "warm-cache: {$message}\n");
+    }
     exit($status);
 };
 
-$options = getopt('', ['n:', 'window:', 'queries:', 'force', 'only-missing', 'sleep-ms:', 'max-failures:', 'dry-run']);
+$options = getopt('', [
+    'n:', 'window:', 'queries:', 'force', 'only-missing', 'sleep-ms:', 'max-failures:', 'dry-run',
+    'if-pending', 'quiet',
+]);
+$quiet = isset($options['quiet']);
+$ifPending = isset($options['if-pending']);
+$queue = WarmQueue::fromConfig($config);
+$pending = null;
+if ($ifPending) {
+    // The only work a flagless minute does: one is_file().
+    if (!$queue->hasFlag()) {
+        exit(0);
+    }
+    $pending = $queue->pending() ?? ['requested_at' => gmdate('c'), 'reasons' => []];
+}
 $opt = static function ($name) use ($options) {
     return is_string($options[$name] ?? null) ? $options[$name] : null;
 };
@@ -61,7 +85,7 @@ $number = static function ($name, $default, $min) use ($opt, $fail) {
     return (int) $raw;
 };
 
-$n = $number('n', 500, 1);
+$n = $number('n', (int) $config['warm']['n'], 1);
 if ($n > 1000) {
     $fail('--n is at most 1000 (the analytics cap)');
 }
@@ -81,10 +105,33 @@ if (isset($options['queries']) && ($file === null || $file === '')) {
     $fail('--queries needs a file path');
 }
 
-$say = static function ($line) {
-    echo $line . "\n";
+$say = static function ($line) use (&$quiet) {
+    if (!$quiet) {
+        echo $line . "\n";
+    }
 };
 
+// A pending run that cannot start is retried every minute; past 30 minutes the flag is dropped and the
+// failure recorded, so a dead Redis cannot make the cron job retry for ever.
+$cannotStart = static function (string $why, string $message) use ($queue, $pending, $fail): never {
+    if ($pending !== null) {
+        if ($queue->age($pending) > WarmQueue::GIVE_UP_SECONDS) {
+            $queue->clear();
+            $now = gmdate('c');
+            $queue->writeStatus([
+                'started_at' => $now, 'finished_at' => $now, 'queries' => 0, 'warmed' => 0, 'already_cached' => 0,
+                'degraded' => 0, 'failed' => 0, 'stopped_early' => false, 'exit_code' => 1,
+                'reasons' => $pending['reasons'], 'error' => $why,
+            ]);
+            $fail("gave up after 30 minutes: {$message}", 1);
+        }
+        $fail($message . '; the request stays pending', 1);
+    }
+    $fail($message, 1);
+};
+
+$startedAt = null;
+$reasons = [];
 try {
     $fromFile = [];
     if ($file !== null) {
@@ -95,15 +142,26 @@ try {
         }
     }
 
+    if (!$dryRun) {
+        // Held until the process ends; the OS drops it if the process dies.
+        $lockPath = rtrim((string) $config['paths']['storage'], '/') . '/' . WarmQueue::LOCK_FILE;
+        $lock = @fopen($lockPath, 'c');
+        if ($lock === false) {
+            $cannotStart('error', "cannot create the lock file {$lockPath} (is storage/ writable?)");
+        }
+        if (!flock($lock, LOCK_EX | LOCK_NB)) {
+            $cannotStart('lock', 'another warm-up is running (lock ' . $lockPath . '); not starting a second one');
+        }
+    }
     if (!(bool) $config['redis']['enabled']) {
-        $fail('the result cache is off (redis.enabled); there is nothing to warm', 1);
+        $cannotStart('redis', 'the result cache is off (redis.enabled); there is nothing to warm');
+    }
+    $cache = Cache::fromConfig($config);
+    if ($cache === null || !$cache->ping()) {
+        $cannotStart('redis', 'Redis does not answer (redis.host / port / auth); nothing was warmed');
     }
     $pdo = (new Db($config['db']))->pdo();
     $controller = SearchController::fromConfig($pdo, $config, null, null, true, false);
-    $cache = Cache::fromConfig($config);
-    if ($cache === null || !$cache->ping()) {
-        $fail('Redis does not answer (redis.host / port / auth); nothing was warmed', 1);
-    }
 
     $analytics = new Analytics($pdo, (string) $config['db']['search_logs_table']);
     $logged = array_column($analytics->topQueries($analytics->since($window), $n), 'query');
@@ -128,15 +186,15 @@ try {
         exit(0);
     }
 
-    // Held until the process ends; the OS drops it if the process dies.
-    $lockPath = rtrim((string) $config['paths']['storage'], '/') . '/warm-cache.lock';
-    $lock = @fopen($lockPath, 'c');
-    if ($lock === false) {
-        $fail("cannot create the lock file {$lockPath} (is storage/ writable?)", 1);
+    // The run has started: drop the flag now, so a request made meanwhile schedules another run.
+    $startedAt = gmdate('c');
+    if ($pending !== null) {
+        $queue->clear();
     }
-    if (!flock($lock, LOCK_EX | LOCK_NB)) {
-        $fail('another warm-up is running (lock ' . $lockPath . '); not starting a second one', 1);
-    }
+    $reasons = $pending['reasons'] ?? [];
+    $queue->writeStatus([
+        'started_at' => $startedAt, 'finished_at' => null, 'queries' => count($queries), 'reasons' => $reasons,
+    ]);
 
     $say(sprintf(
         'warming %d queries (%d from the log, %d from the file), depth %d%s',
@@ -148,8 +206,24 @@ try {
     ));
     $summary = $warmer->run($queries, $force, $say);
 } catch (Throwable $e) {
+    if ($startedAt === null) {
+        $cannotStart('error', 'failed before starting: ' . $e->getMessage());
+    }
+    $queue->writeStatus([
+        'started_at' => $startedAt, 'finished_at' => gmdate('c'), 'queries' => 0, 'warmed' => 0, 'already_cached' => 0,
+        'degraded' => 0, 'failed' => 0, 'stopped_early' => true, 'exit_code' => 1, 'reasons' => $reasons,
+        'error' => 'exception',
+    ]);
     $fail('failed: ' . $e->getMessage(), 1);
 }
+
+$exitCode = $summary['stopped'] || $summary['degraded'] > 0 || $summary['failed'] > 0 ? 1 : 0;
+$queue->writeStatus([
+    'started_at' => $startedAt, 'finished_at' => gmdate('c'), 'queries' => count($queries),
+    'warmed' => $summary['warmed'], 'already_cached' => $summary['cached'], 'degraded' => $summary['degraded'],
+    'failed' => $summary['failed'], 'stopped_early' => $summary['stopped'], 'exit_code' => $exitCode,
+    'reasons' => $reasons,
+]);
 
 $say(sprintf(
     'done: warmed %d, already cached %d, degraded %d, failed %d%s in %s s',
@@ -163,4 +237,4 @@ $say(sprintf(
 foreach ($summary['degraded_queries'] as $query) {
     $say('still degraded: ' . $query);
 }
-exit($summary['stopped'] || $summary['degraded'] > 0 || $summary['failed'] > 0 ? 1 : 0);
+exit($exitCode);

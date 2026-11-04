@@ -700,16 +700,46 @@ If Redis stops, searches carry on uncached (each costs at most `redis.timeout_ms
 
 ### Warming the result cache
 
-A deploy, a bundle reload, a cache flush (the Operations page or `POST /reload`) and a VPS vector reload all empty or outdate the
-result cache, so the first shopper to ask each popular query waits for the full search. `tools/warm-cache.php` asks the most
-searched queries itself and fills the cache first. **Run it after every bundle reload, cache flush and VPS vector reload**
-(and after a settings change that needed a flush):
+A bundle reload, a cache flush (the Operations page or `POST /reload`) and a VPS vector reload all empty or outdate the result
+cache, so the first shopper to ask each popular query would wait for the full search. `tools/warm-cache.php` asks the most
+searched queries itself and fills the cache first. **There is no manual step**: the panel (and the token-protected
+`POST /reload`) leaves a small flag file, `storage/warm-cache.pending`, and a once-a-minute cron job picks it up. A web request
+cannot run a job of several minutes, and `exec()` / `proc_open()` may be disabled on cPanel, so the flag + cron pair is the hand-off.
 
-```bash
-su - search -c "cd ~/search-service/server && /opt/cpanel/ea-php82/root/usr/bin/php tools/warm-cache.php"
+**One-time cron setup** (cPanel -> Cron Jobs; the account's PHP 8.1+ binary, see [Command-line tools](#command-line-tools)):
+
+```
+* * * * * /opt/cpanel/ea-php82/root/usr/bin/php $HOME/search-service/server/tools/warm-cache.php --if-pending --quiet >/dev/null 2>&1
+17 4 * * * /opt/cpanel/ea-php82/root/usr/bin/php $HOME/search-service/server/tools/warm-cache.php --n 500 >/dev/null 2>&1
 ```
 
-* **Queries**: the top `--n` (default 500, at most 1000) distinct normalized queries of the last `--window` (default `30d`; `24h`,
+The first line is the automatic warm-up; the second is the nightly refresh that keeps the popular entries warm (they live
+`redis.ttl`, a day by default). The Operations page shows the exact first line (with this installation's path) when a flag has
+waited more than 3 minutes, which means the cron job is not running.
+
+* **What flags a warm-up** (reason in parentheses; each also writes a `warm_requested` audit row, reason only): a successful bundle
+  reload through the panel or `POST /reload` (`reload`), a rollback (`rollback`), a panel cache flush (`cache_flush`), a successful VPS
+  vector reload, which now also flushes the result cache first (`vps_reload`), and the "Warm now" button (`manual`). A settings
+  change that needs a flush is flushed from the Operations page, which flags the warm-up. A failed operation flags nothing; a
+  flag that cannot be written never fails the operation. Requests are coalesced: while a flag is pending, the first
+  `requested_at` stays and the reason is appended (five at most). `warm.auto = false` stops the automatic flags only; the button
+  still works. Nothing is flagged while `redis.enabled` is off.
+* **`--if-pending [--quiet]`**: with no flag it exits 0 at once, silently, before any database or Redis connection (one `is_file()`
+  per minute). With a flag and a free lock it removes the flag **as the run starts** (a request made during a run schedules the next
+  run), runs the normal warm-up with `--n` defaulting to `warm.n` (500), and writes `storage/warm-cache.status.json`
+  (`started_at`, `finished_at`, `queries`, `warmed`, `already_cached`, `degraded`, `failed`, `stopped_early`, `exit_code`,
+  `reasons`). Redis unreachable or the lock held: the flag stays and the next minute retries; after 30 minutes the flag is dropped and
+  the status records `error: redis` (or `lock`), so it cannot retry for ever. The panel shows idle / waiting for cron / running and
+  the last result.
+* **Plain runs** (`php tools/warm-cache.php`, the nightly line) work as before, do not touch a pending flag, and also record the status file.
+
+By hand (look first, or run once outside cron):
+
+```bash
+su - search -c "cd ~/search-service/server && /opt/cpanel/ea-php82/root/usr/bin/php tools/warm-cache.php --dry-run"
+```
+
+* **Queries**: the top `--n` (default `warm.n`, 500; at most 1000) distinct normalized queries of the last `--window` (default `30d`; `24h`,
   `7d`, `30d`, `90d`, `all`) from `search_logs`, counted like the analytics count searches (no suspicious, duplicate, burst or
   paging rows). `--queries=file.csv` adds the `normalized_q` column of a `logs-export.php --grouped` file after them; each query runs once.
 * **Same key as a shopper**: each query goes through the normal search at the storefront depth (`limit` 300) with the live
@@ -722,16 +752,15 @@ su - search -c "cd ~/search-service/server && /opt/cpanel/ea-php82/root/usr/bin/
 * **Look first**: `--dry-run` lists every query as `would warm` or `cached` and writes nothing.
 * **Output**: a progress line every 50 queries, then `done: warmed N, already cached N, degraded N, failed N in S s`. Exit 0 when
   everything is cached; 1 when queries stayed degraded or failed, the run stopped early, `redis.enabled` is off, Redis does not
-  answer, or another run holds the lock (`storage/warm-cache.lock`); 2 on a usage error.
-* **Cron** (safe: an overlapping run exits 1 without doing anything). Nightly, after the usual quiet hour for reloads:
+  answer, or another run holds the lock (`storage/warm-cache.lock`); 2 on a usage error. An overlapping run exits 1 without doing anything.
+  A run of 500 uncached queries takes about `500 x (VPS latency + sleep)`: roughly 5 to 10 minutes at the defaults, which the real VPS has to confirm.
 
-  ```
-  17 4 * * * /opt/cpanel/ea-php82/root/usr/bin/php $HOME/search-service/server/tools/warm-cache.php --n 500 >/dev/null 2>&1
-  ```
-
-  Entries live `redis.ttl` (a day by default, a week once hot), so a nightly run keeps the popular ones warm; the run right after a
-  reload matters more. A run of 500 uncached queries takes about `500 x (VPS latency + sleep)`: roughly 5 to 10 minutes at the
-  defaults, which the real VPS has to confirm.
+**Upgrading to the automatic warm-up (M49).** Copy over the live ones: new `src/WarmQueue.php`; changed `src/Audit.php`,
+`src/Reload.php`, `src/AdminOps.php`, `src/AdminOpsViews.php`, `src/AdminStatus.php`, `src/AdminViews.php`, `src/AdminStrings.php`,
+`src/Config.php`, `src/SettingRules.php`, `public/admin.php`, `tools/warm-cache.php`. No migration (the audit `action` column already
+fits `warm_requested`), no bundle rebuild, no `config.php` edit (two keys with defaults). **Cron**: add the every-minute line above
+(keep the nightly one). `server/storage/` must be writable by the web user (it already is if the alias manager works). Then
+press "Warm now" once on the Operations page and watch the card go waiting -> running -> last result.
 
 ### Rollback (one step)
 

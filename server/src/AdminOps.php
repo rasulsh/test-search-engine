@@ -19,7 +19,7 @@ final class AdminOps
     /** The audit actions this class writes, newest of them are listed on the page. */
     public const ACTIONS = [
         Audit::RELOAD_VALIDATE, Audit::RELOAD_APPLY, Audit::ROLLBACK, Audit::CACHE_FLUSH, Audit::VPS_RELOAD,
-        Audit::RELOAD_API,
+        Audit::RELOAD_API, Audit::WARM_REQUESTED,
     ];
 
     /**
@@ -54,21 +54,31 @@ final class AdminOps
         return $this->run(Audit::ROLLBACK, fn (): array => $this->reload()->rollback());
     }
 
-    /** Deletes the result cache's own keys (its prefix), nothing else. */
+    /** Deletes the result cache's own keys (its prefix), nothing else, then asks the cron job to warm it. */
     public function flushCache(): array
     {
         return $this->run(Audit::CACHE_FLUSH, function (): array {
-            // Scanning a big keyspace outlasts the 100 ms a normal cache lookup is given.
-            $slow = ['redis' => ['timeout_ms' => max((int) $this->config['redis']['timeout_ms'], 5000)]];
-            $cache = $this->cache ?? Cache::fromConfig(array_replace_recursive($this->config, $slow));
-            if ($cache === null) {
+            $outcome = $this->purge();
+            if ($outcome['ok'] && $this->warm('cache_flush')) {
+                $outcome['warm_requested'] = true;
+            }
+
+            return $outcome;
+        });
+    }
+
+    /** "Warm now": writes the flag whatever `warm.auto` says; the cron job does the work. */
+    public function warmNow(): array
+    {
+        return $this->run(Audit::WARM_REQUESTED, function (): array {
+            if (!(bool) $this->config['redis']['enabled']) {
                 return ['ok' => false, 'reason' => 'redis_off'];
             }
-            $removed = $cache->purge();
+            if (!WarmQueue::fromConfig($this->config)->request('manual')) {
+                return ['ok' => false, 'reason' => 'warm_flag_unwritable'];
+            }
 
-            return $removed === null
-                ? ['ok' => false, 'reason' => 'redis_unreachable']
-                : ['ok' => true, 'removed' => $removed];
+            return ['ok' => true, 'warm_requested' => true, 'for' => 'manual'];
         });
     }
 
@@ -83,14 +93,46 @@ final class AdminOps
             $answer = $client->recordTo(new VpsCallLog($this->pdo, (int) $this->config['vps']['log_retention_days']))
                 ->reload();
 
-            return [
+            $outcome = [
                 'ok' => $answer['ok'],
                 'reason' => $answer['ok'] ? null : $answer['error'],
                 'status' => $answer['status'],
                 'count' => $answer['count'],
                 'built_at' => $answer['built_at'],
             ];
+            // New vectors change which products a query returns, so cached answers are outdated: only after a
+            // successful reload, flush them (the panel's flush code) and ask for a warm-up.
+            if ($answer['ok']) {
+                $flush = $this->purge();
+                $outcome['cache_flushed'] = $flush['ok'];
+                if ($this->warm('vps_reload')) {
+                    $outcome['warm_requested'] = true;
+                }
+            }
+
+            return $outcome;
         });
+    }
+
+    /** @return array<string, mixed> `ok` and `removed`, or `ok` false and a `reason` */
+    private function purge(): array
+    {
+        // Scanning a big keyspace outlasts the 100 ms a normal cache lookup is given.
+        $slow = ['redis' => ['timeout_ms' => max((int) $this->config['redis']['timeout_ms'], 5000)]];
+        $cache = $this->cache ?? Cache::fromConfig(array_replace_recursive($this->config, $slow));
+        if ($cache === null) {
+            return ['ok' => false, 'reason' => 'redis_off'];
+        }
+        $removed = $cache->purge();
+
+        return $removed === null
+            ? ['ok' => false, 'reason' => 'redis_unreachable']
+            : ['ok' => true, 'removed' => $removed];
+    }
+
+    private function warm(string $reason): bool
+    {
+        return WarmQueue::trigger($this->config, $this->pdo, $this->ip, $reason);
     }
 
     private function reload(): Reload

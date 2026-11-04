@@ -130,6 +130,7 @@ abstraction layers.
 │   │   ├── AdminOpsViews.php      # the operations page body (M40)
 │   │   ├── ConfigReport.php       # effective-configuration table: value, source, doctor notes, secrets masked (M40)
 │   │   ├── AdminStrings.php       # every Persian string and help text of the panel (M39)
+│   │   ├── WarmQueue.php          # warm-up flag, status file and lock shared by the panel and warm-cache.php (M49)
 │   │   ├── VpsCallLog.php         # one vps_calls row per PHP -> VPS call; never throws, purges by retention (M47)
 │   │   ├── VpsCallReport.php      # read-only queries of the panel's VPS page + CSV rows (M47)
 │   │   ├── AdminVps.php / AdminVpsViews.php  # "Probe now" and the VPS page (M47)
@@ -149,7 +150,7 @@ abstraction layers.
 │   ├── tools/_php-guard.php      # every tools/*.php requires it first: clear message on PHP < 8.1 (M40)
 │   ├── tools/logs-export.php     # search_logs -> CSV / JSON CLI for the zero-result loop (M36)
 │   ├── tools/vps-probe.php       # GET /health to the VPS, recorded in vps_calls; a 1-minute cron (M47)
-│   ├── tools/warm-cache.php      # pre-fills the Redis result cache for the top queries after a reload / flush (M48)
+│   ├── tools/warm-cache.php      # pre-fills the Redis result cache for the top queries; --if-pending is the cron mode (M48, M49)
 │   ├── data/                      # active bundle (gitignored)
 │   └── tests/
 ├── vps/                          # VPS vector service (Python): query embedding + cosine top-K
@@ -496,6 +497,15 @@ wait for review before starting the next.
   sequential, `--sleep-ms`, `--only-missing` (default) / `--force`, stop after K consecutive VPS failures, a degraded result is
   never cached and is retried once, `--dry-run`, a lock in `storage/`. `tools/_php-guard.php` also checks `mbstring`, `pdo_mysql`,
   `curl`, `json` (stderr + exit 1). No config key. Contracts unchanged. See `docs/DEPLOY.md`.
+
+- **M49 — Automatic result-cache warm-up:** no manual `warm-cache.php` after a reload. `WarmQueue` writes a coalesced flag
+  `storage/warm-cache.pending` (atomic; `requested_at`, up to 5 `reasons`) after a successful bundle reload (`Reload::finish`, so
+  also `POST /reload` and rollback), a panel cache flush, a successful VPS vector reload (`AdminOps::vpsReload()` now flushes the
+  result cache first, only on success) and "Warm now"; each writes a `warm_requested` audit row; a flag failure never fails the
+  operation. `warm-cache.php --if-pending [--quiet]` (every-minute cron): no flag = exit 0 before any DB / Redis; else lock, remove
+  the flag at run start, warm `--n` (default `warm.n`), write `warm-cache.status.json`; Redis down / lock held keeps the flag, given
+  up after 30 minutes (`error: redis|lock`). Config `warm.auto` (true), `warm.n` (500). Operations page card + status line. No
+  change to cache keys, TTLs, ranking or results. See `docs/DEPLOY.md`.
 
 **Definition of Done (per PR):** code + tests pass in CI; docs updated;
 KISS respected (no unused abstraction); PR description complete; no secrets or

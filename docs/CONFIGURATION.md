@@ -159,6 +159,8 @@ queries are then answered from Redis instead of recomputing keyword + VPS + rank
 | `redis.freq_window` | `604800` (7 days) | lifetime of the per-query counter, set once when the counter is created (its first lookup), so counts roll off |
 | `redis.timeout_ms` | `100` | connect + read budget; a slow or dead Redis costs at most this per request and means a cache miss, never an error |
 | `redis.prefix` | `search:cache:` | key prefix; the keyspace `POST /reload` flushes. Give each environment sharing one Redis its own prefix |
+| `warm.auto` | `true` | flag a result-cache warm-up after a bundle reload, a rollback, a panel cache flush and a successful VPS vector reload; `false` stops the automatic flags only, "Warm now" still works. The every-minute cron job does the work ([DEPLOY.md](DEPLOY.md#warming-the-result-cache)) |
+| `warm.n` | `500` | how many top queries a warm-up runs (50 to 1000; the analytics cap is 1000); `--n` on the command line overrides it |
 
 Entries are keyed by the normalized query, the `limit` and whether the semantic tier is configured. Responses
 with `debug` are never cached, and neither is a result served without the semantic tier that is configured (a

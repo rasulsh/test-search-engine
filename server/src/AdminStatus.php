@@ -55,6 +55,7 @@ final class AdminStatus
             'doctor' => ConfigDoctor::check($this->overrides, null, $this->panel),
             'config' => ConfigReport::rows($this->overrides, null, $this->panel),
             'last_reload' => $this->lastReload(),
+            'warm' => WarmQueue::fromConfig($this->config)->status(),
         ];
     }
 
